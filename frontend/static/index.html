@@ -160,6 +160,7 @@
         </div>
         <div id="resultHtml" class="markdown-body hidden"></div>
         <pre id="result" class="hidden"></pre>
+        <div id="pdfActions" class="pdf-actions hidden"></div>
       </div>
     </div>
 
@@ -314,7 +315,7 @@
       const current = historyTrigger.getAttribute("data-label") || "";
       historyMenu.innerHTML = arr.map(function (r, i) {
         const label = recordLabel(r);
-        return '<button type="button" class="dropdown-item" data-index="' + i + '">' +
+        return '<button type="button" class="dropdown-item" role="option" aria-selected="false" data-index="' + i + '">' +
           label.replace(/"/g, "&quot;") + "</button>";
       }).join("");
       if (current && arr.some(function (r) { return recordLabel(r) === current; })) {
@@ -369,11 +370,9 @@
       }
     });
 
-    historyMenu.addEventListener("click", function (e) {
-      const item = e.target.closest ? e.target.closest(".dropdown-item") : null;
-      if (!item) return;
+    function selectHistoryItem(item) {
       const arr = loadHistory();
-      const rec = arr[item.getAttribute("data-index")];
+      const rec = item ? arr[item.getAttribute("data-index")] : null;
       if (rec) {
         usernameInput.value = rec.username || "";
         displaySavedRecord(rec);
@@ -383,6 +382,68 @@
       }
       historyMenu.classList.add("hidden");
       historyTrigger.setAttribute("aria-expanded", "false");
+    }
+
+    function openHistoryMenu() {
+      document.querySelectorAll(".dropdown-menu").forEach(function (m) {
+        m.classList.add("hidden");
+      });
+      document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
+        t.setAttribute("aria-expanded", "false");
+      });
+      historyMenu.classList.remove("hidden");
+      historyTrigger.setAttribute("aria-expanded", "true");
+      const first = historyMenu.querySelector(".dropdown-item");
+      if (first) first.focus();
+    }
+
+    historyMenu.addEventListener("click", function (e) {
+      const item = e.target.closest ? e.target.closest(".dropdown-item") : null;
+      if (!item) return;
+      selectHistoryItem(item);
+    });
+
+    historyTrigger.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (historyMenu.classList.contains("hidden")) openHistoryMenu();
+      } else if (e.key === "Escape") {
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+        historyTrigger.focus();
+      }
+    });
+
+    historyMenu.addEventListener("keydown", function (e) {
+      const list = Array.prototype.slice.call(historyMenu.querySelectorAll(".dropdown-item"));
+      if (!list.length) return;
+      const idx = list.indexOf(document.activeElement);
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        list[(idx + 1) % list.length].focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        list[(idx - 1 + list.length) % list.length].focus();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        list[0].focus();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        list[list.length - 1].focus();
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        const item = document.activeElement && document.activeElement.closest
+          ? document.activeElement.closest(".dropdown-item") : null;
+        if (item) selectHistoryItem(item);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+        historyTrigger.focus();
+      } else if (e.key === "Tab") {
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+      }
     });
 
     historyClear.addEventListener("click", function () {
@@ -421,11 +482,44 @@
       const menu = document.getElementById(menuId);
       const input = document.getElementById(inputId);
 
+      function items() {
+        return Array.prototype.slice.call(menu.querySelectorAll(".dropdown-item"));
+      }
+
+      function openMenu() {
+        document.querySelectorAll(".dropdown-menu").forEach(function (m) {
+          m.classList.add("hidden");
+        });
+        document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
+          t.setAttribute("aria-expanded", "false");
+        });
+        menu.classList.remove("hidden");
+        trigger.setAttribute("aria-expanded", "true");
+        const current = items().find(function (item) {
+          return item.getAttribute("data-value") === input.value;
+        }) || items()[0];
+        if (current) current.focus();
+      }
+
+      function closeMenu(refocus) {
+        menu.classList.add("hidden");
+        trigger.setAttribute("aria-expanded", "false");
+        if (refocus) trigger.focus();
+      }
+
+      function selectItem(item) {
+        input.value = item.getAttribute("data-value");
+        syncLabel();
+        closeMenu(true);
+      }
+
       function syncLabel() {
         let found = false;
-        menu.querySelectorAll(".dropdown-item").forEach(function (item) {
+        items().forEach(function (item) {
           const active = item.getAttribute("data-value") === input.value;
+          item.setAttribute("role", "option");
           item.classList.toggle("active", active);
+          item.setAttribute("aria-selected", active ? "true" : "false");
           if (active) {
             trigger.textContent = item.textContent.trim();
             found = true;
@@ -436,26 +530,52 @@
 
       trigger.addEventListener("click", function (e) {
         e.stopPropagation();
-        const willOpen = menu.classList.contains("hidden");
-        document.querySelectorAll(".dropdown-menu").forEach(function (m) {
-          m.classList.add("hidden");
-        });
-        document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
-          t.setAttribute("aria-expanded", "false");
-        });
-        if (willOpen) {
-          menu.classList.remove("hidden");
-          trigger.setAttribute("aria-expanded", "true");
+        if (menu.classList.contains("hidden")) openMenu();
+        else closeMenu(true);
+      });
+
+      trigger.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (menu.classList.contains("hidden")) openMenu();
+        } else if (e.key === "Escape") {
+          closeMenu(true);
+        }
+      });
+
+      menu.addEventListener("keydown", function (e) {
+        const list = items();
+        if (!list.length) return;
+        const idx = list.indexOf(document.activeElement);
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          list[(idx + 1) % list.length].focus();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          list[(idx - 1 + list.length) % list.length].focus();
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          list[0].focus();
+        } else if (e.key === "End") {
+          e.preventDefault();
+          list[list.length - 1].focus();
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          const item = document.activeElement && document.activeElement.closest
+            ? document.activeElement.closest(".dropdown-item") : null;
+          if (item) selectItem(item);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          closeMenu(true);
+        } else if (e.key === "Tab") {
+          closeMenu(false);
         }
       });
 
       menu.addEventListener("click", function (e) {
         const item = e.target.closest ? e.target.closest(".dropdown-item") : null;
         if (!item) return;
-        input.value = item.getAttribute("data-value");
-        syncLabel();
-        menu.classList.add("hidden");
-        trigger.setAttribute("aria-expanded", "false");
+        selectItem(item);
       });
 
       syncLabel();
@@ -571,6 +691,14 @@
         if (restOnly) return true;
       }
       return false;
+    }
+
+    function countMarkdownTableRows(text) {
+      if (!text) return 0;
+      const lines = String(text).split("\n").filter(function (line) {
+        return line.trim().indexOf("|") === 0;
+      });
+      return Math.max(0, lines.length - 2);
     }
 
     function tableRowsAllEmpty(text) {
@@ -1081,6 +1209,68 @@
       }, 200);
     }
 
+    const DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>';
+
+    function pdfFilename(username) {
+      const d = new Date();
+      const pad = function (n) { return n < 10 ? "0" + n : String(n); };
+      return "成绩单_" + username + "_" + d.getFullYear() + pad(d.getMonth() + 1) +
+        pad(d.getDate()) + "_" + pad(d.getHours()) + pad(d.getMinutes()) +
+        pad(d.getSeconds()) + ".pdf";
+    }
+
+    function downloadPdfData(pdfBase64, username) {
+      if (!pdfBase64) return false;
+      try {
+        const bin = atob(pdfBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = pdfFilename(username);
+        document.body.appendChild(a);
+        a.click();
+        // 延迟清理：过早移除锚点/回收 blob 会中断浏览器的下载
+        setTimeout(function () {
+          a.remove();
+          URL.revokeObjectURL(url);
+        }, 60000);
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function autoDownloadPdf(pdfBase64, username) {
+      downloadPdfData(pdfBase64, username);
+    }
+
+    function renderPdfAction(pdfBase64, username) {
+      const box = document.getElementById("pdfActions");
+      if (!box) return;
+      box.classList.remove("hidden");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-primary btn-sm";
+      btn.innerHTML = DOWNLOAD_ICON + "<span>下载 PDF 文档</span>";
+      btn.addEventListener("click", function () {
+        if (downloadPdfData(pdfBase64, username)) showToast("success", "PDF 已开始下载");
+        else showToast("error", "PDF 生成失败，请重试");
+      });
+      box.innerHTML = "";
+      box.appendChild(btn);
+    }
+
+    function hidePdfAction() {
+      const box = document.getElementById("pdfActions");
+      if (box) {
+        box.classList.add("hidden");
+        box.innerHTML = "";
+      }
+    }
+
     function authHeaders() {
       // 令牌由 nginx 反代时注入 Authorization 头，页面不持有令牌
       return GATEWAY_TOKEN ? { "Authorization": "Bearer " + GATEWAY_TOKEN } : {};
@@ -1116,6 +1306,7 @@
 
       setButtonLoading(true);
       hideOfflineBar();
+      hidePdfAction();
       skeleton.classList.remove("hidden");
       resultHtml.classList.add("hidden");
       resultBox.classList.add("hidden");
@@ -1124,6 +1315,7 @@
       updateUrlParams(payload);
       const savedScrollY = window.scrollY;
       showLoading();
+      let rowCount = 0;
       try {
         const resp = await fetch("/run", {
           method: "POST",
@@ -1150,17 +1342,33 @@
           showErrorCard(message);
           showToast("error", "查询失败");
         } else {
-          const meta = data && typeof data === "object" && data._meta ? data._meta : null;
+          const meta = data && typeof data === "object"
+            ? (data._meta || data.meta || null) : null;
           const markdown = extractMarkdownValue(data);
-          businessFail = meta
-            ? meta.kind === "business_error" || meta.kind === "upstream_error"
-            : markdown !== null && /账号或密码错误|用户名或密码错误|服务异常|登录失败|会话失效|未登录|查询失败|数据获取失败|请求失败|获取失败|下载失败|解析失败|处理失败|操作失败|系统繁忙|请稍后重试|出错了/.test(markdown);
-          const noData = (meta && meta.kind === "no_data") ||
+          const kind = (meta && meta.kind) ||
+            (data && typeof data === "object" ? data.kind : "") || "";
+          const ERROR_KINDS = {
+            login_error: true, grades_error: true, schedule_error: true,
+            request_error: true, internal_error: true
+          };
+          businessFail = (data && typeof data === "object" && data.success === false) ||
+            (meta && (meta.kind === "business_error" || meta.kind === "upstream_error")) ||
+            ERROR_KINDS[kind] === true ||
+            (markdown !== null && /账号或密码错误|用户名或密码错误|服务异常|登录失败|会话失效|未登录|查询失败|数据获取失败|请求失败|获取失败|下载失败|解析失败|处理失败|操作失败|系统繁忙|请稍后重试|出错了/.test(markdown));
+          const noData = kind === "grades_empty" ||
+            (meta && meta.kind === "no_data") ||
             (markdown !== null && (/尚未发布|暂无|没有找到|未查询到|无课/.test(markdown) || looksEmptyMarkdown(markdown)));
           if (businessFail) {
-            showErrorCard("查询失败，请检查学号/密码或稍后重试");
+            hidePdfAction();
+            if (markdown !== null) {
+              // 展示后端确定性分类的友好报告（无密码/session/token）
+              showResult(resp.status, data);
+            } else {
+              showErrorCard("查询失败，请检查学号/密码或稍后重试");
+            }
             showToast("error", "查询失败");
           } else if (noData) {
+            hidePdfAction();
             if (markdown !== null && /尚未发布/.test(markdown)) {
               showStateCard(CLOUD_SVG, "成绩尚未发布", "成绩公布后会自动显示在这里", false);
             } else {
@@ -1168,6 +1376,11 @@
             }
           } else {
             showResult(resp.status, data);
+            rowCount = markdown !== null ? countMarkdownTableRows(markdown) : 0;
+            if (payload.md2pdf && data && typeof data === "object" && data.pdf_base64) {
+              renderPdfAction(data.pdf_base64, payload.username);
+              autoDownloadPdf(data.pdf_base64, payload.username);
+            }
             saveResultRecord({
               username: payload.username,
               option: payload.option,
@@ -1186,7 +1399,6 @@
           }
         }
         renderServiceStatus();
-        const rowCount = document.querySelectorAll("#resultHtml tbody tr").length;
         const queryOk = resp.ok && !businessFail;
         showStatus(
           queryOk
@@ -1243,6 +1455,7 @@
       layout.classList.remove("has-result");
       statusBox.classList.add("hidden");
       hideOfflineBar();
+      hidePdfAction();
     });
 
     document.getElementById("togglePassword").addEventListener("click", function () {
@@ -1257,7 +1470,7 @@
       const rect = btn.getBoundingClientRect();
       const size = Math.max(rect.width, rect.height);
       const span = document.createElement("span");
-      span.className = "ripple";
+      span.className = "btn-ripple";
       span.style.width = size + "px";
       span.style.height = size + "px";
       span.style.left = event.clientX - rect.left - size / 2 + "px";

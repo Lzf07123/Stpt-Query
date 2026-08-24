@@ -64,6 +64,15 @@
 - 结果渲染：服务端 Markdown → 本地零依赖解析（表格/引用/列表/代码），
   成绩列三档语义着色（高/中/低）+ 课程类别徽章；移动端表格横向滚动。
 - 查询流程状态：loading（spinner + 骨架）→ success（toast + 结果）/ failure（notice）。
+- 响应契约：优先识别后端统一结构 `success/kind/meta`（错误 kind 渲染分类报告且不写历史，
+  `grades_empty` 走空状态），保留 Dify 风格 `_meta`/正则兜底；结果行数按 Markdown 表体行
+  计数（避免与 200ms 淡入计时器竞态）。
+- PDF：`pdf_base64` 经 Base64 解码为 Blob 下载，结果卡同时渲染「下载 PDF 文档」按钮；
+  文件名 `成绩单_<学号>_<时间戳>.pdf`，清理延后 60s 以免中断下载。
+- 下拉/菜单：触发器与选项完整键盘契约（Arrow/Home/End/Enter/Space/Escape/Tab），
+  `role=option` + `aria-selected` 同步，Escape 关闭后焦点回到触发器。
+- 叠层：`.card-halo` 提升 z-index，防止其 isolation 叠层上下文使页脚盖住下拉菜单；
+  按钮涟漪统一用模板 `.btn-ripple`。
 
 ## 5. 令牌校验与验收证据
 

@@ -28,6 +28,12 @@
     @apply absolute right-0 top-0 h-11 w-11;
   }
 
+  /* 表单卡整体提升一层：card-halo 的 isolation 会把下拉菜单的 z-index
+     困在卡内，页脚（DOM 靠后）会盖住菜单，须让卡片成为更高层级的叠放上下文 */
+  .card-halo {
+    z-index: 10;
+  }
+
   .layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -167,6 +173,9 @@
   }
   #resultCard h2 {
     @apply mb-4 mt-0;
+  }
+  .pdf-actions {
+    @apply mt-4 flex flex-wrap items-center gap-3;
   }
   .fade-in {
     animation: page-fade-up var(--motion-base) var(--ease-out) both;
