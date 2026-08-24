@@ -29,15 +29,20 @@ def _as_dict(data: Any) -> Dict[str, Any]:
 
 
 def _body_text(data: Any) -> str:
+    """取响应文本：dict 优先 login_url/url/body/raw；字符串优先当作 URL，再尝试 JSON。"""
     if isinstance(data, dict):
-        return str(data.get("body") or "").strip()
+        for key in ("login_url", "url", "body", "raw"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
     if isinstance(data, str):
         s = data.strip()
         if s.startswith("http"):
             return s
         d = _as_dict(s)
         if d:
-            return str(d.get("body") or "").strip()
+            return _body_text(d)
         return s
     return ""
 

@@ -19,7 +19,8 @@ class FakeService:
             return {"success": True, "session": "s1", "token": "t1",
                     "username": payload["username"]}
         if path == "/jump":
-            return {"url": "https://example.com/ticket?st=x"}
+            return {"success": True, "url": "https://example.com/home",
+                    "login_url": "https://example.com/jump/go?code=x"}
         if path == "/get_grades":
             if self.grade_success:
                 return {"success": True, "count": 1,
@@ -61,6 +62,19 @@ async def test_grades_with_check_calls_llm_and_assembles():
     assert llm.called
     assert result["output"].endswith("分析正文")
     assert "TABLE".lower() in result["output"].lower() or "高数" in result["output"]
+
+
+async def test_login_connection_failure_is_classified_not_500():
+    class DownService(FakeService):
+        async def post(self, path, payload):
+            if path == "/login":
+                raise ServiceError(0, None, "上游服务连接失败：ConnectTimeout")
+            return await super().post(path, payload)
+
+    result = await Pipeline(service=DownService(), llm=FakeLLM()).run(_req())
+    assert not result["success"]
+    assert result["kind"] == "login_error"
+    assert "上游服务连接失败" in result["output"]
 
 
 async def test_login_failure_returns_friendly_report():

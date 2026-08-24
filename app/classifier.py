@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _RULES: Tuple[Tuple[str, str, List[str], List[str]], ...] = (
     (
         "HTTP 节点配置或执行异常",
-        r"Connection refused|connect failed|connection refused|服务无法连接",
+        r"Connection refused|ConnectionError|ConnectError|ConnectTimeout|connect failed|连接失败|服务无法连接",
         ["稍后重试"],
         ["核对服务是否启动、BaseURL 地址与端口是否正确"],
     ),

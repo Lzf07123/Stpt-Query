@@ -19,6 +19,13 @@ def test_format_grades_uses_server_output_and_prefixes_login_note():
     assert "session" not in out  # 登录响应不拼入输出（迁移修复点）
 
 
+def test_login_note_from_structured_jump_dict():
+    data = {"success": True, "output": "| 学期 | 课程 | 成绩 |\n|---|---|---|"}
+    jump = {"success": True, "login_url": "https://example.com/jump/go?code=x"}
+    out = format_grades(data, jump)
+    assert "https://example.com/jump/go?code=x" in out
+
+
 def test_format_grades_fallback_from_rows():
     data = {"success": True, "info": {"xm": "张三", "xh": "2023000001"},
             "rows": [{"semester": "1", "courseName": "高数", "score": "90"}]}

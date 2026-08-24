@@ -16,6 +16,11 @@ def test_credentials_rejected():
     assert "官网登录验证" in r["output"]
 
 
+def test_connection_error():
+    r = classify_error("login", error_message="上游服务连接失败：ConnectError")
+    assert r["meta"]["category"] == "HTTP 节点配置或执行异常"
+
+
 def test_connection_refused():
     r = classify_error("grades", error_message="Connection refused")
     assert r["meta"]["category"] == "HTTP 节点配置或执行异常"

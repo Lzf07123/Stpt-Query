@@ -80,8 +80,16 @@ class Pipeline:
         run_id = new_run_id()
 
         # 1) 登录 → 2) 状态判断（body 是否含 session）
-        login_body = await self._post("/login", {
-            "username": req.username, "password": req.password})
+        try:
+            login_body = await self._post("/login", {
+                "username": req.username, "password": req.password})
+        except ServiceError as exc:
+            LOG.warning("run=%s 登录请求失败", run_id)
+            result = classify_error("login", exc.status_code, exc.body,
+                                    error_message=str(exc))
+            result.update({"run_id": run_id,
+                           "meta": {**result.get("meta", {}), "elapsed_ms": _elapsed(started)}})
+            return result
         session_info = extract_session(login_body)
         if not session_info["session"]:
             LOG.warning("run=%s 登录失败", run_id)
@@ -93,7 +101,8 @@ class Pipeline:
         # 3) 获取免密登录链接（失败降级为无链接，不阻断查询）
         jump_body: Dict[str, Any] = {}
         try:
-            jump_body = await self._post("/jump", {"session": session_info["session"]})
+            # json=1：显式取结构化响应（login_url/app_url），避免依赖纯文本返回
+            jump_body = await self._post("/jump", {"session": session_info["session"], "json": "1"})
         except ServiceError:
             LOG.warning("run=%s 获取免密链接失败，降级处理", run_id)
 
