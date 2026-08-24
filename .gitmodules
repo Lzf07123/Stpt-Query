@@ -1,0 +1,4 @@
+[submodule "Li-Design"]
+	path = Li-Design
+	url = https://github.com/Lzf07123/Li-Design.git
+	branch = main
