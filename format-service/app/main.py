@@ -20,8 +20,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .llm import LLMClient
 from .pipeline import HTTPServiceClient, Pipeline
+from .querylog import log_query
 from .schema import QueryResult, WorkflowRequest
-from .trace import LOG, setup_logging
+from .trace import LOG, new_run_id, setup_logging
 
 
 class Settings(BaseSettings):
@@ -101,6 +102,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     results: deque = deque(maxlen=100)
     results_lock = Lock()
+    query_logs: deque = deque(maxlen=100)
+    query_logs_lock = Lock()
     rate_hits: dict = {}
     rate_lock = Lock()
 
@@ -134,6 +137,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         with rate_lock:
             hits = [t for t in rate_hits.get(ip, []) if now - t < 60]
             if len(hits) >= limit:
+                log_query({"event": "rate_limited", "client_ip": ip,
+                           "message": "rate limit exceeded"})
                 raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                     detail="请求过于频繁，请稍后再试")
             hits.append(now)
@@ -151,6 +156,18 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             except Exception:
                 pass
 
+    def _record_query_log(entry: dict) -> None:
+        """查询日志三路一致：内存环形缓冲、可选 Redis、stdout 结构化 JSON。"""
+        with query_logs_lock:
+            query_logs.append(entry)
+        if app.state.redis is not None:
+            try:
+                app.state.redis.lpush("gw:query-logs", json.dumps(entry, ensure_ascii=False))
+                app.state.redis.ltrim("gw:query-logs", 0, 99)
+            except Exception:
+                pass
+        log_query(entry)
+
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index() -> str:
         return ("<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
@@ -160,19 +177,43 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 "<pre>{'username': '学号', 'password': '密码', 'option': '成绩|课表', "
                 "'md2pdf': false, 'check': false}</pre></body></html>")
 
+    def _query_log_entry(body: WorkflowRequest, client_ip: str, started: float,
+                         result: dict, run_id: str = "") -> dict:
+        """构造查询日志：不含 password/session/token；缺省 run_id 兜底生成。"""
+        return {
+            "event": "query",
+            "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "run_id": run_id or new_run_id(),
+            "client_ip": client_ip,
+            "username": body.username,
+            "option": body.option,
+            "semesters": body.semesters or "",
+            "weeks": body.weeks,
+            "md2pdf": bool(body.md2pdf),
+            "check": bool(body.check),
+            "success": bool(result.get("success")),
+            "kind": result.get("kind") or "unknown",
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+
     @app.post("/run", response_model=QueryResult)
     @app.post("/v1/workflows/run", include_in_schema=False, response_model=QueryResult)
     async def run_workflow(body: WorkflowRequest, request: Request,
                            _: None = Depends(_require_auth)) -> QueryResult:
-        _check_rate_limit(_client_ip(request))
+        client_ip = _client_ip(request)
+        _check_rate_limit(client_ip)
         started = time.time()
         try:
             result = await app.state.pipeline.run(body)
             _record(bool(result.get("success")), result.get("kind", "unknown"))
+            _record_query_log(_query_log_entry(body, client_ip, started, result,
+                                               result.get("run_id", "")))
             return QueryResult(**result)
         except Exception as exc:  # 兜底：未知异常也返回统一 JSON
             LOG.exception("run 执行异常")
             _record(False, "internal_error")
+            result = {"success": False, "kind": "internal_error"}
+            _record_query_log(_query_log_entry(body, client_ip, started, result))
             return QueryResult(
                 success=False, kind="internal_error",
                 output="服务内部异常：%s" % exc.__class__.__name__,
@@ -210,6 +251,27 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 "service_base_url": cfg.service_base_url,
                 "auth_mode": "fixed-token" if cfg.api_token else "auto-token",
                 "redis": redis_status}
+
+    @app.get("/query-logs")
+    def query_logs_endpoint(_: None = Depends(_require_auth)) -> dict:
+        """返回最近查询日志（新→旧）；不含密码/session/token。"""
+        if app.state.redis is not None:
+            try:
+                raw = app.state.redis.lrange("gw:query-logs", 0, -1) or []
+            except Exception:
+                raw = []
+            items = []
+            for r in raw:
+                try:
+                    item = json.loads(r)
+                except ValueError:
+                    continue
+                if isinstance(item, dict):
+                    items.append(item)
+        else:
+            with query_logs_lock:
+                items = list(reversed(query_logs))
+        return {"logs": items, "total": len(items)}
 
     @app.get("/service-status")
     def service_status(_: None = Depends(_require_auth)) -> dict:

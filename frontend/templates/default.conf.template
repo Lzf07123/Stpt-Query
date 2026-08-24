@@ -10,7 +10,7 @@ server {
     }
 
     # 反向代理到格式化后端；令牌由服务端注入，外部请求无需携带
-    location ~ ^/(run|v1/workflows/run|service-status|health.*)$ {
+    location ~ ^/(run|v1/workflows/run|service-status|query-logs|health.*)$ {
         proxy_pass http://format-service:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
