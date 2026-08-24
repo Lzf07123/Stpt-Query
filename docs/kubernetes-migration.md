@@ -18,20 +18,24 @@
 | 跨副本限流/状态历史 | `REDIS_URL` 可选开启共享 | 接入托管 Redis（云 Redis / Operator） |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
-## 二、迁入 K8s 时的映射清单
+## 二、迁入 K8s 时的映射清单（三容器 → 三个 Deployment）
 
 | 现状（Compose） | K8s 对象 |
 |---|---|
-| `edu-query-app` / `edu-query-app-multi` | Deployment（`replicas>=2`）+ Service |
+| `get-infomation-service` | Deployment + Service（有状态：会话/缓存，多副本需 Redis） |
+| `format-service` | Deployment（无状态，`replicas>=2`）+ Service |
+| `frontend` | Deployment + Service + Ingress（终止 HTTPS） |
 | `API_TOKEN` / `LLM_API_KEY` / `SERVICE_API_TOKEN` | Secret |
 | `SERVICE_BASE_URL` / `LLM_*` / `RATE_LIMIT` | ConfigMap / 环境变量 |
-| `redis`（可选） | 托管 Redis 或 StatefulSet + PV（生产建议托管，避免会话丢失） |
-| `nginx` | Ingress + Ingress Controller（终止 HTTPS） |
+| 内置 redis（后续多副本） | 托管 Redis 或 StatefulSet + PV（生产建议托管，避免会话丢失） |
 | healthcheck | livenessProbe `/health/live`、readinessProbe `/health/ready` |
+
+> 无状态要求：`format-service` 与 `frontend` 可任意扩容；`get-infomation-service`
+> 单实例即可，多副本时为其配置 `JWXT_REDIS_URL` 共享状态。
 
 ## 三、迁入前需要补充的事项（届时再做）
 
-1. **镜像治理**：固定语义化 tag + digest，开启镜像扫描与签名。
+1. **镜像治理**：三个镜像统一语义化 tag + digest，开启镜像扫描与签名。
 2. **资源规格**：`requests/limits`（CPU/内存）、`securityContext.runAsNonRoot`、
    `readOnlyRootFilesystem`（本服务无写盘需求，可直接开）。
 3. **探针参数**：liveness 建议 `initialDelaySeconds: 10, periodSeconds: 10`；
@@ -46,37 +50,34 @@
 ## 四、示例（仅供未来参考，不在当前仓库落地）
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: edu-query-app
-data:
-  ENVIRONMENT: "production"
-  SERVICE_BASE_URL: "https://school.lizf.cn"
-  LLM_BASE_URL: "https://api.deepseek.com"
-  LLM_MODEL: "deepseek-v4-flash"
-  TRUST_PROXY: "true"
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: edu-query-app
+  name: format-service
 spec:
   replicas: 2
   selector:
-    matchLabels: { app: edu-query-app }
+    matchLabels: { app: format-service }
   template:
     metadata:
-      labels: { app: edu-query-app }
+      labels: { app: format-service }
     spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: app
-          image: registry.example.com/edu-query-app:0.1.0
+          image: registry.example.com/edu-query-format:0.1.0
           ports: [{ containerPort: 8000 }]
-          envFrom:
-            - configMapRef: { name: edu-query-app }
-            - secretRef: { name: edu-query-app }
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: SERVICE_BASE_URL
+              value: "http://get-infomation-service:8766"
+            - name: LLM_BASE_URL
+              value: "https://api.deepseek.com"
+            - name: LLM_MODEL
+              value: "deepseek-v4-flash"
+            - name: TRUST_PROXY
+              value: "true"
           livenessProbe:
             httpGet: { path: /health/live, port: 8000 }
             initialDelaySeconds: 10

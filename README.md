@@ -1,58 +1,49 @@
-# edu-query-app · 教务查询编排服务
+# edu-query-app · 教务查询编排（三容器）
 
-> 把固定的 Dify 工作流（汕职院教务信息查询）重写为独立 FastAPI 编排服务，
-> 不再依赖 Dify。编排层无状态，复用现有 `get-infomation-service` 完成
-> 登录 / 免密跳转 / 成绩 / 课表查询。
+> 把固定的 Dify 工作流重写为独立项目，不再依赖 Dify。
+> 由三个容器组成：**get-infomation-service（查询代理）+ format-service（格式化后端）+ frontend（前端）**。
 
-## 技术栈
+## 架构
 
-| 层 | 选型 |
-|---|---|
-| 运行时 / Web | Python 3.11 · FastAPI + uvicorn |
-| 上游调用 | httpx（异步） |
-| 流程编排 | 纯 Python 顺序代码（`app/pipeline.py`），不引入工作流引擎 |
-| LLM | OpenAI 兼容协议直连（默认 DeepSeek `deepseek-v4-flash`），可切换任意供应商 |
-| 异常诊断 | 确定性规则分类器（`app/classifier.py`），替代原 4 个诊断 LLM |
-| PDF | reportlab + 内置 CID 中文字体（`app/pdf.py`），替代 md_exporter 插件 |
-| 部署 | Docker / Docker Compose（单/多实例）· Nginx · Redis（可选） |
+```mermaid
+flowchart LR
+    U[用户浏览器] -->|:8000| F["frontend（nginx）<br/>静态页 + 反代 /run"]
+    F -->|/run| S["format-service（格式化后端）<br/>编排 + 渲染 + LLM 分析 + PDF"]
+    S -->|/login /jump /get_grades /get_schedule| G["get-infomation-service（查询代理）<br/>统一认证登录 / 教务查询 / 免密跳转"]
+    S -.成绩分析.-> L["DeepSeek（OpenAI 兼容）"]
+    G --> U2["学校教务系统（WebVPN/CAS）"]
+```
+
+| 容器 | 目录 | 职责 |
+|---|---|---|
+| get-infomation-service | `../STPT-Query/get-infomation-service`（复用现有服务） | 学校统一认证登录、免密跳转、成绩/课表查询，会话/缓存/限流 |
+| format-service | `format-service/` | 编排固定工作流：调用查询代理 → 成绩/课表渲染 → 可选成绩分析 LLM → 可选 PDF |
+| frontend | `frontend/` | nginx 静态前端 + 反向代理 `/run`、`/service-status`、`/health*` |
 
 ## 与 Dify 工作流的映射
 
-| Dify 节点 | 代码 |
+| Dify 节点 | 实现 |
 |---|---|
-| 开始节点 | `app/schema.py::WorkflowRequest` |
-| HTTP 节点 ×4 | `app/pipeline.py` 调上游服务 |
-| 代码节点 ×6 | `app/render.py`（1:1 移植） |
-| 成绩分析 LLM | `app/llm.py` + `app/prompts.py` |
-| 报错解析 LLM ×4 | `app/classifier.py` 确定性规则 |
+| 开始节点 | `format-service/app/schema.py::WorkflowRequest` |
+| HTTP 节点 ×4 | `format-service/app/pipeline.py` 调查询代理 |
+| 代码节点 ×6 | `format-service/app/render.py`（1:1 移植） |
+| 成绩分析 LLM | `format-service/app/llm.py` + `prompts.py` |
+| 报错解析 LLM ×4 | `format-service/app/classifier.py` 确定性规则 |
 | 变量聚合器 | 分支返回值（已消除登录响应泄漏） |
-| md_exporter / file_tools | `app/pdf.py` + 内联 Base64 PDF |
-| sys.workflow_run_id | `app/trace.py::new_run_id` |
-| 3 个 END | `app/schema.py::QueryResult` 单一体 |
+| md_exporter / file_tools | `format-service/app/pdf.py` + 内联 Base64 PDF |
+| sys.workflow_run_id | `format-service/app/trace.py::new_run_id` |
+| 3 个 END | `format-service/app/schema.py::QueryResult` 单一体 |
 
 ## 快速开始
 
 ```bash
-cp .env.example .env   # 填写 SERVICE_API_TOKEN / LLM_API_KEY
-pip install -r requirements-dev.txt
-uvicorn app.main:app --reload
-# 或：docker compose --profile single up --build
+cp .env.example .env      # 填写 SERVICE_API_TOKEN / LLM_API_KEY（可选）
+docker compose up -d --build
+# 浏览器打开 http://127.0.0.1:8000
 ```
 
-调用示例：
-
-```bash
-curl -X POST http://127.0.0.1:8000/run \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <API_TOKEN>" \
-  -d '{"username":"2023000001","password":"***","option":"成绩","check":false}'
-```
-
-响应：
-
-```json
-{"success": true, "kind": "grades", "output": "> 🔗 免密登录…", "run_id": "…", "meta": {}}
-```
+> `SERVICE_API_TOKEN` 必须与 `get-infomation-service` 的 `JWXT_API_TOKEN` 一致；
+> 若生产部署在独立服务器，`SERVICE_BASE_URL` 指向已部署的查询代理。
 
 ## 环境变量
 
@@ -62,18 +53,18 @@ curl -X POST http://127.0.0.1:8000/run \
 ## 测试
 
 ```bash
+pip install -r requirements-dev.txt
 pytest
+# 或容器内：
+docker build -t format-service:test format-service
+docker run --rm -v "$PWD":/app -w /app format-service:test \
+  sh -c "pip install -q pytest pytest-asyncio && pytest -q"
 ```
 
 ## Kubernetes 迁移就绪
 
-当前不随仓库附带 `k8s/` 清单，但代码与配置已按未来可迁入 K8s 设计：
-
-- 编排层**无状态**、PDF 内联返回（无 PV 依赖），可水平扩容；
-- 已提供 `GET /health/live`（存活）与 `GET /health/ready`（就绪）探针端点；
-- 全部配置走环境变量（ConfigMap/Secret 可直接映射），生产强制固定 `API_TOKEN`；
-- 多副本共享限流/状态历史可选开启 `REDIS_URL`。
-
+当前不随仓库附带 `k8s/` 清单，但已按未来可迁入 K8s 设计（无状态、环境变量配置、
+`/health/live` + `/health/ready` 探针、固定 API Token、PDF 内联无 PV）。
 详见 [docs/kubernetes-migration.md](docs/kubernetes-migration.md)。
 
 ## 路线图

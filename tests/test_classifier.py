@@ -4,6 +4,12 @@ from __future__ import annotations
 from app.classifier import classify_empty_result, classify_error
 
 
+def test_pass_error_401_is_credentials_not_token():
+    body = '{"success": false, "error": "教务系统登录失败：CAS 登录票据获取失败: PASSERROR"}'
+    r = classify_error("login", 401, body)
+    assert r["meta"]["category"] == "凭据被拒绝"
+
+
 def test_token_required():
     r = classify_error("grades", 401, '{"error": "token required"}')
     assert r["meta"]["category"] == "服务访问令牌错误"
