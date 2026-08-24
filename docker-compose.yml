@@ -1,6 +1,6 @@
 services:
   # ===== 容器 1：查询代理（复用 get-infomation-service）=====
-  # 登录学校统一认证、免密跳转、成绩/课表查询；会话/缓存/限流在此层
+  # 仅挂在 internal 内网，只有格式化后端可调用，不映射任何宿主端口
   get-infomation-service:
     build:
       context: ../STPT-Query/get-infomation-service
@@ -8,6 +8,10 @@ services:
         BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}jwxt-service:latest
     restart: unless-stopped
+    networks:
+      - internal
+    expose:
+      - "8766"
     env_file:
       - path: ../STPT-Query/get-infomation-service/.env
         required: false
@@ -24,11 +28,16 @@ services:
       retries: 3
 
   # ===== 容器 2：格式化后端（编排 + 渲染 + 分析 + PDF）=====
-  # 调用查询代理取原始数据，负责成绩/课表渲染、成绩分析 LLM、Markdown→PDF
+  # 同时挂 web 与 internal：对外只经 nginx 反代，向内调查询代理
   format-service:
     build: ./format-service
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-format:latest
     restart: unless-stopped
+    networks:
+      - web
+      - internal
+    expose:
+      - "8000"
     env_file:
       - path: .env
         required: false
@@ -55,13 +64,22 @@ services:
       start_period: 10s
       retries: 3
 
-  # ===== 容器 3：前端（nginx 静态页 + 反代 /run）=====
+  # ===== 容器 3：前端（唯一对外入口）=====
+  # nginx 静态页 + 反代 /run、/service-status、/health* 到格式化后端
   frontend:
     build: ./frontend
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-frontend:latest
     restart: unless-stopped
+    networks:
+      - web
     ports:
       - "8000:80"
     depends_on:
       format-service:
         condition: service_started
+
+networks:
+  # 对外边缘网络：nginx ↔ 格式化后端
+  web: {}
+  # 内部网络：格式化后端 ↔ 查询代理（宿主与前端均不可达）
+  internal: {}

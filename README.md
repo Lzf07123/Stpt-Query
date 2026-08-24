@@ -7,12 +7,16 @@
 
 ```mermaid
 flowchart LR
-    U[用户浏览器] -->|:8000| F["frontend（nginx）<br/>静态页 + 反代 /run"]
-    F -->|/run| S["format-service（格式化后端）<br/>编排 + 渲染 + LLM 分析 + PDF"]
-    S -->|/login /jump /get_grades /get_schedule| G["get-infomation-service（查询代理）<br/>统一认证登录 / 教务查询 / 免密跳转"]
+    U[用户浏览器] -->|唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /run"]
+    F -->|web 网络| S["format-service（格式化后端）<br/>编排 + 渲染 + LLM 分析 + PDF"]
+    S -->|internal 内网| G["get-infomation-service（查询代理）<br/>统一认证登录 / 教务查询 / 免密跳转"]
     S -.成绩分析.-> L["DeepSeek（OpenAI 兼容）"]
     G --> U2["学校教务系统（WebVPN/CAS）"]
 ```
+
+**端口与网络隔离**：仅 `frontend` 映射宿主端口 `8000`；`format-service` 挂 `web` 与
+`internal` 两个网络；`get-infomation-service` 只挂 `internal` 内网——宿主与前端都
+无法直达查询代理，只能通过格式化后端在编排内调用。
 
 | 容器 | 目录 | 职责 |
 |---|---|---|
