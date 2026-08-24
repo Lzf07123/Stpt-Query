@@ -65,6 +65,17 @@ curl -X POST http://127.0.0.1:8000/run \
 pytest
 ```
 
+## Kubernetes 迁移就绪
+
+当前不随仓库附带 `k8s/` 清单，但代码与配置已按未来可迁入 K8s 设计：
+
+- 编排层**无状态**、PDF 内联返回（无 PV 依赖），可水平扩容；
+- 已提供 `GET /health/live`（存活）与 `GET /health/ready`（就绪）探针端点；
+- 全部配置走环境变量（ConfigMap/Secret 可直接映射），生产强制固定 `API_TOKEN`；
+- 多副本共享限流/状态历史可选开启 `REDIS_URL`。
+
+详见 [docs/kubernetes-migration.md](docs/kubernetes-migration.md)。
+
 ## 路线图
 
 - [ ] 多实例后台任务队列（异步 `/run/{id}` 轮询兼容）

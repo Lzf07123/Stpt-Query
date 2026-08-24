@@ -178,6 +178,25 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 output="服务内部异常：%s" % exc.__class__.__name__,
                 meta={"elapsed_ms": int((time.time() - started) * 1000)})
 
+    @app.get("/health/live")
+    def health_live() -> dict:
+        """K8s livenessProbe：进程存活即 200。"""
+        return {"status": "ok"}
+
+    @app.get("/health/ready")
+    def health_ready() -> dict:
+        """K8s readinessProbe：配置就绪且可选 Redis 可用时 ready。"""
+        checks = {"config": "ok", "redis": "not-configured"}
+        ready = True
+        if app.state.redis is not None:
+            try:
+                app.state.redis.ping()
+                checks["redis"] = "ok"
+            except Exception:
+                checks["redis"] = "error"
+                ready = False
+        return {"status": "ready" if ready else "not-ready", **checks}
+
     @app.get("/health")
     def health() -> dict:
         redis_status = "not-configured"
