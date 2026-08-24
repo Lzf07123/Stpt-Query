@@ -43,8 +43,8 @@ services:
         required: false
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
-      - AUTO_ROTATE_TOKEN=${AUTO_ROTATE_TOKEN:-true}
-      - API_TOKEN=${API_TOKEN:-}
+      - AUTO_ROTATE_TOKEN=${AUTO_ROTATE_TOKEN:-false}
+      - API_TOKEN=${API_TOKEN:-change-me}
       - SERVICE_BASE_URL=${SERVICE_BASE_URL:-http://get-infomation-service:8766}
       - SERVICE_API_TOKEN=${SERVICE_API_TOKEN:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
@@ -72,6 +72,9 @@ services:
     restart: unless-stopped
     networks:
       - web
+    environment:
+      # 与 format-service 共用同一 API_TOKEN，由 nginx 反代时注入 Authorization
+      - API_TOKEN=${API_TOKEN:-change-me}
     ports:
       - "8000:80"
     depends_on:

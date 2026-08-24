@@ -22,7 +22,7 @@ flowchart LR
 |---|---|---|
 | get-infomation-service | `../STPT-Query/get-infomation-service`（复用现有服务） | 学校统一认证登录、免密跳转、成绩/课表查询，会话/缓存/限流 |
 | format-service | `format-service/` | 编排固定工作流：调用查询代理 → 成绩/课表渲染 → 可选成绩分析 LLM → 可选 PDF |
-| frontend | `frontend/` | nginx 静态前端 + 反向代理 `/run`、`/service-status`、`/health*` |
+| frontend | `frontend/` | nginx 托管原 dify-workflow-api 的完整页面 + 反向代理 `/run`、`/service-status`、`/health*`；网关令牌由 nginx 注入，页面不持有令牌 |
 
 ## 与 Dify 工作流的映射
 
@@ -46,6 +46,8 @@ docker compose up -d --build
 # 浏览器打开 http://127.0.0.1:8000
 ```
 
+> 前端与 `format-service` 共用固定 `API_TOKEN`（默认 `change-me`，请务必修改），
+> 由 nginx 反代时注入 `Authorization` 头，浏览器页面不持有令牌；
 > `SERVICE_API_TOKEN` 必须与 `get-infomation-service` 的 `JWXT_API_TOKEN` 一致；
 > 若生产部署在独立服务器，`SERVICE_BASE_URL` 指向已部署的查询代理。
 
