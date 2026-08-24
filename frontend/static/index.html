@@ -43,7 +43,7 @@
       <div class="sub" id="brandSub">汕职院教务信息查询</div>
     </div>
 
-    <div id="offlineBar" class="offline-bar hidden"></div>
+    <div id="offlineBar" class="notice notice-warning hidden" aria-live="polite"></div>
     <div class="layout">
       <form id="queryForm" class="card card-signature card-halo">
         <div class="row">
@@ -146,7 +146,7 @@
           </button>
           <button class="btn btn-ghost" type="button" id="resetBtn">清空</button>
         </div>
-        <div id="status" class="hidden" aria-live="polite"></div>
+        <div id="status" class="notice hidden" aria-live="polite"></div>
       </form>
 
       <div id="resultCard" class="project-card hidden" aria-live="polite">
@@ -166,11 +166,12 @@
 
     <div id="serviceStatus" class="service-status hidden"></div>
     <div id="statusTooltip" class="status-tooltip hidden"></div>
-      <footer class="site-footer">
-        <div class="site-footer-inner" id="siteFooterInner"></div>
-      </footer>
     </div>
   </div>
+
+  <footer class="site-footer">
+    <div class="site-footer-inner" id="siteFooterInner"></div>
+  </footer>
 
   <a class="back-to-top" href="#main" aria-label="返回顶部">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -338,7 +339,7 @@
         let note = "";
         if (rec.savedAt) {
           const mins = Math.max(0, Math.round((Date.now() - rec.savedAt) / 60000));
-          note = '<div class="cache-note">已加载本地缓存 · 更新于 ' +
+          note = '<div class="badge badge-warning">已加载本地缓存 · 更新于 ' +
             (mins < 1 ? "刚刚" : mins + " 分钟前") + "</div>";
         }
         if (rec.isMarkdown) {
@@ -464,8 +465,8 @@
 
     function showStatus(message, ok) {
       statusBox.textContent = message;
-      statusBox.classList.remove("hidden", "error", "ok");
-      statusBox.classList.add(ok ? "ok" : "error");
+      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
+      statusBox.classList.add(ok ? "notice-success" : "notice-error");
     }
 
     function syncOptionSeg() {
@@ -596,7 +597,7 @@
 
     function showLoading() {
       statusBox.innerHTML = '<span class="spinner"></span>正在查询';
-      statusBox.classList.remove("hidden", "error", "ok");
+      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
     }
 
     const TOAST_ICONS = {

@@ -66,15 +66,22 @@
   .input-wrap .input {
     padding-right: 3.75rem;
   }
+  .input,
+  .dropdown-trigger {
+    min-height: 44px;
+  }
+  .btn {
+    min-height: 44px;
+  }
   .show-btn {
-    @apply absolute inset-y-0 right-2 my-auto h-9 cursor-pointer rounded-md px-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary-soft;
+    @apply absolute inset-y-0 right-2 my-auto h-11 cursor-pointer rounded-md px-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary-soft;
   }
 
   .segmented {
     @apply flex w-full rounded-lg border border-border bg-surface-2 p-1;
   }
   .seg-btn {
-    @apply min-h-10 flex-1 cursor-pointer rounded-md border-0 bg-transparent px-3 py-2 text-sm font-medium text-muted transition-colors duration-150;
+    @apply min-h-11 flex-1 cursor-pointer rounded-md border-0 bg-transparent px-3 py-2 text-sm font-medium text-muted transition-colors duration-150;
   }
   .seg-btn:hover {
     @apply bg-surface text-foreground;
@@ -133,37 +140,20 @@
   .dropdown-item.active {
     @apply bg-primary-soft font-semibold text-primary;
   }
-
-  /* ---------- 状态提示 / 离线条 ---------- */
-  .status {
-    @apply mt-4 flex min-h-11 items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm;
+  .dark .dropdown-item.active,
+  .dark .seg-btn.active {
+    background: var(--eduquery-primary-soft-solid);
+    color: var(--eduquery-primary-soft-fg);
   }
-  .status .spinner {
+
+  /* ---------- 状态/离线条：复用模板 .notice；按钮做紧凑密度 ---------- */
+  .notice {
+    @apply mt-4;
+  }
+  .notice .spinner {
     flex: none;
   }
-  .status.ok {
-    @apply border-success/25 bg-success-soft text-success;
-  }
-  .status.error {
-    @apply border-destructive/25 bg-destructive-soft text-destructive;
-  }
-  .dark .status.ok {
-    background: var(--eduquery-success-soft-solid);
-    color: var(--eduquery-success-soft-fg);
-  }
-  .dark .status.error {
-    background: var(--eduquery-destructive-soft-solid);
-    color: var(--eduquery-destructive-soft-fg);
-  }
-
-  .offline-bar {
-    @apply my-4 flex flex-wrap items-center gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3.5 py-2.5 text-sm text-warning;
-  }
-  .dark .offline-bar {
-    background: var(--eduquery-warning-soft-solid);
-    color: var(--eduquery-warning-soft-fg);
-  }
-  .offline-bar .btn {
+  #offlineBar .btn {
     @apply min-h-8 px-3 py-1 text-xs;
   }
 
@@ -177,8 +167,17 @@
   .pdf-actions {
     @apply mt-4 flex flex-wrap items-center gap-3;
   }
+  /* 结果卡淡入只动 opacity：fill-mode 不能占用 transform，否则会压掉玻璃卡 hover 上浮 */
   .fade-in {
-    animation: page-fade-up var(--motion-base) var(--ease-out) both;
+    animation: result-fade-in var(--motion-base) var(--ease-out) both;
+  }
+  @keyframes result-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
   }
   .fade-out {
     opacity: 0.55;
@@ -271,8 +270,16 @@
   .badge.required {
     @apply bg-primary-soft text-primary;
   }
+  .dark .badge.required {
+    background: var(--eduquery-primary-soft-solid);
+    color: var(--eduquery-primary-soft-fg);
+  }
   .badge.elective {
     @apply bg-secondary-soft text-secondary;
+  }
+  .dark .badge.elective {
+    background: var(--eduquery-secondary);
+    color: var(--eduquery-bg);
   }
   .badge.practice {
     @apply bg-warning-soft text-warning;
@@ -284,12 +291,12 @@
     background: var(--eduquery-warning-soft-solid);
     color: var(--eduquery-warning-soft-fg);
   }
-  .cache-note {
-    @apply mb-3 inline-flex items-center gap-2 rounded-full bg-warning-soft px-3 py-1 text-xs font-medium text-warning;
+  .dark .show-btn {
+    color: var(--eduquery-primary);
   }
-  .dark .cache-note {
-    background: var(--eduquery-warning-soft-solid);
-    color: var(--eduquery-warning-soft-fg);
+  .dark .show-btn:hover {
+    background: var(--eduquery-primary-soft-solid);
+    color: var(--eduquery-primary-soft-fg);
   }
 
   /* ---------- 服务状态条 ---------- */

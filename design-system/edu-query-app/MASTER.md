@@ -74,7 +74,37 @@
 - 叠层：`.card-halo` 提升 z-index，防止其 isolation 叠层上下文使页脚盖住下拉菜单；
   按钮涟漪统一用模板 `.btn-ripple`。
 
-## 5. 令牌校验与验收证据
+## 5. 全量视觉规范验收（2026-08-25，计算样式逐值审计）
+
+**Li-Design 视觉刷新 + 品牌方案 Pre-Delivery 清单：27/27 通过**（无头 Chrome 实测）：
+
+- 令牌逐值：浅/深两套 `--eduquery-*` 与模板一致；液态玻璃 `blur(18px) saturate(150%)`、
+  `glass-bg 0.58/0.56`、内高光 `rgba(255,255,255,.82) 1px inset`。
+- 留白与标题：`.page-shell` 底 96px/首屏 32px；主标题居中；区块标题 48×3px 装饰线。
+- 卡片：表单卡 16px + 签名描边；结果玻璃卡 20px、内边距 24×28、边框
+  `rgba(225,236,232,.66)`；hover `matrix(1,0,0,1,0,-3)` + 顶部主色细线 `scaleX(0→1)`。
+- 页脚：`mt-auto` 贴底、单行 56px、12px、半透明表面 + `blur(8px)`、链接 muted
+  `rgb(100,115,108)`；返回顶部 44×44、桌面 20/24、移动 14/16、圆角 14px。
+- 触控与控件：输入/下拉/分段/按钮 44px；复选框 18px + 主色 accent；全部可点击
+  `cursor:pointer`；聚焦主色边框 + 2px ring。
+- 深色 AA：带文字软底回退 soft-solid/soft-fg，实测 CR：required 11.70、practice 8.20、
+  elective 6.75、seg/dropdown.active 11.70（全部 ≥ 4.5）。
+- 空状态 48×24/圆角 22/图标盒 84/圆角 28；骨架 shimmer 1.35s（220%）；每 26 个
+  animation 均有 @keyframes；`prefers-reduced-motion` 单帧。
+- 断点：320/390/769/1440 四档 `scrollWidth == innerWidth`，无横向溢出。
+- 源码：`{{PROJECT_PREFIX}}` 零残留；组件层无硬编码 hex；页面无 emoji 图标。
+
+**功能回归 17/17 通过**：品牌单点/主题持久化/分段联动/下拉鼠标+键盘契约/密码显隐/
+学号校验/后端失败分类渲染/服务状态条/成绩表格着色与徽章/空状态/课表下载/PDF 落盘/
+渲染器 XSS 防护/无 JS 报错。
+
+验收截图（Chrome DevTools 实测基准）：
+
+- `preview/light-home-1440.png`、`preview/dark-home-1440.png`
+- `preview/light-result-1440.png`（玻璃卡 + 分类报告 + 服务状态条）
+- `preview/light-home-390.png`（移动端）
+
+## 6. 令牌校验与验收证据
 
 - 仅槽位差校验：模板实例化后 `--eduquery-*` 令牌集合与模板逐值一致（70/70）；
   仅新增 5 个前缀对齐别名（`--eduquery-motion-*` / `--eduquery-ease-*`，
@@ -85,7 +115,7 @@
   页脚链接 muted（浅 `rgb(100,115,108)`）；移动端氛围光点 `display:none`。
 - 明暗模式：浅 `html` 背景 `rgb(246,251,249)`、深 `rgb(58,63,69)`（D1 雾灰）。
 
-## 6. 构建与验收
+## 7. 构建与验收
 
 ```bash
 cd frontend
