@@ -1,0 +1,9 @@
+[project]
+name = "edu-query-app"
+version = "0.1.0"
+description = "教务查询编排服务：替代 Dify 工作流，直接编排登录/查询/渲染/分析/PDF"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,79 @@
+services:
+  # 单实例模式（COMPOSE_PROFILES=single，默认）
+  # 编排层无状态；会话/缓存/限流由上游 get-infomation-service 管理
+  edu-query-app:
+    profiles: ["single"]
+    build: .
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-app:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - REDIS_URL=
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # ===== 多实例模式（COMPOSE_PROFILES=multi）=====
+  # Redis 共享限流与状态历史 + Nginx 负载均衡；副本数由 REPLICAS 控制
+  edu-query-app-multi:
+    profiles: ["multi"]
+    build: .
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-app:latest
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # 多实例必须使用固定令牌，所有副本读到同一 API_TOKEN
+      - AUTO_ROTATE_TOKEN=false
+      - API_TOKEN=${API_TOKEN:?多实例部署必须在 .env 配置固定 API_TOKEN}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD:-change-me}@redis:6379/0}
+      - TRUST_PROXY=true
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
+    deploy:
+      replicas: ${REPLICAS:-2}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  redis:
+    profiles: ["local-redis"]
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}redis:7-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --appendonly yes --requirepass \"$${REDIS_PASSWORD:-change-me}\""]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-change-me}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nginx:
+    profiles: ["multi"]
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - edu-query-app-multi
+
+volumes:
+  redis-data:

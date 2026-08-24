@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>教务信息查询</title>
+  <style>
+    body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+           max-width: 640px; margin: 3rem auto; padding: 0 1rem; color: #1f2937; }
+    h1 { font-size: 1.5rem; }
+    form { display: grid; gap: .75rem; margin-top: 1.5rem; }
+    label { font-size: .9rem; color: #4b5563; }
+    input, select { padding: .55rem; font-size: 1rem; border: 1px solid #d1d5db; border-radius: 6px; }
+    button { padding: .65rem; font-size: 1rem; border: 0; border-radius: 6px;
+             background: #2563eb; color: #fff; cursor: pointer; }
+    pre { white-space: pre-wrap; background: #f3f4f6; padding: 1rem; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>教务信息查询</h1>
+  <p>本服务已替代 Dify 工作流，请填写信息后查询。</p>
+  <form id="form">
+    <label>学号（10 位）</label>
+    <input id="username" required maxlength="10" pattern="[0-9]{10}">
+    <label>密码</label>
+    <input id="password" type="password" required>
+    <label>查询项目</label>
+    <select id="option"><option>成绩</option><option>课表</option></select>
+    <label><input id="check" type="checkbox"> 分析成绩（仅成绩，输出较慢）</label>
+    <label><input id="md2pdf" type="checkbox"> 仅生成 PDF（仅成绩）</label>
+    <button type="submit">查询</button>
+  </form>
+  <h2>结果</h2>
+  <pre id="result">（等待查询…）</pre>
+  <script>
+    const form = document.getElementById('form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const result = document.getElementById('result');
+      result.textContent = '查询中…';
+      const payload = {
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+        option: document.getElementById('option').value,
+        check: document.getElementById('check').checked,
+        md2pdf: document.getElementById('md2pdf').checked,
+      };
+      try {
+        const resp = await fetch('/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        result.textContent = data.output || JSON.stringify(data, null, 2);
+      } catch (err) {
+        result.textContent = '请求失败：' + err;
+      }
+    });
+  </script>
+</body>
+</html>
