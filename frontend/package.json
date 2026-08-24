@@ -1,0 +1,14 @@
+{
+  "name": "edu-query-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "教务信息查询前端：Tailwind CSS 4 令牌构建（运行时零第三方资源）",
+  "scripts": {
+    "build": "tailwindcss -i ./src/index.css -o ./static/style.css --minify",
+    "watch": "tailwindcss -i ./src/index.css -o ./static/style.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

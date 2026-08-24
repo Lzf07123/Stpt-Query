@@ -1,0 +1,346 @@
+/* =============================================================
+   edu-query-app · 查询页应用样式（edu-query 实例化的项目特有形态）
+
+   规则：
+   - 组件只引用 @theme 语义别名或 --eduquery-* 令牌，禁止硬编码 hex。
+   - 深色下带文字的软底一律回退 *-soft-solid + *-soft-fg。
+   - 每个 animation 都有 @keyframes；动效尊重 prefers-reduced-motion。
+============================================================= */
+
+@layer components {
+  /* ---------- 页面外壳：单页查询工具 ---------- */
+  body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+  }
+  .wrap {
+    @apply relative z-[1] mx-auto w-full max-w-5xl flex-1 px-4 sm:px-6;
+    overflow-x: clip;
+  }
+  .head {
+    @apply relative mb-8 px-12 text-center;
+  }
+  .head .sub {
+    @apply mt-2 text-sm text-muted;
+  }
+  .theme-toggle {
+    @apply absolute right-0 top-0 h-11 w-11;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  .layout > *:first-child {
+    align-self: start;
+  }
+  @media (min-width: 1024px) {
+    .layout {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+  }
+
+  /* ---------- 查询表单 ---------- */
+  .row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+  }
+  .row .full {
+    grid-column: 1 / -1;
+  }
+  .row label:not(.field-check) {
+    @apply mb-1.5 block text-sm font-medium text-foreground;
+  }
+  .input-wrap {
+    @apply relative;
+  }
+  .input-wrap .input {
+    padding-right: 3.75rem;
+  }
+  .show-btn {
+    @apply absolute inset-y-0 right-2 my-auto h-9 cursor-pointer rounded-md px-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary-soft;
+  }
+
+  .segmented {
+    @apply flex w-full rounded-lg border border-border bg-surface-2 p-1;
+  }
+  .seg-btn {
+    @apply min-h-10 flex-1 cursor-pointer rounded-md border-0 bg-transparent px-3 py-2 text-sm font-medium text-muted transition-colors duration-150;
+  }
+  .seg-btn:hover {
+    @apply bg-surface text-foreground;
+  }
+  .seg-btn.active {
+    @apply bg-primary-soft text-primary;
+    box-shadow: inset 0 0 0 1px var(--eduquery-primary);
+  }
+
+  .checks {
+    @apply flex flex-col items-start gap-2 rounded-xl border border-border bg-surface-2/60 p-4;
+  }
+  .history-row {
+    @apply flex items-end gap-3;
+  }
+
+  .actions {
+    @apply mt-6 flex flex-wrap items-center gap-3;
+  }
+
+  /* ---------- 自定义下拉（复用 .dropdown-menu 视觉语言） ---------- */
+  .dropdown {
+    @apply relative block w-full;
+  }
+  .dropdown-trigger {
+    @apply flex w-full min-h-11 cursor-pointer items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-sm text-foreground shadow-sm transition-colors duration-150;
+  }
+  .dropdown-trigger:hover {
+    @apply border-primary;
+  }
+  .dropdown-trigger[aria-expanded="true"] {
+    @apply border-primary;
+    box-shadow: 0 0 0 3px var(--eduquery-primary-soft);
+  }
+  .dropdown-trigger::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-right: 1.5px solid var(--eduquery-muted);
+    border-bottom: 1.5px solid var(--eduquery-muted);
+    transform: rotate(45deg) translateY(-2px);
+    transition: transform var(--motion-fast) var(--ease-out);
+  }
+  .dropdown-trigger[aria-expanded="true"]::after {
+    transform: rotate(-135deg) translateY(-2px);
+  }
+  .dropdown-menu {
+    left: 0;
+    right: 0;
+    min-width: 0;
+  }
+  .dropdown-item {
+    @apply flex w-full min-h-11 cursor-pointer items-center justify-between gap-2 rounded-lg border-0 bg-transparent px-3 py-2 text-left text-sm text-foreground transition-colors duration-150 hover:bg-surface-2;
+  }
+  .dropdown-item.active {
+    @apply bg-primary-soft font-semibold text-primary;
+  }
+
+  /* ---------- 状态提示 / 离线条 ---------- */
+  .status {
+    @apply mt-4 flex min-h-11 items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm;
+  }
+  .status .spinner {
+    flex: none;
+  }
+  .status.ok {
+    @apply border-success/25 bg-success-soft text-success;
+  }
+  .status.error {
+    @apply border-destructive/25 bg-destructive-soft text-destructive;
+  }
+  .dark .status.ok {
+    background: var(--eduquery-success-soft-solid);
+    color: var(--eduquery-success-soft-fg);
+  }
+  .dark .status.error {
+    background: var(--eduquery-destructive-soft-solid);
+    color: var(--eduquery-destructive-soft-fg);
+  }
+
+  .offline-bar {
+    @apply my-4 flex flex-wrap items-center gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3.5 py-2.5 text-sm text-warning;
+  }
+  .dark .offline-bar {
+    background: var(--eduquery-warning-soft-solid);
+    color: var(--eduquery-warning-soft-fg);
+  }
+  .offline-bar .btn {
+    @apply min-h-8 px-3 py-1 text-xs;
+  }
+
+  /* ---------- 结果卡与骨架 ---------- */
+  #resultCard.project-card {
+    padding: 24px 28px;
+  }
+  #resultCard h2 {
+    @apply mb-4 mt-0;
+  }
+  .fade-in {
+    animation: page-fade-up var(--motion-base) var(--ease-out) both;
+  }
+  .fade-out {
+    opacity: 0.55;
+  }
+
+
+  /* ---------- Markdown 结果渲染 ---------- */
+  pre#result {
+    @apply overflow-x-auto whitespace-pre-wrap rounded-xl border border-border bg-surface-2 p-4 text-xs text-foreground;
+  }
+
+  .markdown-body {
+    @apply text-sm leading-relaxed text-foreground;
+    overflow-wrap: anywhere;
+  }
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .markdown-body h4,
+  .markdown-body h5,
+  .markdown-body h6 {
+    @apply mt-5 mb-2 font-semibold text-foreground;
+  }
+  .markdown-body a {
+    @apply text-primary underline-offset-2 hover:underline;
+  }
+  .markdown-body blockquote {
+    @apply my-3 border-l-4 border-primary/40 bg-primary-soft/60 px-4 py-2 text-muted;
+  }
+  .markdown-body code {
+    @apply rounded bg-surface-2 px-1.5 py-0.5 text-xs;
+  }
+  .markdown-body pre {
+    @apply overflow-x-auto rounded-xl border border-border bg-surface-2 p-4;
+  }
+  .markdown-body pre code {
+    background: none;
+    padding: 0;
+  }
+  .markdown-body hr {
+    @apply my-4 border-border;
+  }
+  .markdown-body img {
+    max-width: 100%;
+    height: auto;
+  }
+  .markdown-body ul,
+  .markdown-body ol {
+    @apply my-2 pl-6;
+  }
+  .markdown-body p {
+    @apply my-2;
+  }
+  .table-scroll {
+    @apply overflow-x-auto rounded-xl border border-border bg-surface;
+  }
+  .table-scroll table {
+    @apply w-full border-collapse text-sm;
+    min-width: 480px;
+  }
+  .table-scroll th {
+    @apply border-b border-border bg-surface-2 px-3 py-2.5 text-left text-xs font-semibold tracking-wide text-muted;
+  }
+  .table-scroll td {
+    @apply border-b border-border/70 px-3 py-2.5 align-middle text-foreground;
+  }
+  .table-scroll tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .score-high {
+    @apply font-semibold text-success;
+  }
+  .score-mid {
+    @apply font-semibold text-warning;
+  }
+  .score-low {
+    @apply font-semibold text-destructive;
+  }
+  .score-unpub {
+    @apply text-muted;
+  }
+  .score-bar {
+    @apply mt-1 h-1 w-16 max-w-full overflow-hidden rounded-full bg-border;
+  }
+  .score-bar i {
+    display: block;
+    height: 100%;
+    background: var(--eduquery-primary);
+  }
+  .badge.required {
+    @apply bg-primary-soft text-primary;
+  }
+  .badge.elective {
+    @apply bg-secondary-soft text-secondary;
+  }
+  .badge.practice {
+    @apply bg-warning-soft text-warning;
+  }
+  .badge.other {
+    @apply bg-surface-2 text-muted;
+  }
+  .dark .badge.practice {
+    background: var(--eduquery-warning-soft-solid);
+    color: var(--eduquery-warning-soft-fg);
+  }
+  .cache-note {
+    @apply mb-3 inline-flex items-center gap-2 rounded-full bg-warning-soft px-3 py-1 text-xs font-medium text-warning;
+  }
+  .dark .cache-note {
+    background: var(--eduquery-warning-soft-solid);
+    color: var(--eduquery-warning-soft-fg);
+  }
+
+  /* ---------- 服务状态条 ---------- */
+  .service-status {
+    @apply mt-8 rounded-2xl border border-border bg-surface p-5 text-sm shadow-sm;
+  }
+  .status-title {
+    @apply mb-3 text-center text-xs font-semibold tracking-wide text-muted;
+  }
+  .status-bar {
+    @apply flex h-2.5 gap-0.5 overflow-hidden rounded-full;
+  }
+  .status-seg {
+    flex: 1;
+    min-width: 2px;
+    border-radius: 2px;
+  }
+  .status-seg.ok {
+    background: var(--eduquery-success);
+  }
+  .status-seg.fail {
+    background: var(--eduquery-destructive);
+  }
+  .status-bar-mobile {
+    @apply flex h-2.5 overflow-hidden rounded-full;
+  }
+  .seg-success {
+    background: var(--eduquery-success);
+  }
+  .seg-fail {
+    background: var(--eduquery-destructive);
+  }
+  .status-summary {
+    @apply mt-3 text-center text-xs text-muted;
+  }
+  .avail-good {
+    @apply font-semibold text-success;
+  }
+  .avail-mid {
+    @apply font-semibold text-warning;
+  }
+  .avail-bad {
+    @apply font-semibold text-destructive;
+  }
+  .status-tooltip {
+    @apply fixed z-[60] max-w-xs rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-foreground shadow-lg;
+  }
+}
+
+/* ---------- 外壳未分层约束（避免被 utilities 覆盖） ---------- */
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+.page-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+.page-shell .wrap {
+  flex: 1 0 auto;
+}
