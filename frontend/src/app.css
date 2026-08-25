@@ -21,6 +21,15 @@
   .head {
     @apply relative mb-8 px-12 text-center;
   }
+  .page-title {
+    @apply text-3xl font-semibold;
+    line-height: 1.2;
+  }
+  @media (max-width: 600px) {
+    .page-title {
+      @apply text-xl;
+    }
+  }
   .head .sub {
     @apply mt-2 text-sm text-muted;
   }
@@ -48,9 +57,6 @@
   }
   .layout.has-result #queryForm {
     display: none;
-  }
-  .layout.has-result #resultCard {
-    min-height: min(72vh, 880px);
   }
   .layout > *:first-child {
     align-self: start;
@@ -214,13 +220,48 @@
     padding: 24px 28px;
   }
   #resultCard h2 {
-    @apply mb-4 mt-0;
+    @apply m-0 text-base;
   }
   .result-head {
-    @apply relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .result-head .section-title {
+    grid-column: 2;
+    margin-bottom: 0;
+  }
+  .result-head .section-title::after {
+    margin-bottom: 0;
+  }
+  .result-head .result-head-spacer {
+    grid-column: 3;
   }
   .result-back {
-    @apply absolute right-0 top-0;
+    grid-column: 1;
+    justify-self: start;
+  }
+  @media (max-width: 600px) {
+    .result-head {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .result-head .section-title,
+    .result-head .result-head-spacer,
+    .result-back {
+      grid-column: 1;
+    }
+    .result-back {
+      justify-self: start;
+    }
+    .result-head .section-title {
+      order: 2;
+    }
+    .result-back {
+      order: 1;
+    }
   }
   .pdf-actions {
     @apply mt-4 flex flex-wrap items-center justify-center gap-3;
@@ -422,6 +463,11 @@
 .skeleton-row {
   height: 46px;
   margin: 8px 0;
+}
+
+/* 返回结果标题降级：.section-title（无层）固定 1.25rem，结果卡用更高优先级无层规则降为 16px */
+#resultCard h2 {
+  font-size: 1rem;
 }
 
 /* ---------- 外壳未分层约束（避免被 utilities 覆盖） ---------- */
