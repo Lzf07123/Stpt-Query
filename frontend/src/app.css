@@ -152,6 +152,16 @@
     left: 0;
     right: 0;
     min-width: 0;
+    max-height: min(320px, 40vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .dropdown-menu::-webkit-scrollbar {
+    width: 8px;
+  }
+  .dropdown-menu::-webkit-scrollbar-thumb {
+    background: var(--eduquery-border);
+    border-radius: 999px;
   }
   .dropdown-item {
     @apply flex w-full min-h-11 cursor-pointer items-center justify-between gap-2 rounded-lg border-0 bg-transparent px-3 py-2 text-left text-sm text-foreground transition-colors duration-150 hover:bg-surface-2;
