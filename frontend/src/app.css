@@ -378,7 +378,7 @@
 
   /* ---------- 服务状态条 ---------- */
   .service-status {
-    @apply mt-8 rounded-2xl border border-border bg-transparent p-5 text-sm;
+    @apply mt-8 bg-transparent p-5 text-sm;
     max-width: 680px;
     margin-left: auto;
     margin-right: auto;
