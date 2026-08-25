@@ -24,3 +24,20 @@ htmlcov/
 
 # 前端构建依赖
 frontend/node_modules/
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 日志
+*.log
+
+# 浏览器自动化（playwright-cli 会话与报告）
+.playwright-cli/
+test-results/
+playwright-report/
+
+# 系统临时文件
+Thumbs.db
