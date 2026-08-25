@@ -20,7 +20,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=30">
+  <link rel="stylesheet" href="/style.css?v=31">
   <script src="/brand.js?v=3" defer></script>
 </head>
 <body>
@@ -302,6 +302,9 @@
           if (line.indexOf("> ") === 0) return;
           skipping = false;
         }
+        // 回看历史时同样隐藏课表下载链接与其令牌提示（下载码短时有效）
+        if (line.indexOf("[点击下载课表（Word 文件）](") === 0) return;
+        if (line.indexOf("> ⚠️ 此链接含个人令牌，请勿外传。") === 0) return;
         out.push(line);
       });
       return out.join("\n").replace(/^\s+/, "");
