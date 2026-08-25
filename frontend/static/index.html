@@ -20,7 +20,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=4">
+  <link rel="stylesheet" href="/style.css?v=5">
   <script src="/brand.js?v=1" defer></script>
 </head>
 <body>
@@ -1002,7 +1002,7 @@
               }
               return '<td data-label="' + label + '">' + renderInline(cell) + "</td>";
             }
-            html.push('<div class="table-scroll"><table><thead><tr>');
+            html.push('<div class="table-shell"><table><thead><tr>');
             cells(rows[0]).forEach(function (cell) {
               html.push("<th>" + renderInline(cell) + "</th>");
             });

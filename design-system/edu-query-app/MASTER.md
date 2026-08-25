@@ -48,6 +48,7 @@
 | 复选框 | `input[type=checkbox]` + `.field-check` | 18px、accent-color 主色 |
 | 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪；查询/清空整行 7:3，控件统一 48px |
 | 结果卡 | `.project-card`（液态玻璃） | hover 上浮 3px、顶部主色细线展开 |
+| 结果表格 | `.table-shell`（规范表格组件） | 表头 surface-2、行 hover `bg-surface-2/60`；移动端横向滚动（表格 `min-width:480px`） |
 | 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | shimmer 1.35s |
 | 空状态 | `.empty-state` / `.empty-state-art` / `.empty-state-text` | SVG 小图 + 引导文案 |
 | 提示/状态 | `.notice` 变体、`.status`（ok/error）、`.status-dot` | 语义色只表状态 |
@@ -63,7 +64,8 @@
   ≥960px 切「340px 表单 + 自适应结果玻璃卡」双栏（结果卡 sticky）；窄屏单栏；
   服务状态条居中 680px；右下角返回顶部；`site-footer` 贴底。
 - 结果渲染：服务端 Markdown → 本地零依赖解析（表格/引用/列表/代码），
-  成绩列三档语义着色（高/中/低）+ 课程类别徽章；移动端表格横向滚动。
+  成绩列三档语义着色（高/中/低）+ 课程类别徽章；表格走规范 `.table-shell`
+  （含行 hover 效果），移动端横向滚动。
 - 查询流程状态：loading（spinner + 骨架）→ success（toast + 结果）/ failure（notice）。
 - 响应契约：优先识别后端统一结构 `success/kind/meta`（错误 kind 渲染分类报告且不写历史，
   `grades_empty` 走空状态），保留 Dify 风格 `_meta`/正则兜底；结果行数按 Markdown 表体行
@@ -96,6 +98,12 @@
   animation 均有 @keyframes；`prefers-reduced-motion` 单帧。
 - 断点：320/390/769/1440 四档 `scrollWidth == innerWidth`，无横向溢出。
 - 源码：`{{PROJECT_PREFIX}}` 零残留；组件层无硬编码 hex；页面无 emoji 图标。
+
+**规范表格组件对齐（2026-08-25 补充）**：Markdown 结果表格由项目自有 `.table-scroll`
+改为规范 `.table-shell`（移除重复实现），行 hover 计算样式实测 `oklab(0.966 -0.009 0.001 / 0.6)`
+（= `surface-2` 60%）；`min-width:480px` 保留横向滚动；320/390/768/769/1024/1440 六档
+`scrollWidth == innerWidth` 无横向溢出；无头 Chrome 无页面 JS 异常（静态预览下
+`/service-status` 404 属预期，网关反代后提供）。
 
 **功能回归 17/17 通过**：品牌单点/主题持久化/分段联动/下拉鼠标+键盘契约/密码显隐/
 学号校验/后端失败分类渲染/服务状态条/成绩表格着色与徽章/空状态/课表下载/PDF 落盘/

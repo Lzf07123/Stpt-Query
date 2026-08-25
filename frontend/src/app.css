@@ -284,21 +284,10 @@
   .markdown-body p {
     @apply my-2;
   }
-  .table-scroll {
-    @apply overflow-x-auto rounded-xl border border-border bg-surface;
-  }
-  .table-scroll table {
-    @apply w-full border-collapse text-sm;
+  /* 表格采用规范 .table-shell（表头/边框/行 hover 全部走令牌）；
+     仅保留本项目移动端横向滚动的列宽下限 */
+  .markdown-body .table-shell table {
     min-width: 480px;
-  }
-  .table-scroll th {
-    @apply border-b border-border bg-surface-2 px-3 py-2.5 text-left text-xs font-semibold tracking-wide text-muted;
-  }
-  .table-scroll td {
-    @apply border-b border-border/70 px-3 py-2.5 align-middle text-foreground;
-  }
-  .table-scroll tbody tr:last-child td {
-    @apply border-b-0;
   }
   .score-high {
     @apply font-semibold text-success;
