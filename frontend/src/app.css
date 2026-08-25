@@ -12,6 +12,7 @@
   body {
     display: flex;
     flex-direction: column;
+    min-height: 100dvh;
   }
   .wrap {
     @apply relative z-[1] mx-auto w-full max-w-[1600px] flex-1 px-4 sm:px-6;
@@ -222,14 +223,15 @@
     @apply m-0 text-base;
   }
   .result-head {
-    @apply flex flex-col items-center gap-3;
+    @apply flex items-center justify-between gap-3;
     margin-bottom: 16px;
   }
   .result-head .section-title {
     margin-bottom: 0;
+    text-align: left;
   }
   .result-back {
-    @apply flex-none;
+    @apply flex-none text-center;
   }
   .pdf-actions {
     @apply mt-4 flex flex-wrap items-center justify-center gap-3;
@@ -442,14 +444,16 @@
 body {
   display: flex;
   flex-direction: column;
+  min-height: 100dvh;
 }
-/* 收敛页底留白：原视觉刷新 96px 在短内容页会形成大片空白 */
+/* 页脚贴紧视口最下（site-footer mt-auto），页底留白保持紧凑 */
 body > .page-shell {
   padding-bottom: 16px;
 }
 .page-shell {
   display: flex;
   flex-direction: column;
+  flex: 1 0 auto;
 }
 .page-shell .wrap {
   flex: 1 0 auto;
