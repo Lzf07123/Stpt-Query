@@ -17,7 +17,8 @@ import httpx
 from .classifier import classify_error, classify_empty_result
 from .llm import LLMClient, LLMError
 from .prompts import GRADE_ANALYSIS_SYSTEM, grade_analysis_user
-from .render import assemble, extract_session, format_grades, format_schedule, preprocess_grades
+from .render import (assemble, extract_session, format_grades, format_schedule,
+                     preprocess_grades, strip_login_note)
 from .schema import WorkflowRequest
 from .trace import LOG, new_run_id
 
@@ -155,7 +156,7 @@ class Pipeline:
 
         result = _ok("grades", output, meta={"count": data.get("count", 0)})
         if req.md2pdf:
-            result["pdf_base64"] = await self._to_pdf_base64(output)
+            result["pdf_base64"] = await self._to_pdf_base64(strip_login_note(output))
             result["kind"] = "grades_pdf"
         return result
 

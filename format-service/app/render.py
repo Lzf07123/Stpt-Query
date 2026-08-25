@@ -68,6 +68,26 @@ def _login_note(raw: Any) -> str:
     ) % url
 
 
+def strip_login_note(markdown: str) -> str:
+    """PDF/历史回看不需要免密登录提示块（跳转码短时有效）。
+
+    去掉以「> 🔗 免密登录教务系统」开头的整段引用，后续内容原样保留。
+    """
+    lines = markdown.splitlines()
+    out: List[str] = []
+    skipping = False
+    for line in lines:
+        if line.startswith("> 🔗 免密登录教务系统"):
+            skipping = True
+            continue
+        if skipping:
+            if line.startswith("> "):
+                continue
+            skipping = False
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 def extract_session(login_body: Any) -> Dict[str, str]:
     """原「获取session」节点：提取 session/token/username。"""
     data = _as_dict(login_body)

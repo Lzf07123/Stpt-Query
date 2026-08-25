@@ -20,7 +20,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=29">
+  <link rel="stylesheet" href="/style.css?v=30">
   <script src="/brand.js?v=3" defer></script>
 </head>
 <body>
@@ -288,6 +288,25 @@
       try { localStorage.removeItem("dify_query_result_" + id); } catch (e) {}
     }
 
+    function stripLoginNote(text) {
+      if (!text) return text;
+      var lines = String(text).split("\n");
+      var out = [];
+      var skipping = false;
+      lines.forEach(function (line) {
+        if (line.indexOf("> 🔗 免密登录教务系统") === 0) {
+          skipping = true;
+          return;
+        }
+        if (skipping) {
+          if (line.indexOf("> ") === 0) return;
+          skipping = false;
+        }
+        out.push(line);
+      });
+      return out.join("\n").replace(/^\s+/, "");
+    }
+
     function saveResultRecord(record) {
       let arr = loadHistory();
       const dupIndex = arr.findIndex(function (r) {
@@ -356,7 +375,7 @@
         if (rec.isMarkdown) {
           resultHtml.classList.remove("hidden");
           resultBox.classList.add("hidden");
-          resultHtml.innerHTML = note + renderMarkdown(text);
+          resultHtml.innerHTML = note + renderMarkdown(stripLoginNote(text));
         } else {
           resultHtml.classList.add("hidden");
           resultBox.classList.remove("hidden");
@@ -1406,7 +1425,7 @@
               check: payload.check,
               isMarkdown: markdown !== null,
               resultText: markdown !== null
-                ? markdown
+                ? stripLoginNote(markdown)
                 : (typeof data === "string" ? data : JSON.stringify(data, null, 2))
             });
             renderHistorySelect();

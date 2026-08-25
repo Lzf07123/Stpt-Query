@@ -46,3 +46,17 @@ def test_format_schedule_puts_download_url_first():
     out = format_schedule(data, "")
     assert out.startswith("[点击下载课表（Word 文件）](https://x/dl?t=1)")
     assert "请勿外传" in out
+
+
+def test_strip_login_note_for_pdf_and_history():
+    from app.render import strip_login_note
+    md = ("> 🔗 免密登录教务系统：[点击进入](https://x/jump/go?code=abc)\n"
+          "> ⚠️ 请在浏览器中允许弹出式窗口（弹窗拦截会阻止免密跳转），登陆失败请清理cookie后重试；"
+          "移动端兼容性：部分手机浏览器可能无法正常完成跳转，建议使用电脑端浏览器（最新版 Chrome / Edge）打开。\n"
+          "> 此链接包含登录令牌，请勿外传。\n\n"
+          "## 我的成绩\n\n| 学期 | 课程 | 成绩 |\n|---|---|---|\n| 1 | 高数 | 90 |")
+    out = strip_login_note(md)
+    assert "免密登录教务系统" not in out
+    assert "jump/go" not in out
+    assert "我的成绩" in out
+    assert "| 1 | 高数 | 90 |" in out
