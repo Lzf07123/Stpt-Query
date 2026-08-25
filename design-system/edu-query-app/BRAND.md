@@ -96,8 +96,9 @@ PDF 导出。
 - 技术栈不变：样式层 Tailwind CSS 4 同栈（`@theme` 语义别名 + `@apply` 组件），
   效果逐值对齐模板；运行时页面不引入任何第三方/远程资源。
 - 只移植需要的组件：card/card-signature/card-halo、input、btn/btn-primary/btn-ghost、
-  dropdown-menu、notice、toast、table-shell、badge、spinner、btn-ripple、flow-rule
-  （页头流光规则线）、site-footer、
+  dropdown-menu、notice、toast、table-shell、badge、spinner、btn-ripple、flow-line
+  （顶栏底部流光线，附录 F 零依赖变体）、site-header/site-header-inner（粘性顶栏）、
+  site-footer、
   page-shell/section/page-title/section-title、project-card（液态玻璃）、search-skeleton
   （查询加载）、empty-state（空结果）、back-to-top、tech-ambience--soft。
 - 不适用项（明确跳过，非偏离）：瀑布流/真实封面（无内容列表）、移动端二级菜单

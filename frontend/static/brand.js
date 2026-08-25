@@ -41,6 +41,9 @@
     var sub = document.getElementById("brandSub");
     if (sub && BRAND.slogan) sub.textContent = BRAND.slogan;
     document.title = BRAND.name;
+    document.querySelectorAll("[data-brand-name]").forEach(function (el) {
+      el.textContent = BRAND.name;
+    });
   }
 
   document.addEventListener("DOMContentLoaded", function () {
