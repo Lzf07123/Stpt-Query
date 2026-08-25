@@ -77,7 +77,7 @@
     grid-column: 1 / -1;
   }
   .row label:not(.field-check) {
-    @apply mb-1.5 block text-sm font-medium text-foreground;
+    @apply mb-1.5 block text-center text-sm font-medium text-foreground;
   }
   .input-wrap {
     @apply relative;
@@ -88,6 +88,10 @@
   .input,
   .dropdown-trigger {
     min-height: 44px;
+    text-align: center;
+  }
+  .input::placeholder {
+    text-align: center;
   }
   .btn {
     min-height: 44px;
@@ -110,27 +114,16 @@
     box-shadow: inset 0 0 0 1px var(--eduquery-primary);
   }
 
-  /* “全部”周数：横向拉满整行，右缘对齐学期触发器；标签文字居中，箭头固定右侧 */
+  /* “全部”周数：横向拉满整行，右缘对齐学期控件 */
   #weeksField {
     grid-column: 1 / -1;
   }
-  #weeksTrigger {
-    position: relative;
-    justify-content: center;
-    text-align: center;
-  }
-  #weeksTrigger::after {
-    position: absolute;
-    right: 14px;
-    top: 50%;
-    transform: translateY(-50%) rotate(45deg);
-  }
-  #weeksTrigger[aria-expanded="true"]::after {
-    transform: translateY(-50%) rotate(-135deg);
-  }
 
   .checks {
-    @apply flex flex-col items-start gap-2 rounded-xl border border-border bg-surface-2/60 p-4;
+    @apply flex flex-col items-center gap-2 rounded-xl border border-border bg-surface-2/60 p-4 text-center;
+  }
+  .field-check {
+    justify-content: center;
   }
   .history-row {
     @apply flex items-end gap-3;
@@ -145,7 +138,7 @@
     @apply relative block w-full;
   }
   .dropdown-trigger {
-    @apply flex w-full min-h-12 cursor-pointer items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-3 text-left text-sm text-foreground shadow-sm transition-colors duration-150;
+    @apply relative flex w-full min-h-12 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-surface px-3 py-3 text-center text-sm text-foreground shadow-sm transition-colors duration-150;
   }
   .dropdown-trigger:hover {
     @apply border-primary;
@@ -156,16 +149,18 @@
   }
   .dropdown-trigger::after {
     content: "";
+    position: absolute;
+    right: 14px;
+    top: 50%;
     width: 8px;
     height: 8px;
-    flex: none;
     border-right: 1.5px solid var(--eduquery-muted);
     border-bottom: 1.5px solid var(--eduquery-muted);
-    transform: rotate(45deg) translateY(-2px);
+    transform: translateY(-70%) rotate(45deg);
     transition: transform var(--motion-fast) var(--ease-out);
   }
   .dropdown-trigger[aria-expanded="true"]::after {
-    transform: rotate(-135deg) translateY(-2px);
+    transform: translateY(-30%) rotate(-135deg);
   }
   .dropdown-menu {
     left: 0;
@@ -183,7 +178,7 @@
     border-radius: 999px;
   }
   .dropdown-item {
-    @apply flex w-full min-h-11 cursor-pointer items-center justify-between gap-2 rounded-lg border-0 bg-transparent px-3 py-2 text-left text-sm text-foreground transition-colors duration-150 hover:bg-surface-2;
+    @apply flex w-full min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border-0 bg-transparent px-3 py-2 text-center text-sm text-foreground transition-colors duration-150 hover:bg-surface-2;
   }
   .dropdown-item.active {
     @apply bg-primary-soft font-semibold text-primary;
@@ -196,7 +191,7 @@
 
   /* ---------- 状态/离线条：复用模板 .notice；按钮做紧凑密度 ---------- */
   .notice {
-    @apply mt-4;
+    @apply mt-4 justify-center text-center;
   }
   .notice .spinner {
     flex: none;
@@ -213,7 +208,7 @@
     @apply mb-4 mt-0;
   }
   .pdf-actions {
-    @apply mt-4 flex flex-wrap items-center gap-3;
+    @apply mt-4 flex flex-wrap items-center justify-center gap-3;
   }
   /* 结果卡淡入只动 opacity：fill-mode 不能占用 transform，否则会压掉玻璃卡 hover 上浮 */
   .fade-in {
@@ -364,6 +359,7 @@
     flex: 1;
     min-width: 2px;
     border-radius: 2px;
+    background: var(--eduquery-border);
   }
   .status-seg.ok {
     background: var(--eduquery-success);
