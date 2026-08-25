@@ -20,7 +20,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=10">
+  <link rel="stylesheet" href="/style.css?v=12">
   <script src="/brand.js?v=3" defer></script>
 </head>
 <body>
@@ -154,12 +154,13 @@
 
       <div id="resultCard" class="project-card hidden" aria-live="polite">
         <h2 class="section-title">返回结果</h2>
-        <div id="skeleton" class="search-skeleton" hidden aria-hidden="true">
-          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
-          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
-          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
-          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
-          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
+        <div id="skeleton" class="skeleton" hidden aria-hidden="true">
+          <div class="skeleton-line"></div>
+          <div class="skeleton-row"></div>
+          <div class="skeleton-row"></div>
+          <div class="skeleton-row"></div>
+          <div class="skeleton-row"></div>
+          <div class="skeleton-row"></div>
         </div>
         <div id="resultHtml" class="markdown-body hidden"></div>
         <pre id="result" class="hidden"></pre>

@@ -15,7 +15,7 @@
     min-height: 100dvh;
   }
   .wrap {
-    @apply relative z-[1] mx-auto w-full max-w-5xl flex-1 px-4 sm:px-6;
+    @apply relative z-[1] mx-auto w-full max-w-[1600px] flex-1 px-4 sm:px-6;
     overflow-x: clip;
   }
   .head {
@@ -38,6 +38,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 24px;
+    align-items: start;
     max-width: 680px;
     margin-inline: auto;
   }
@@ -54,11 +55,6 @@
     #resultCard {
       position: sticky;
       top: 16px;
-    }
-    /* 结果态放宽内容容器：分栏后结果列需要足够宽度容纳课表/成绩宽表，
-       上限与页脚 max-w-7xl 对齐，避免窄视口下横向滚动 */
-    .wrap:has(> .layout.has-result) {
-      max-width: 80rem;
     }
   }
 
@@ -397,10 +393,40 @@
   }
 }
 
-/* 查询骨架：无层样式覆盖（模板 .search-skeleton-bar:last-child=34% 适配三根条，
-   本页每行两根条，第二根取 88% 更符合列表骨架节奏） */
-#skeleton .search-skeleton-bar:last-child {
-  width: 88%;
+/* 查询骨架屏：参考原版文档式结构（60% 标题条 + 46px 全宽行），
+   shimmer 1.5s 复用视觉刷新模块的 skeleton-shimmer 关键帧 */
+.skeleton {
+  padding: 4px 2px;
+}
+.skeleton-line,
+.skeleton-row {
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    var(--eduquery-surface-2) 25%,
+    rgba(255, 255, 255, 0.65) 50%,
+    var(--eduquery-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+.skeleton-line {
+  height: 18px;
+  width: 60%;
+  margin: 0 0 14px;
+}
+.skeleton-row {
+  height: 46px;
+  margin: 8px 0;
+}
+
+/* 结果卡 sticky：.project-card（无层）position:relative 覆盖了层内 sticky，
+   用更高优先级且无层的 #resultCard 恢复原版粘性布局 */
+@media (min-width: 960px) {
+  #resultCard {
+    position: sticky;
+    top: 16px;
+  }
 }
 
 /* ---------- 外壳未分层约束（避免被 utilities 覆盖） ---------- */
