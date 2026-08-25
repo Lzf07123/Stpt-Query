@@ -49,6 +49,16 @@
   }
 
   /* ---------- 查询表单 ---------- */
+  /* 表单卡内边距：模板 .card 不含 padding，查询表单需补齐（与玻璃卡 24×28 对齐） */
+  #queryForm.card {
+    padding: 24px;
+  }
+  @media (min-width: 640px) {
+    #queryForm.card {
+      padding: 24px 28px;
+    }
+  }
+
   .row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

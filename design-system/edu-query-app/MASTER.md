@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | 页面外壳 | `.page-shell`（外套）> `.wrap`（内层） | 底部 96px 留白、顶部 32px；`.wrap` `overflow-x:clip` 防辉光外溢 |
 | 居中标题 | `.page-title` / `.section-title` | 48×3px 主色装饰线 |
-| 认证表单卡 | `.card.card-signature.card-halo` | 签名描边 9s + 呼吸辉光 4.5s |
+| 认证表单卡 | `.card.card-signature.card-halo` | 签名描边 9s + 呼吸辉光 4.5s；内边距 24px（≥640px 为 24×28） |
 | 输入/下拉 | `.input`、`.dropdown` / `.dropdown-trigger` / `.dropdown-menu` / `.dropdown-item` | 44px 触达、焦点 ring 主色、键盘契约由既有 JS 提供 |
 | 分段选择 | `.segmented` / `.seg-btn` | 查询项目（课表/成绩），active 半透明主色底 |
 | 复选框 | `input[type=checkbox]` + `.field-check` | 18px、accent-color 主色 |
