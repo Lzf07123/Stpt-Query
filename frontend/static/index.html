@@ -20,7 +20,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=12">
+  <link rel="stylesheet" href="/style.css?v=13">
   <script src="/brand.js?v=3" defer></script>
 </head>
 <body>
@@ -153,7 +153,10 @@
       </form>
 
       <div id="resultCard" class="project-card hidden" aria-live="polite">
-        <h2 class="section-title">返回结果</h2>
+        <div class="result-head">
+          <h2 class="section-title">返回结果</h2>
+          <button type="button" id="backToQuery" class="btn btn-ghost btn-sm result-back">返回查询</button>
+        </div>
         <div id="skeleton" class="skeleton" hidden aria-hidden="true">
           <div class="skeleton-line"></div>
           <div class="skeleton-row"></div>
@@ -1467,6 +1470,18 @@
       statusBox.classList.add("hidden");
       hideOfflineBar();
       hidePdfAction();
+    });
+
+    document.getElementById("backToQuery").addEventListener("click", function () {
+      if (submitBtn.disabled && queryController) queryController.abort();
+      clearTimeout(resultTimer);
+      resultCard.classList.add("hidden");
+      layout.classList.remove("has-result");
+      statusBox.classList.add("hidden");
+      hideOfflineBar();
+      hidePdfAction();
+      window.scrollTo(0, 0);
+      usernameInput.focus({ preventScroll: true });
     });
 
     document.getElementById("togglePassword").addEventListener("click", function () {

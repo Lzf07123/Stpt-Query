@@ -96,3 +96,49 @@ def test_query_logs_returns_entries_after_run():
     serialized = str(body)
     for forbidden in ("password", "session", "token"):
         assert forbidden not in serialized
+
+
+class _FakeUpstream:
+    def __init__(self, content, status_code, headers):
+        self.content = content
+        self.status_code = status_code
+        self.headers = headers
+
+
+def test_jump_passthrough_forwards_and_keeps_token(monkeypatch):
+    captured = {}
+
+    async def fake_raw(base_url, token, path_qs, timeout):
+        captured["base_url"] = base_url
+        captured["token"] = token
+        captured["path_qs"] = path_qs
+        return _FakeUpstream(b"<html>jump-bridge</html>", 200,
+                             {"Content-Type": "text/html; charset=utf-8"})
+
+    monkeypatch.setattr("app.main._raw_get", fake_raw)
+    resp = _client().get("/jump/go?code=abc123")
+    assert resp.status_code == 200
+    assert resp.content == b"<html>jump-bridge</html>"
+    assert resp.headers["content-type"] == "text/html; charset=utf-8"
+    assert captured["path_qs"] == "/jump/go?code=abc123"
+    assert captured["token"] == "x"
+
+
+def test_schedule_export_passthrough_copies_disposition(monkeypatch):
+    async def fake_raw(base_url, token, path_qs, timeout):
+        return _FakeUpstream(b"DOCBINARY", 200, {
+            "Content-Type": "application/msword",
+            "Content-Disposition": "attachment; filename=\"schedule.doc\"",
+        })
+
+    monkeypatch.setattr("app.main._raw_get", fake_raw)
+    resp = _client().get("/get_schedule/export?code=xyz")
+    assert resp.status_code == 200
+    assert resp.content == b"DOCBINARY"
+    assert "attachment" in resp.headers["content-disposition"]
+
+
+def test_passthrough_rejects_unlisted_path():
+    # /jump 基路径不在白名单（仅 /jump/go），返回 404
+    resp = _client().get("/jump")
+    assert resp.status_code == 404

@@ -125,6 +125,9 @@ docker compose up -d --build
 # 浏览器打开 http://127.0.0.1:8000
 ```
 
+> `PUBLIC_BASE_URL` 为浏览器可访问的对外入口地址，用于生成免密登录 `/jump/go` 与课表下载
+> `/get_schedule/export` 链接（本地默认 `http://127.0.0.1:8000`，生产改成公网域名）。
+
 > 前端令牌样式已预编译提交（`frontend/static/style.css`），普通部署无需 npm；修改
 > 样式后重新构建：`cd frontend && npm install && npm run build`。
 

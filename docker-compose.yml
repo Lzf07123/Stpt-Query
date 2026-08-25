@@ -17,6 +17,8 @@ services:
         required: false
     environment:
       - JWXT_API_TOKEN=${SERVICE_API_TOKEN:-}
+      # 对外链接（免密登录/课表下载）基准地址：公网入口，浏览器可达
+      - JWXT_PUBLIC_URL=${PUBLIC_BASE_URL:-http://127.0.0.1:8000}
       # 小项目单实例：不启用 Redis 共享状态
       - JWXT_REDIS_URL=
       - JWXT_TRUST_PROXY=0

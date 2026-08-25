@@ -13,8 +13,9 @@ from datetime import datetime
 from threading import Lock
 from typing import Any, Optional
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -61,6 +62,19 @@ def _validate_production(environment: str, auto_rotate_token: bool, api_token: s
                 "AUTO_ROTATE_TOKEN=false 并使用固定 API_TOKEN")
         if not api_token.strip():
             raise RuntimeError("生产环境必须配置 API_TOKEN")
+
+
+# 对外跳转/下载透传白名单：免密登录桥接页与课表 Word 下载必须经公网入口可达
+PASSTHROUGH_ALLOWED = ("/jump/go", "/get_schedule/export")
+
+
+async def _raw_get(base_url: str, token: str, path_qs: str, timeout: float):
+    """向上游查询代理转发 GET 并原样返回（不解析、不重定向）。"""
+    headers = {}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        return await client.get(base_url.rstrip("/") + path_qs, headers=headers)
 
 
 def create_app(cfg: Optional[Settings] = None) -> FastAPI:
@@ -272,6 +286,33 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             with query_logs_lock:
                 items = list(reversed(query_logs))
         return {"logs": items, "total": len(items)}
+
+    async def _passthrough(request: Request, path: str) -> Response:
+        if path.split("?")[0] not in PASSTHROUGH_ALLOWED:
+            raise HTTPException(status_code=404, detail="not found")
+        qs = request.url.query
+        try:
+            upstream = await _raw_get(cfg.service_base_url, cfg.service_api_token,
+                                      path + ("?" + qs if qs else ""), cfg.service_timeout)
+        except httpx.HTTPError as exc:
+            LOG.warning("透传上游失败 path=%s err=%s", path, exc.__class__.__name__)
+            raise HTTPException(status_code=502, detail="上游服务不可用")
+        headers = {}
+        for name in ("Content-Type", "Content-Disposition", "Location", "Cache-Control"):
+            if name in upstream.headers:
+                headers[name] = upstream.headers[name]
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        headers=headers)
+
+    @app.get("/jump/{rest:path}", include_in_schema=False)
+    async def jump_passthrough(request: Request, rest: str) -> Response:
+        """免密登录桥接页：/jump/go?code=.. 经编排后端转发查询代理。"""
+        return await _passthrough(request, "/jump/" + rest)
+
+    @app.get("/get_schedule/export", include_in_schema=False)
+    async def schedule_export_passthrough(request: Request) -> Response:
+        """课表 Word 下载：/get_schedule/export?code=.. 原样透传。"""
+        return await _passthrough(request, "/get_schedule/export")
 
     @app.get("/service-status")
     def service_status(_: None = Depends(_require_auth)) -> dict:
