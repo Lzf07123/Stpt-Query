@@ -20,7 +20,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=9">
+  <link rel="stylesheet" href="/style.css?v=10">
   <script src="/brand.js?v=3" defer></script>
 </head>
 <body>
@@ -154,7 +154,7 @@
 
       <div id="resultCard" class="project-card hidden" aria-live="polite">
         <h2 class="section-title">返回结果</h2>
-        <div id="skeleton" class="search-skeleton hidden" aria-hidden="true">
+        <div id="skeleton" class="search-skeleton" hidden aria-hidden="true">
           <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
           <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
           <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
@@ -333,7 +333,8 @@
     function displaySavedRecord(rec) {
       if (!rec) return;
       clearTimeout(resultTimer);
-      skeleton.classList.add("hidden");
+      skeleton.hidden = true;
+      skeleton.setAttribute("aria-hidden", "true");
       resultCard.classList.remove("hidden");
       layout.classList.add("has-result");
       resultCard.classList.remove("fade-in");
@@ -654,7 +655,8 @@
 
     function showStateCard(icon, title, desc, withRetry) {
       clearTimeout(resultTimer);
-      skeleton.classList.add("hidden");
+      skeleton.hidden = true;
+      skeleton.setAttribute("aria-hidden", "true");
       resultBox.classList.add("hidden");
       resultHtml.classList.remove("hidden");
       resultCard.classList.remove("hidden");
@@ -1192,7 +1194,8 @@
     let resultTimer = 0;
     function showResult(statusCode, body) {
       clearTimeout(resultTimer);
-      skeleton.classList.add("hidden");
+      skeleton.hidden = true;
+      skeleton.setAttribute("aria-hidden", "true");
       resultCard.classList.remove("hidden");
       layout.classList.add("has-result");
       resultCard.classList.remove("fade-in");
@@ -1313,7 +1316,8 @@
       hideOfflineBar();
       hidePdfAction();
       clearTimeout(resultTimer);
-      skeleton.classList.remove("hidden");
+      skeleton.hidden = false;
+      skeleton.setAttribute("aria-hidden", "false");
       resultHtml.classList.add("hidden");
       resultBox.classList.add("hidden");
       resultCard.classList.remove("hidden");
