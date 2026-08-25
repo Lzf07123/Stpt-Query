@@ -227,11 +227,15 @@
     margin-bottom: 16px;
   }
   .result-head .section-title {
-    margin-bottom: 0;
-    text-align: left;
+    @apply m-0 text-left;
+    line-height: 1.2;
+  }
+  /* 去掉标题装饰线，让标题文字与右侧按钮文字处于同一水平线 */
+  .result-head .section-title::after {
+    display: none;
   }
   .result-back {
-    @apply flex-none text-center;
+    @apply flex-none justify-center text-center;
   }
   .pdf-actions {
     @apply mt-4 flex flex-wrap items-center justify-center gap-3;
@@ -438,6 +442,18 @@
 /* 返回结果标题降级：.section-title（无层）固定 1.25rem，结果卡用更高优先级无层规则降为 16px */
 #resultCard h2 {
   font-size: 1rem;
+}
+
+/* 返回查询按钮与标题同水平线：.section-title::after 装饰线为无层样式，
+   结果卡头部需用无层规则隐藏，使标题只剩文字高度与按钮居中对齐 */
+.result-head .section-title::after {
+  display: none;
+}
+
+/* 返回查询按钮与标题同水平线：.section-title 的 margin-bottom:20px 为无层样式，
+   头部标题需无层清零，使标题与按钮在同一高度居中对齐 */
+.result-head .section-title {
+  margin: 0;
 }
 
 /* ---------- 外壳未分层约束（避免被 utilities 覆盖） ---------- */
