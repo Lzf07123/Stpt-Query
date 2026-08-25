@@ -49,6 +49,8 @@
 | 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪；查询/清空整行 7:3，控件统一 48px |
 | 结果卡 | `.project-card`（液态玻璃） | hover 上浮 3px、顶部主色细线展开 |
 | 结果表格 | `.table-shell`（规范表格组件） | 表头 surface-2、行 hover `bg-surface-2/60`；移动端横向滚动（表格 `min-width:480px`） |
+| 主按钮扫光 | `.btn-primary::after`（`btn-sheen`） | 斜向白扫光带 4s 循环、1s 延迟，`translateX(-130%→130%)`；disabled 关闭 |
+| 流光规则线 | `.flow-rule`（页头 `.head-flow`） | 3px 高、圆角 9999px，海玻璃粉彩渐变 `background-size:250%` 5s 线性位移 |
 | 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | shimmer 1.35s |
 | 空状态 | `.empty-state` / `.empty-state-art` / `.empty-state-text` | SVG 小图 + 引导文案 |
 | 提示/状态 | `.notice` 变体、`.status`（ok/error）、`.status-dot` | 语义色只表状态 |
@@ -104,6 +106,13 @@
 （= `surface-2` 60%）；`min-width:480px` 保留横向滚动；320/390/768/769/1024/1440 六档
 `scrollWidth == innerWidth` 无横向溢出；无头 Chrome 无页面 JS 异常（静态预览下
 `/service-status` 404 属预期，网关反代后提供）。
+
+**扫光与流光验收（2026-08-25 补充）**：无头 Chrome 实测主按钮 `::after`
+`animationName=btn-sheen`（4000ms、`playState=running`、无限循环）；页头 `.head-flow`
+`animationName=flow-line-shift`（5s、infinite、`background-size:250% 100%`、3px、圆角 9999px）；
+`prefers-reduced-motion` 下两者时长均收敛 `0.01ms`、迭代 1 次；320/390/768/769/1024/1440
+六档 `scrollWidth == innerWidth` 无横向溢出；预览截图已更新
+（`preview/light-home-1440.png`、`dark-home-1440.png`、`light-home-390.png`）。
 
 **功能回归 17/17 通过**：品牌单点/主题持久化/分段联动/下拉鼠标+键盘契约/密码显隐/
 学号校验/后端失败分类渲染/服务状态条/成绩表格着色与徽章/空状态/课表下载/PDF 落盘/

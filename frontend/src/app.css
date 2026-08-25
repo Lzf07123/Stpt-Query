@@ -24,6 +24,9 @@
   .head .sub {
     @apply mt-2 text-sm text-muted;
   }
+  .head-flow {
+    margin-top: 1.25rem;
+  }
   .theme-toggle {
     @apply absolute right-0 top-0 h-11 w-11;
   }
