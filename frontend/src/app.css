@@ -126,7 +126,7 @@
     @apply relative block w-full;
   }
   .dropdown-trigger {
-    @apply flex w-full min-h-11 cursor-pointer items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-sm text-foreground shadow-sm transition-colors duration-150;
+    @apply flex w-full min-h-12 cursor-pointer items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-3 text-left text-sm text-foreground shadow-sm transition-colors duration-150;
   }
   .dropdown-trigger:hover {
     @apply border-primary;
