@@ -38,13 +38,22 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 24px;
+    max-width: 680px;
+    margin-inline: auto;
+  }
+  .layout.has-result {
+    max-width: none;
   }
   .layout > *:first-child {
     align-self: start;
   }
-  @media (min-width: 1024px) {
-    .layout {
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  @media (min-width: 960px) {
+    .layout.has-result {
+      grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    }
+    #resultCard {
+      position: sticky;
+      top: 16px;
     }
   }
 
@@ -312,6 +321,9 @@
   /* ---------- 服务状态条 ---------- */
   .service-status {
     @apply mt-8 rounded-2xl border border-border bg-surface p-5 text-sm shadow-sm;
+    max-width: 680px;
+    margin-left: auto;
+    margin-right: auto;
   }
   .status-title {
     @apply mb-3 text-center text-xs font-semibold tracking-wide text-muted;
