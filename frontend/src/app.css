@@ -1,0 +1,408 @@
+/* =============================================================
+   edu-query-app · 查询页应用样式（edu-query 实例化的项目特有形态）
+
+   规则：
+   - 组件只引用 @theme 语义别名或 --eduquery-* 令牌，禁止硬编码 hex。
+   - 深色下带文字的软底一律回退 *-soft-solid + *-soft-fg。
+   - 每个 animation 都有 @keyframes；动效尊重 prefers-reduced-motion。
+============================================================= */
+
+@layer components {
+  /* ---------- 页面外壳：单页查询工具 ---------- */
+  body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+  }
+  .wrap {
+    @apply relative z-[1] mx-auto w-full max-w-5xl flex-1 px-4 sm:px-6;
+    overflow-x: clip;
+  }
+  .head {
+    @apply relative mb-8 px-12 text-center;
+  }
+  .head .sub {
+    @apply mt-2 text-sm text-muted;
+  }
+  .theme-toggle {
+    @apply absolute right-0 top-0 h-11 w-11;
+  }
+
+  /* 表单卡整体提升一层：card-halo 的 isolation 会把下拉菜单的 z-index
+     困在卡内，页脚（DOM 靠后）会盖住菜单，须让卡片成为更高层级的叠放上下文 */
+  .card-halo {
+    z-index: 10;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    max-width: 680px;
+    margin-inline: auto;
+  }
+  .layout.has-result {
+    max-width: none;
+  }
+  .layout > *:first-child {
+    align-self: start;
+  }
+  @media (min-width: 960px) {
+    .layout.has-result {
+      grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    }
+    #resultCard {
+      position: sticky;
+      top: 16px;
+    }
+  }
+
+  /* ---------- 查询表单 ---------- */
+  /* 表单卡内边距：模板 .card 不含 padding，查询表单需补齐（与玻璃卡 24×28 对齐） */
+  #queryForm.card {
+    padding: 24px;
+  }
+  @media (min-width: 640px) {
+    #queryForm.card {
+      padding: 24px 28px;
+    }
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+  }
+  .row .full {
+    grid-column: 1 / -1;
+  }
+  .row label:not(.field-check) {
+    @apply mb-1.5 block text-center text-sm font-medium text-foreground;
+  }
+  .input-wrap {
+    @apply relative;
+  }
+  .input-wrap .input {
+    padding-right: 3.75rem;
+  }
+  .input,
+  .dropdown-trigger {
+    min-height: 44px;
+    text-align: center;
+  }
+  .input::placeholder {
+    text-align: center;
+  }
+  .btn {
+    min-height: 44px;
+  }
+  .show-btn {
+    @apply absolute inset-y-0 right-2 my-auto h-11 cursor-pointer rounded-md px-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary-soft;
+  }
+
+  .segmented {
+    @apply flex w-full rounded-lg border border-border bg-surface-2 p-1;
+  }
+  .seg-btn {
+    @apply min-h-12 flex-1 cursor-pointer rounded-md border-0 bg-transparent px-3 py-2 text-sm font-medium text-muted transition-colors duration-150;
+  }
+  .seg-btn:hover {
+    @apply bg-surface text-foreground;
+  }
+  .seg-btn.active {
+    @apply bg-primary-soft text-primary;
+    box-shadow: inset 0 0 0 1px var(--eduquery-primary);
+  }
+
+  /* “全部”周数：横向拉满整行，右缘对齐学期控件 */
+  #weeksField {
+    grid-column: 1 / -1;
+  }
+
+  .checks {
+    @apply flex flex-col items-center gap-2 rounded-xl border border-border bg-surface-2/60 p-4 text-center;
+  }
+  .field-check {
+    justify-content: center;
+  }
+  .history-row {
+    @apply flex items-end gap-3;
+  }
+  .history-row .btn {
+    min-height: 48px;
+  }
+
+  .actions {
+    display: grid;
+    grid-template-columns: 7fr 3fr;
+    gap: 12px;
+    margin-top: 1.5rem;
+  }
+  .actions .btn {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  /* ---------- 自定义下拉（复用 .dropdown-menu 视觉语言） ---------- */
+  .dropdown {
+    @apply relative block w-full;
+  }
+  .dropdown-trigger {
+    @apply relative flex w-full min-h-12 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-surface px-3 py-3 text-center text-sm text-foreground shadow-sm transition-colors duration-150;
+  }
+  .dropdown-trigger:hover {
+    @apply border-primary;
+  }
+  .dropdown-trigger[aria-expanded="true"] {
+    @apply border-primary;
+    box-shadow: 0 0 0 3px var(--eduquery-primary-soft);
+  }
+  .dropdown-trigger::after {
+    content: "";
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    border-right: 1.5px solid var(--eduquery-muted);
+    border-bottom: 1.5px solid var(--eduquery-muted);
+    transform: translateY(-70%) rotate(45deg);
+    transition: transform var(--motion-fast) var(--ease-out);
+  }
+  .dropdown-trigger[aria-expanded="true"]::after {
+    transform: translateY(-30%) rotate(-135deg);
+  }
+  .dropdown-menu {
+    left: 0;
+    right: 0;
+    min-width: 0;
+    max-height: min(320px, 40vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .dropdown-menu::-webkit-scrollbar {
+    width: 8px;
+  }
+  .dropdown-menu::-webkit-scrollbar-thumb {
+    background: var(--eduquery-border);
+    border-radius: 999px;
+  }
+  .dropdown-item {
+    @apply flex w-full min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border-0 bg-transparent px-3 py-2 text-center text-sm text-foreground transition-colors duration-150 hover:bg-surface-2;
+  }
+  .dropdown-item.active {
+    @apply bg-primary-soft font-semibold text-primary;
+  }
+  .dark .dropdown-item.active,
+  .dark .seg-btn.active {
+    background: var(--eduquery-primary-soft-solid);
+    color: var(--eduquery-primary-soft-fg);
+  }
+
+  /* ---------- 状态/离线条：复用模板 .notice；按钮做紧凑密度 ---------- */
+  .notice {
+    @apply mt-4 justify-center text-center;
+  }
+  .notice .spinner {
+    flex: none;
+  }
+  #offlineBar .btn {
+    @apply min-h-8 px-3 py-1 text-xs;
+  }
+
+  /* ---------- 结果卡与骨架 ---------- */
+  #resultCard.project-card {
+    padding: 24px 28px;
+  }
+  #resultCard h2 {
+    @apply mb-4 mt-0;
+  }
+  .pdf-actions {
+    @apply mt-4 flex flex-wrap items-center justify-center gap-3;
+  }
+  /* 结果卡淡入只动 opacity：fill-mode 不能占用 transform，否则会压掉玻璃卡 hover 上浮 */
+  .fade-in {
+    animation: result-fade-in var(--motion-base) var(--ease-out) both;
+  }
+  @keyframes result-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .fade-out {
+    opacity: 0.55;
+  }
+
+
+  /* ---------- Markdown 结果渲染 ---------- */
+  pre#result {
+    @apply overflow-x-auto whitespace-pre-wrap rounded-xl border border-border bg-surface-2 p-4 text-xs text-foreground;
+  }
+
+  .markdown-body {
+    @apply text-sm leading-relaxed text-foreground;
+    overflow-wrap: anywhere;
+  }
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .markdown-body h4,
+  .markdown-body h5,
+  .markdown-body h6 {
+    @apply mt-5 mb-2 font-semibold text-foreground;
+  }
+  .markdown-body a {
+    @apply text-primary underline-offset-2 hover:underline;
+  }
+  .markdown-body blockquote {
+    @apply my-3 border-l-4 border-primary/40 bg-primary-soft/60 px-4 py-2 text-muted;
+  }
+  .markdown-body code {
+    @apply rounded bg-surface-2 px-1.5 py-0.5 text-xs;
+  }
+  .markdown-body pre {
+    @apply overflow-x-auto rounded-xl border border-border bg-surface-2 p-4;
+  }
+  .markdown-body pre code {
+    background: none;
+    padding: 0;
+  }
+  .markdown-body hr {
+    @apply my-4 border-border;
+  }
+  .markdown-body img {
+    max-width: 100%;
+    height: auto;
+  }
+  .markdown-body ul,
+  .markdown-body ol {
+    @apply my-2 pl-6;
+  }
+  .markdown-body p {
+    @apply my-2;
+  }
+  /* 表格采用规范 .table-shell（表头/边框/行 hover 全部走令牌）；
+     仅保留本项目移动端横向滚动的列宽下限 */
+  .markdown-body .table-shell table {
+    min-width: 480px;
+  }
+  .score-high {
+    @apply font-semibold text-success;
+  }
+  .score-mid {
+    @apply font-semibold text-warning;
+  }
+  .score-low {
+    @apply font-semibold text-destructive;
+  }
+  .score-unpub {
+    @apply text-muted;
+  }
+  .score-bar {
+    @apply mt-1 h-1 w-16 max-w-full overflow-hidden rounded-full bg-border;
+  }
+  .score-bar i {
+    display: block;
+    height: 100%;
+    background: var(--eduquery-primary);
+  }
+  .badge.required {
+    @apply bg-primary-soft text-primary;
+  }
+  .dark .badge.required {
+    background: var(--eduquery-primary-soft-solid);
+    color: var(--eduquery-primary-soft-fg);
+  }
+  .badge.elective {
+    @apply bg-secondary-soft text-secondary;
+  }
+  .dark .badge.elective {
+    background: var(--eduquery-secondary);
+    color: var(--eduquery-bg);
+  }
+  .badge.practice {
+    @apply bg-warning-soft text-warning;
+  }
+  .badge.other {
+    @apply bg-surface-2 text-muted;
+  }
+  .dark .badge.practice {
+    background: var(--eduquery-warning-soft-solid);
+    color: var(--eduquery-warning-soft-fg);
+  }
+  .dark .show-btn {
+    color: var(--eduquery-primary);
+  }
+  .dark .show-btn:hover {
+    background: var(--eduquery-primary-soft-solid);
+    color: var(--eduquery-primary-soft-fg);
+  }
+
+  /* ---------- 服务状态条 ---------- */
+  .service-status {
+    @apply mt-8 rounded-2xl border border-border bg-surface p-5 text-sm shadow-sm;
+    max-width: 680px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .status-title {
+    @apply mb-3 text-center text-xs font-semibold tracking-wide text-muted;
+  }
+  .status-bar {
+    @apply flex h-2.5 gap-0.5 overflow-hidden rounded-full;
+  }
+  .status-seg {
+    flex: 1;
+    min-width: 2px;
+    border-radius: 2px;
+    background: var(--eduquery-border);
+  }
+  .status-seg.ok {
+    background: var(--eduquery-success);
+  }
+  .status-seg.fail {
+    background: var(--eduquery-destructive);
+  }
+  .status-bar-mobile {
+    @apply flex h-2.5 overflow-hidden rounded-full;
+  }
+  .seg-success {
+    background: var(--eduquery-success);
+  }
+  .seg-fail {
+    background: var(--eduquery-destructive);
+  }
+  .status-summary {
+    @apply mt-3 text-center text-xs text-muted;
+  }
+  .avail-good {
+    @apply font-semibold text-success;
+  }
+  .avail-mid {
+    @apply font-semibold text-warning;
+  }
+  .avail-bad {
+    @apply font-semibold text-destructive;
+  }
+  .status-tooltip {
+    @apply fixed z-[60] max-w-xs rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-foreground shadow-lg;
+  }
+}
+
+/* ---------- 外壳未分层约束（避免被 utilities 覆盖） ---------- */
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+.page-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+.page-shell .wrap {
+  flex: 1 0 auto;
+}

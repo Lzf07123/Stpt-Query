@@ -5,773 +5,59 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>教务信息查询</title>
   <link rel="icon" href="/image/icon.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Crimson+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <meta name="description" content="通过学校统一身份认证查询成绩与课表，支持成绩分析与 PDF 导出。">
+  <meta name="theme-color" content="#F6FBF9">
+  <meta name="color-scheme" content="light dark">
   <script>
     (function () {
-      document.documentElement.classList.add("js");
       var t = null;
-      try { t = localStorage.getItem("theme"); } catch (e) {}
+      try { t = localStorage.getItem("eduquery-theme"); } catch (e) {}
       if (t !== "dark" && t !== "light") {
         t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       }
-      document.documentElement.setAttribute("data-theme", t);
+      document.documentElement.classList.toggle("dark", t === "dark");
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <style>
-    :root {
-      --bg: #f8fafc;
-      --surface: #ffffff;
-      --surface-alt: #f1f5f9;
-      --text: #0f172a;
-      --text-light: #64748b;
-      --primary: #1e3a5f;
-      --primary-soft: #e8edf3;
-      --primary-hover: #16324f;
-      --success: #059669;
-      --warning: #b45309;
-      --danger: #dc2626;
-      --border: #cbd5e1;
-      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-      --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
-      --radius: 12px;
-
-      /* 兼容旧别名：全部引用上方配色变量 */
-      --card: var(--surface);
-      --line: var(--border);
-      --muted: var(--text-light);
-      --ok: var(--success);
-      --input-bg: var(--surface);
-      --input-text: var(--text);
-      --hover-soft: var(--primary-soft);
-      --ghost-bg: var(--surface-alt);
-      --ghost-hover: var(--border);
-      --th-bg: var(--surface-alt);
-      --quote-bg: var(--primary-soft);
-      --quote-text: var(--text-light);
-      --code-bg: var(--surface-alt);
-      --seg-empty: var(--border);
-      --shadow: var(--shadow-sm);
-      --on-primary: #ffffff;
-      --score-high: var(--success);
-      --score-mid: var(--warning);
-      --score-low: var(--danger);
-      --tooltip-bg: var(--surface-alt);
-      --tooltip-text: var(--text);
-    }
-    [data-theme="dark"] {
-      --bg: #0f172a;
-      --surface: #1b2336;
-      --surface-alt: #273349;
-      --text: #f1f5f9;
-      --text-light: #94a3b8;
-      --primary: #60a5fa;
-      --primary-soft: #1e3a5f;
-      --primary-hover: #3b82f6;
-      --success: #34d399;
-      --warning: #fbbf24;
-      --danger: #f87171;
-      --border: #334155;
-      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-      --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-
-      --card: var(--surface);
-      --line: var(--border);
-      --muted: var(--text-light);
-      --ok: var(--success);
-      --input-bg: var(--surface);
-      --input-text: var(--text);
-      --hover-soft: var(--primary-soft);
-      --ghost-bg: var(--surface-alt);
-      --ghost-hover: var(--border);
-      --th-bg: var(--surface-alt);
-      --quote-bg: var(--primary-soft);
-      --quote-text: var(--text-light);
-      --code-bg: var(--surface-alt);
-      --seg-empty: var(--border);
-      --shadow: var(--shadow-sm);
-      --on-primary: #ffffff;
-      --score-high: var(--success);
-      --score-mid: var(--warning);
-      --score-low: var(--danger);
-      --tooltip-bg: var(--surface-alt);
-      --tooltip-text: var(--text);
-    }
-    * { box-sizing: border-box; }
-    html, body { overflow-x: hidden; }
-    html { transition: background-color .35s ease; }
-    body {
-      margin: 0;
-      font-family: "Atkinson Hyperlegible", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      transition: background-color .35s ease, color .35s ease;
-    }
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      z-index: -1;
-      pointer-events: none;
-      background:
-        radial-gradient(600px 400px at 12% 8%, color-mix(in srgb, var(--primary) 14%, transparent), transparent 70%),
-        radial-gradient(700px 500px at 88% 18%, color-mix(in srgb, var(--primary) 10%, transparent), transparent 70%),
-        radial-gradient(500px 400px at 60% 85%, color-mix(in srgb, var(--warning) 8%, transparent), transparent 70%);
-    }
-    html.js body { opacity: 0; }
-    html.js body.page-loaded {
-      opacity: 1;
-      transition: opacity .5s ease;
-    }
-    .wrap { max-width: 1600px; margin: 0 auto; padding: 28px 16px 56px; }
-    h1, h2, h3, .status-title, .state-card .state-title {
-      font-family: "Crimson Pro", Georgia, "Songti SC", serif;
-    }
-    h1 { font-size: 30px; margin: 0; letter-spacing: .01em; }
-    .sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
-    .head {
-      margin-bottom: 4px;
-      text-align: center;
-      padding: 0 4px;
-      overflow-wrap: anywhere;
-      position: relative;
-    }
-    .theme-toggle {
-      position: absolute;
-      top: -6px;
-      right: 0;
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
-      border: 1px solid var(--line);
-      background: var(--card);
-      color: var(--text);
-      font-size: 18px;
-      line-height: 1;
-      cursor: pointer;
-      box-shadow: var(--shadow);
-      transition: transform .25s ease, background-color .25s ease, box-shadow .25s ease;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-    }
-    .theme-toggle:hover {
-      transform: rotate(15deg) scale(1.08);
-      box-shadow: var(--shadow-md);
-    }
-    .theme-toggle svg { width: 20px; height: 20px; }
-    .card {
-      background: color-mix(in srgb, var(--surface) 78%, transparent);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-      border-radius: var(--radius);
-      padding: 24px;
-      margin-top: 16px;
-      box-shadow: var(--shadow-md);
-      max-width: 100%;
-      min-width: 0;
-      overflow-wrap: anywhere;
-      transition: background-color .25s ease, border-color .25s ease, box-shadow .25s ease;
-    }
-    .layout {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 20px;
-      margin-top: 16px;
-      align-items: start;
-      max-width: 680px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    .row {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-      gap: 12px;
-    }
-    .layout > * { min-width: 0; }
-    .full { grid-column: 1 / -1; }
-    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-    input, select {
-      width: 100%;
-      padding: 9px 10px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      font-size: 14px;
-      background: color-mix(in srgb, var(--input-bg) 72%, transparent);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      color: var(--input-text);
-      transition: background-color .25s ease, border-color .25s ease, color .25s ease;
-    }
-    input:focus, select:focus {
-      outline: 2px solid color-mix(in srgb, var(--primary) 35%, transparent);
-      border-color: var(--primary);
-    }
-    select { appearance: none; -webkit-appearance: none; }
-    .select-wrap { position: relative; }
-    .select-wrap::after {
-      content: "";
-      position: absolute;
-      right: 14px;
-      top: 50%;
-      width: 8px;
-      height: 8px;
-      border-right: 2px solid var(--muted);
-      border-bottom: 2px solid var(--muted);
-      transform: translateY(-70%) rotate(45deg);
-      pointer-events: none;
-    }
-    .select-wrap select { padding-right: 38px; cursor: pointer; }
-    .dropdown { position: relative; }
-    .dropdown-trigger {
-      position: relative;
-      width: 100%;
-      padding: 9px 38px 9px 10px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--input-bg) 72%, transparent);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      color: var(--input-text);
-      font-size: 14px;
-      text-align: left;
-      cursor: pointer;
-      font-weight: 500;
-      transition: border-color .2s ease, background-color .2s ease;
-    }
-    .dropdown-trigger::after {
-      content: "";
-      position: absolute;
-      right: 14px;
-      top: 50%;
-      width: 8px;
-      height: 8px;
-      border-right: 2px solid var(--muted);
-      border-bottom: 2px solid var(--muted);
-      transform: translateY(-70%) rotate(45deg);
-      pointer-events: none;
-    }
-    .dropdown-menu {
-      position: absolute;
-      top: calc(100% + 6px);
-      left: 0;
-      right: 0;
-      z-index: 50;
-      max-height: 240px;
-      overflow-y: auto;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow-md);
-      padding: 6px;
-    }
-    .dropdown-item {
-      display: block;
-      width: 100%;
-      text-align: left;
-      border: 0;
-      background: transparent;
-      color: var(--text);
-      padding: 9px 10px;
-      border-radius: 8px;
-      font-size: 14px;
-      cursor: pointer;
-      font-weight: 500;
-    }
-    .dropdown-item:hover,
-    .dropdown-item.active {
-      background: var(--primary-soft);
-      color: var(--primary);
-    }
-    .dropdown-item.active { font-weight: 600; }
-    .segmented {
-      display: flex;
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 3px;
-      gap: 3px;
-    }
-    .seg-btn {
-      flex: 1;
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      padding: 9px 10px;
-      border-radius: 9px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background-color .2s ease, color .2s ease, box-shadow .2s ease;
-    }
-    .seg-btn.active {
-      background: var(--surface);
-      color: var(--primary);
-      box-shadow: var(--shadow-sm);
-    }
-    .input-wrap { position: relative; }
-    .input-wrap input { padding-right: 58px; }
-    .show-btn {
-      position: absolute;
-      right: 6px;
-      top: 50%;
-      transform: translateY(-50%);
-      border: 0;
-      background: transparent;
-      color: var(--primary);
-      font-size: 13px;
-      cursor: pointer;
-      padding: 6px 8px;
-      border-radius: 6px;
-      font-weight: 600;
-    }
-    .show-btn:hover { background: var(--hover-soft); }
-    .checks { display: flex; flex-direction: column; gap: 10px; }
-    .check {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-weight: 500;
-      overflow-wrap: anywhere;
-    }
-    .check input { width: auto; }
-    .history-row {
-      display: flex;
-      gap: 10px;
-      align-items: flex-end;
-    }
-    .history-row select { flex: 1; }
-    .actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
-    button {
-      border: 0;
-      border-radius: 8px;
-      padding: 10px 18px;
-      font-size: 14px;
-      cursor: pointer;
-      font-weight: 600;
-    }
-    .btn-primary {
-      background: var(--primary);
-      color: var(--on-primary);
-      box-shadow: 0 6px 18px color-mix(in srgb, var(--primary) 25%, transparent);
-      transition: background-color .25s ease, transform .18s ease, box-shadow .25s ease;
-    }
-    .btn-primary:hover {
-      background: var(--primary-hover);
-      transform: translateY(-1px);
-      box-shadow: 0 10px 24px color-mix(in srgb, var(--primary) 32%, transparent);
-    }
-    .btn-ghost {
-      background: color-mix(in srgb, var(--ghost-bg) 72%, transparent);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid var(--border);
-      color: var(--text);
-      transition: background-color .25s ease, transform .18s ease;
-    }
-    .btn-ghost:hover {
-      background: var(--ghost-hover);
-      transform: translateY(-1px);
-    }
-    .btn-primary:active, .btn-ghost:active { transform: scale(.97); }
-    .btn-primary, .btn-ghost { position: relative; overflow: hidden; }
-    .ripple {
-      position: absolute;
-      border-radius: 50%;
-      background: color-mix(in srgb, var(--on-primary) 25%, transparent);
-      transform: scale(0);
-      animation: ripple .6s ease-out forwards;
-      pointer-events: none;
-    }
-    .btn-ghost .ripple { background: color-mix(in srgb, var(--primary) 18%, transparent); }
-    @keyframes ripple { to { transform: scale(4); opacity: 0; } }
-    button:disabled { opacity: .6; cursor: not-allowed; }
-    .table-scroll {
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      margin: 10px 0;
-      max-width: 100%;
-    }
-    .table-scroll table { min-width: 520px; }
-    pre {
-      background: var(--surface-alt);
-      color: var(--text);
-      padding: 14px;
-      border-radius: 8px;
-      overflow: auto;
-      max-height: 440px;
-      font-size: 13px;
-      line-height: 1.55;
-      margin: 0;
-      max-width: 100%;
-    }
-    .markdown-body {
-      font-size: 14px;
-      line-height: 1.75;
-      color: var(--text);
-      max-width: 100%;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-    }
-    .markdown-body img { max-width: 100%; height: auto; }
-    .markdown-body h1,
-    .markdown-body h2,
-    .markdown-body h3,
-    .markdown-body h4 { margin: 16px 0 8px; }
-    .markdown-body p { margin: 8px 0; }
-    .markdown-body table {
-      border-collapse: collapse;
-      width: 100%;
-      margin: 10px 0;
-      font-size: 13px;
-    }
-    .markdown-body th,
-    .markdown-body td {
-      border: 1px solid var(--line);
-      padding: 7px 10px;
-      text-align: left;
-      vertical-align: top;
-      word-break: break-word;
-      overflow-wrap: anywhere;
-    }
-    .markdown-body th { background: var(--th-bg); font-weight: 600; }
-    .markdown-body blockquote {
-      margin: 10px 0;
-      padding: 8px 12px;
-      border-left: 3px solid var(--primary);
-      background: var(--quote-bg);
-      border-radius: 6px;
-      color: var(--quote-text);
-    }
-    .markdown-body code {
-      background: var(--code-bg);
-      padding: 1px 5px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-family: "SF Mono", Menlo, Consolas, monospace;
-    }
-    .markdown-body pre {
-      background: var(--surface-alt);
-      color: var(--text);
-      padding: 12px;
-      border-radius: 8px;
-      overflow: auto;
-      margin: 10px 0;
-    }
-    .markdown-body pre code { background: transparent; padding: 0; }
-    .markdown-body a { color: var(--primary); }
-    .markdown-body ul,
-    .markdown-body ol { margin: 8px 0; padding-left: 22px; }
-    .markdown-body li { margin: 3px 0; }
-    .markdown-body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
-    .hidden { display: none; }
-    #status { font-size: 13px; margin-top: 10px; }
-    #status.error { color: var(--danger); }
-    #status.ok { color: var(--ok); }
-    .spinner {
-      display: inline-block;
-      width: 14px;
-      height: 14px;
-      border: 2px solid color-mix(in srgb, var(--primary) 35%, transparent);
-      border-top-color: var(--primary);
-      border-radius: 50%;
-      animation: spin .8s linear infinite;
-      vertical-align: -2px;
-      margin-right: 6px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @media (min-width: 960px) {
-      .layout.has-result {
-        max-width: none;
-        grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
-      }
-      #resultCard { position: sticky; top: 16px; }
-    }
-    @media (max-width: 600px) {
-      .wrap { padding: 12px 10px 36px; }
-      h1 { font-size: 19px; }
-      .card { padding: 14px; border-radius: 10px; }
-      .row { grid-template-columns: 1fr; }
-      .status-bar { gap: 1px; }
-      .toast-wrap { right: 10px; }
-      input, select { font-size: 16px; padding: 10px; }
-      .actions button { flex: 1 1 100%; }
-      pre { max-height: 60vh; font-size: 12px; }
-    }
-    .footer {
-      text-align: center;
-      color: var(--muted);
-      font-size: 12px;
-      margin-top: 28px;
-      padding-bottom: 8px;
-      padding-left: 10px;
-      padding-right: 10px;
-      overflow-wrap: anywhere;
-    }
-    .footer a {
-      color: var(--muted);
-      text-decoration: none;
-    }
-    .footer a:hover { color: var(--primary); }
-    .footer img {
-      width: 14px;
-      height: 14px;
-      vertical-align: -2px;
-      margin-right: 3px;
-    }
-    .service-status {
-      width: 100%;
-      max-width: 680px;
-      margin: 24px auto 0;
-      text-align: center;
-      font-size: 13px;
-      color: var(--muted);
-    }
-    .status-title { font-weight: 600; margin-bottom: 8px; }
-    .status-bar {
-      display: flex;
-      gap: 2px;
-      justify-content: center;
-      width: 100%;
-      margin: 0 auto;
-    }
-    .status-bar-mobile {
-      display: flex;
-      height: 16px;
-      border-radius: 8px;
-      overflow: hidden;
-      background: var(--seg-empty);
-      width: 100%;
-    }
-    .status-bar-mobile span { display: block; height: 100%; transition: width .3s ease; }
-    .status-bar-mobile .seg-success { background: var(--ok); }
-    .status-bar-mobile .seg-fail { background: var(--danger); }
-    .status-seg {
-      flex: 1;
-      height: 14px;
-      border-radius: 2px;
-      background: var(--seg-empty);
-      cursor: default;
-    }
-    .status-seg.success { background: var(--ok); }
-    .status-seg.fail { background: var(--danger); }
-    .status-summary { margin-top: 8px; font-size: 12px; }
-    .status-summary .avail-good { color: var(--ok); font-weight: 600; }
-    .status-summary .avail-mid { color: var(--warning); font-weight: 600; }
-    .status-summary .avail-bad { color: var(--danger); font-weight: 600; }
-    .status-tooltip {
-      position: fixed;
-      z-index: 999;
-      background: var(--tooltip-bg);
-      color: var(--tooltip-text);
-      padding: 5px 10px;
-      border-radius: 6px;
-      font-size: 12px;
-      line-height: 1.4;
-      white-space: normal;
-      max-width: min(280px, calc(100vw - 16px));
-      overflow-wrap: anywhere;
-      box-shadow: var(--shadow-md);
-      pointer-events: none;
-    }
-    #resultCard { opacity: 1; transition: opacity .22s ease; }
-    #resultCard.fade-out { opacity: 0; }
-    #resultCard.fade-in { animation: contentFadeIn .32s ease; }
-    @keyframes contentFadeIn {
-      from { opacity: 0; transform: translateY(6px); }
-      to { opacity: 1; transform: none; }
-    }
-    .skeleton { padding: 4px 2px; }
-    .skeleton-line {
-      height: 18px;
-      width: 60%;
-      margin: 0 0 14px;
-      border-radius: 8px;
-      background: linear-gradient(90deg, var(--seg-empty) 25%, var(--ghost-bg) 50%, var(--seg-empty) 75%);
-      background-size: 200% 100%;
-      animation: shimmer 1.5s infinite;
-    }
-    .skeleton-row {
-      height: 46px;
-      margin: 8px 0;
-      border-radius: 8px;
-      background: linear-gradient(90deg, var(--seg-empty) 25%, var(--ghost-bg) 50%, var(--seg-empty) 75%);
-      background-size: 200% 100%;
-      animation: shimmer 1.5s infinite;
-    }
-    @keyframes shimmer {
-      0% { background-position: -200% 0; }
-      100% { background-position: 200% 0; }
-    }
-    .btn-spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid color-mix(in srgb, var(--on-primary) 35%, transparent);
-      border-top-color: var(--on-primary);
-      border-radius: 50%;
-      animation: spin .7s linear infinite;
-      display: inline-block;
-      vertical-align: -2px;
-      margin-right: 6px;
-    }
-    .btn-spinner.hidden { display: none; }
-    .state-card {
-      text-align: center;
-      padding: 30px 16px;
-      color: var(--muted);
-    }
-    .state-card .state-icon { font-size: 42px; margin-bottom: 10px; }
-    .state-card .state-title {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text);
-      margin-bottom: 6px;
-    }
-    .state-card button { margin-top: 14px; }
-    .score-high { color: var(--score-high); font-weight: 700; }
-    .score-mid { color: var(--score-mid); font-weight: 600; }
-    .score-low { color: var(--score-low); font-weight: 600; }
-    .score-unpub {
-      background: color-mix(in srgb, var(--warning) 12%, transparent);
-      color: var(--warning);
-      border-radius: 6px;
-    }
-    .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .badge.required { background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
-    .badge.elective { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
-    .badge.practice { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--ok); }
-    .badge.other { background: var(--ghost-bg); color: var(--muted); }
-    .score-bar {
-      height: 4px;
-      margin-top: 4px;
-      border-radius: 2px;
-      background: var(--seg-empty);
-      overflow: hidden;
-    }
-    .score-bar i {
-      display: block;
-      height: 100%;
-      border-radius: 2px;
-      background: linear-gradient(90deg, var(--danger), var(--warning), var(--success));
-    }
-    .cache-note {
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 8px;
-    }
-    .offline-bar {
-      margin: 16px auto 0;
-      max-width: 680px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      padding: 10px 14px;
-      border-radius: var(--radius);
-      background: color-mix(in srgb, var(--warning) 14%, transparent);
-      border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
-      color: var(--warning);
-      font-size: 13px;
-    }
-    .offline-bar.hidden { display: none; }
-    .offline-bar .btn-ghost { padding: 6px 12px; font-size: 12px; }
-    .toast-wrap {
-      position: fixed;
-      top: 16px;
-      right: 16px;
-      left: auto;
-      transform: none;
-      z-index: 1000;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      align-items: flex-end;
-      pointer-events: none;
-      max-width: min(92vw, 420px);
-    }
-    .toast {
-      background: var(--card);
-      border: 1px solid var(--line);
-      color: var(--text);
-      border-radius: 10px;
-      padding: 10px 16px;
-      font-size: 13px;
-      box-shadow: var(--shadow-md);
-      animation: toastIn .25s ease;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .toast.out { animation: toastOut .25s ease forwards; }
-    .toast.success { border-left: 3px solid var(--ok); }
-    .toast.error { border-left: 3px solid var(--danger); }
-    .toast.info { border-left: 3px solid var(--primary); }
-    @keyframes toastIn {
-      from { opacity: 0; transform: translateY(-8px); }
-      to { opacity: 1; transform: none; }
-    }
-    @keyframes toastOut {
-      from { opacity: 1; }
-      to { opacity: 0; transform: translateY(-8px); }
-    }
-    button:focus-visible, input:focus-visible, select:focus-visible {
-      outline: 2px solid var(--primary);
-      outline-offset: 2px;
-    }
-    @media (max-width: 600px) {
-      .table-scroll {
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        max-width: 100%;
-      }
-      .markdown-body table {
-        width: max-content;
-        min-width: 100%;
-      }
-      .markdown-body th,
-      .markdown-body td {
-        white-space: nowrap;
-      }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        animation-duration: .01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: .01ms !important;
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="/style.css?v=8">
+  <script src="/brand.js?v=3" defer></script>
 </head>
 <body>
-  <div class="wrap">
+  <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
+    <div class="tech-grid"></div>
+    <span class="tech-beam"></span>
+    <span class="tech-beam tech-beam--violet"></span>
+    <span class="tech-beam tech-beam--sage"></span>
+    <span class="tech-dot" style="left:14%; top:18%; --tech-dot-color:var(--eduquery-accent-aqua); animation-delay:-1.4s"></span>
+    <span class="tech-dot" style="left:78%; top:12%; --tech-dot-color:var(--eduquery-accent-ice); animation-delay:-3.2s"></span>
+    <span class="tech-dot" style="left:62%; top:30%; --tech-dot-color:var(--eduquery-accent-mint); animation-delay:-5.1s"></span>
+    <span class="tech-dot" style="left:22%; top:64%; --tech-dot-color:var(--eduquery-accent-sage); animation-delay:-0.6s"></span>
+    <span class="tech-dot" style="left:86%; top:72%; --tech-dot-color:var(--eduquery-accent-lilac); animation-delay:-2.7s"></span>
+    <span class="tech-dot" style="left:42%; top:86%; --tech-dot-color:var(--eduquery-accent-sand); animation-delay:-4.4s"></span>
+  </div>
+  <div class="page-shell" id="main">
+    <div class="wrap">
     <div class="head">
-      <button type="button" id="themeToggle" class="theme-toggle" aria-label="切换主题">🌙</button>
-      <h1>教务信息查询</h1>
-      <div class="sub">通过学校统一身份认证查询成绩 / 课表 · 网关令牌已由服务端内置，无需填写</div>
+      <button type="button" id="themeToggle" class="theme-toggle icon-btn" aria-label="切换主题">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
+      <h1 class="page-title">教务信息查询</h1>
+      <div class="sub" id="brandSub">汕职院教务信息查询</div>
     </div>
 
-    <div id="offlineBar" class="offline-bar hidden"></div>
+    <div id="offlineBar" class="notice notice-warning hidden" aria-live="polite"></div>
     <div class="layout">
-      <form id="queryForm" class="card">
+      <form id="queryForm" class="card card-signature card-halo">
         <div class="row">
           <div>
             <label for="username">学号</label>
-            <input id="username" required placeholder="10 位数字学号" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off">
+            <input id="username" class="input" required placeholder="10 位数字学号" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off">
           </div>
           <div>
             <label for="password">密码</label>
             <div class="input-wrap">
-              <input id="password" type="password" required placeholder="教务系统密码" autocomplete="current-password">
+              <input id="password" class="input" type="password" required placeholder="教务系统密码" autocomplete="current-password">
               <button type="button" class="show-btn" id="togglePassword">显示</button>
             </div>
           </div>
@@ -836,11 +122,11 @@
             </div>
           </div>
           <div class="full checks" id="gradeOptions">
-            <label class="check">
+            <label class="field-check">
               <input type="checkbox" id="md2pdf">
               仅生成 PDF 文档（仅查询成绩时适用，移动端存在兼容问题）
             </label>
-            <label class="check">
+            <label class="field-check">
               <input type="checkbox" id="check">
               分析成绩（查询成绩时生效，输出时间可能延长）
             </label>
@@ -853,40 +139,50 @@
                 <div class="dropdown-menu hidden" id="historyMenu" role="listbox"></div>
               </div>
             </div>
-            <button type="button" class="btn-ghost" id="historyClear" title="清空历史记录">清空历史</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="historyClear" title="清空历史记录">清空历史</button>
           </div>
         </div>
         <div class="actions">
-          <button class="btn-primary" type="submit" id="submitBtn">
+          <button class="btn btn-primary" type="submit" id="submitBtn">
             <span class="btn-spinner hidden" id="submitSpinner"></span>
             <span id="submitBtnText">查询</span>
           </button>
-          <button class="btn-ghost" type="button" id="resetBtn">清空</button>
+          <button class="btn btn-ghost" type="button" id="resetBtn">清空</button>
         </div>
-        <div id="status" class="hidden" aria-live="polite"></div>
+        <div id="status" class="notice hidden" aria-live="polite"></div>
       </form>
 
-      <div id="resultCard" class="card hidden" aria-live="polite">
-        <h2 style="font-size: 16px; margin-top: 0;">返回结果</h2>
-        <div id="skeleton" class="skeleton hidden">
-          <div class="skeleton-line"></div>
-          <div class="skeleton-row"></div>
-          <div class="skeleton-row"></div>
-          <div class="skeleton-row"></div>
-          <div class="skeleton-row"></div>
-          <div class="skeleton-row"></div>
+      <div id="resultCard" class="project-card hidden" aria-live="polite">
+        <h2 class="section-title">返回结果</h2>
+        <div id="skeleton" class="search-skeleton hidden" aria-hidden="true">
+          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
+          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
+          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
+          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
+          <div class="search-skeleton-item"><span class="search-skeleton-bar"></span><span class="search-skeleton-bar"></span></div>
         </div>
         <div id="resultHtml" class="markdown-body hidden"></div>
         <pre id="result" class="hidden"></pre>
+        <div id="pdfActions" class="pdf-actions hidden"></div>
       </div>
     </div>
 
     <div id="serviceStatus" class="service-status hidden"></div>
     <div id="statusTooltip" class="status-tooltip hidden"></div>
-    <footer class="footer"></footer>
+    </div>
   </div>
 
-  <div id="toastWrap" class="toast-wrap"></div>
+  <footer class="site-footer">
+    <div class="site-footer-inner" id="siteFooterInner"></div>
+  </footer>
+
+  <a class="back-to-top" href="#main" aria-label="返回顶部">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>
+    </svg>
+  </a>
+
+  <div id="toastWrap" class="toast-viewport"></div>
   <script>
     // 网关令牌由 FastAPI 根路径渲染时从服务端配置注入，不在静态文件中写死
     const GATEWAY_TOKEN = "";
@@ -895,15 +191,17 @@
     const SUN_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
     const MOON_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
     function applyTheme(theme) {
-      document.documentElement.setAttribute("data-theme", theme);
+      document.documentElement.classList.toggle("dark", theme === "dark");
       themeToggle.innerHTML = theme === "dark" ? SUN_ICON : MOON_ICON;
-      try { localStorage.setItem("theme", theme); } catch (e) {}
+      var bg = getComputedStyle(document.documentElement).getPropertyValue("--eduquery-bg").trim();
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta && bg) meta.setAttribute("content", bg);
+      try { localStorage.setItem("eduquery-theme", theme); } catch (e) {}
     }
     themeToggle.addEventListener("click", function () {
-      const current = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
-      applyTheme(current);
+      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark");
     });
-    applyTheme(document.documentElement.getAttribute("data-theme") || "light");
+    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
 
     const form = document.getElementById("queryForm");
     const usernameInput = document.getElementById("username");
@@ -1021,7 +319,7 @@
       const current = historyTrigger.getAttribute("data-label") || "";
       historyMenu.innerHTML = arr.map(function (r, i) {
         const label = recordLabel(r);
-        return '<button type="button" class="dropdown-item" data-index="' + i + '">' +
+        return '<button type="button" class="dropdown-item" role="option" aria-selected="false" data-index="' + i + '">' +
           label.replace(/"/g, "&quot;") + "</button>";
       }).join("");
       if (current && arr.some(function (r) { return recordLabel(r) === current; })) {
@@ -1044,7 +342,7 @@
         let note = "";
         if (rec.savedAt) {
           const mins = Math.max(0, Math.round((Date.now() - rec.savedAt) / 60000));
-          note = '<div class="cache-note">已加载本地缓存 · 更新于 ' +
+          note = '<div class="badge badge-warning">已加载本地缓存 · 更新于 ' +
             (mins < 1 ? "刚刚" : mins + " 分钟前") + "</div>";
         }
         if (rec.isMarkdown) {
@@ -1076,11 +374,9 @@
       }
     });
 
-    historyMenu.addEventListener("click", function (e) {
-      const item = e.target.closest ? e.target.closest(".dropdown-item") : null;
-      if (!item) return;
+    function selectHistoryItem(item) {
       const arr = loadHistory();
-      const rec = arr[item.getAttribute("data-index")];
+      const rec = item ? arr[item.getAttribute("data-index")] : null;
       if (rec) {
         usernameInput.value = rec.username || "";
         displaySavedRecord(rec);
@@ -1090,6 +386,68 @@
       }
       historyMenu.classList.add("hidden");
       historyTrigger.setAttribute("aria-expanded", "false");
+    }
+
+    function openHistoryMenu() {
+      document.querySelectorAll(".dropdown-menu").forEach(function (m) {
+        m.classList.add("hidden");
+      });
+      document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
+        t.setAttribute("aria-expanded", "false");
+      });
+      historyMenu.classList.remove("hidden");
+      historyTrigger.setAttribute("aria-expanded", "true");
+      const first = historyMenu.querySelector(".dropdown-item");
+      if (first) first.focus();
+    }
+
+    historyMenu.addEventListener("click", function (e) {
+      const item = e.target.closest ? e.target.closest(".dropdown-item") : null;
+      if (!item) return;
+      selectHistoryItem(item);
+    });
+
+    historyTrigger.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (historyMenu.classList.contains("hidden")) openHistoryMenu();
+      } else if (e.key === "Escape") {
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+        historyTrigger.focus();
+      }
+    });
+
+    historyMenu.addEventListener("keydown", function (e) {
+      const list = Array.prototype.slice.call(historyMenu.querySelectorAll(".dropdown-item"));
+      if (!list.length) return;
+      const idx = list.indexOf(document.activeElement);
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        list[(idx + 1) % list.length].focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        list[(idx - 1 + list.length) % list.length].focus();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        list[0].focus();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        list[list.length - 1].focus();
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        const item = document.activeElement && document.activeElement.closest
+          ? document.activeElement.closest(".dropdown-item") : null;
+        if (item) selectHistoryItem(item);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+        historyTrigger.focus();
+      } else if (e.key === "Tab") {
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+      }
     });
 
     historyClear.addEventListener("click", function () {
@@ -1110,8 +468,8 @@
 
     function showStatus(message, ok) {
       statusBox.textContent = message;
-      statusBox.classList.remove("hidden", "error", "ok");
-      statusBox.classList.add(ok ? "ok" : "error");
+      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
+      statusBox.classList.add(ok ? "notice-success" : "notice-error");
     }
 
     function syncOptionSeg() {
@@ -1128,11 +486,44 @@
       const menu = document.getElementById(menuId);
       const input = document.getElementById(inputId);
 
+      function items() {
+        return Array.prototype.slice.call(menu.querySelectorAll(".dropdown-item"));
+      }
+
+      function openMenu() {
+        document.querySelectorAll(".dropdown-menu").forEach(function (m) {
+          m.classList.add("hidden");
+        });
+        document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
+          t.setAttribute("aria-expanded", "false");
+        });
+        menu.classList.remove("hidden");
+        trigger.setAttribute("aria-expanded", "true");
+        const current = items().find(function (item) {
+          return item.getAttribute("data-value") === input.value;
+        }) || items()[0];
+        if (current) current.focus();
+      }
+
+      function closeMenu(refocus) {
+        menu.classList.add("hidden");
+        trigger.setAttribute("aria-expanded", "false");
+        if (refocus) trigger.focus();
+      }
+
+      function selectItem(item) {
+        input.value = item.getAttribute("data-value");
+        syncLabel();
+        closeMenu(true);
+      }
+
       function syncLabel() {
         let found = false;
-        menu.querySelectorAll(".dropdown-item").forEach(function (item) {
+        items().forEach(function (item) {
           const active = item.getAttribute("data-value") === input.value;
+          item.setAttribute("role", "option");
           item.classList.toggle("active", active);
+          item.setAttribute("aria-selected", active ? "true" : "false");
           if (active) {
             trigger.textContent = item.textContent.trim();
             found = true;
@@ -1143,26 +534,52 @@
 
       trigger.addEventListener("click", function (e) {
         e.stopPropagation();
-        const willOpen = menu.classList.contains("hidden");
-        document.querySelectorAll(".dropdown-menu").forEach(function (m) {
-          m.classList.add("hidden");
-        });
-        document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
-          t.setAttribute("aria-expanded", "false");
-        });
-        if (willOpen) {
-          menu.classList.remove("hidden");
-          trigger.setAttribute("aria-expanded", "true");
+        if (menu.classList.contains("hidden")) openMenu();
+        else closeMenu(true);
+      });
+
+      trigger.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (menu.classList.contains("hidden")) openMenu();
+        } else if (e.key === "Escape") {
+          closeMenu(true);
+        }
+      });
+
+      menu.addEventListener("keydown", function (e) {
+        const list = items();
+        if (!list.length) return;
+        const idx = list.indexOf(document.activeElement);
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          list[(idx + 1) % list.length].focus();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          list[(idx - 1 + list.length) % list.length].focus();
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          list[0].focus();
+        } else if (e.key === "End") {
+          e.preventDefault();
+          list[list.length - 1].focus();
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          const item = document.activeElement && document.activeElement.closest
+            ? document.activeElement.closest(".dropdown-item") : null;
+          if (item) selectItem(item);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          closeMenu(true);
+        } else if (e.key === "Tab") {
+          closeMenu(false);
         }
       });
 
       menu.addEventListener("click", function (e) {
         const item = e.target.closest ? e.target.closest(".dropdown-item") : null;
         if (!item) return;
-        input.value = item.getAttribute("data-value");
-        syncLabel();
-        menu.classList.add("hidden");
-        trigger.setAttribute("aria-expanded", "false");
+        selectItem(item);
       });
 
       syncLabel();
@@ -1183,18 +600,28 @@
 
     function showLoading() {
       statusBox.innerHTML = '<span class="spinner"></span>正在查询';
-      statusBox.classList.remove("hidden", "error", "ok");
+      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
     }
 
+    const TOAST_ICONS = {
+      success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>',
+      error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>',
+      info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>'
+    };
     function showToast(type, message) {
+      const icon = TOAST_ICONS[type] || TOAST_ICONS.info;
       const el = document.createElement("div");
-      el.className = "toast " + type;
-      const icon = type === "success" ? "✅" : type === "error" ? "⚠️" : "ℹ️";
-      el.textContent = icon + " " + message;
+      el.className = "toast toast-" + type + " toast-enter";
+      el.setAttribute("role", type === "error" ? "alert" : "status");
+      el.innerHTML =
+        '<span class="toast-icon toast-icon-pop">' + icon + "</span>" +
+        '<span class="toast-message">' + escapeHtml(message) + "</span>" +
+        '<span class="toast-progress" style="animation-duration: 3000ms"></span>';
       toastWrap.appendChild(el);
       setTimeout(function () {
-        el.classList.add("out");
-        setTimeout(function () { el.remove(); }, 260);
+        el.classList.remove("toast-enter");
+        el.classList.add("toast-leave");
+        setTimeout(function () { el.remove(); }, 220);
       }, 3000);
     }
 
@@ -1204,8 +631,8 @@
         const mins = Math.max(0, Math.round((Date.now() - savedAt) / 60000));
         time = " (" + (mins < 1 ? "刚刚" : mins + " 分钟前") + ")";
       }
-      offlineBar.innerHTML = "⚠️ 当前离线，显示的是上次同步的数据" + time +
-        ' <button type="button" class="btn-ghost" onclick="document.getElementById(\'queryForm\').requestSubmit()">手动刷新</button>';
+      offlineBar.innerHTML = '<span class="status-dot status-invalid" aria-hidden="true"></span>当前离线，显示的是上次同步的数据' + time +
+        ' <button type="button" class="btn btn-ghost" onclick="document.getElementById(\'queryForm\').requestSubmit()">手动刷新</button>';
       offlineBar.classList.remove("hidden");
     }
 
@@ -1219,6 +646,11 @@
       submitBtnText.textContent = loading ? "查询中..." : "查询";
     }
 
+    const ALERT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>';
+    const INBOX_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>';
+    const CLOUD_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>';
+
+
     function showStateCard(icon, title, desc, withRetry) {
       clearTimeout(resultTimer);
       skeleton.classList.add("hidden");
@@ -1227,23 +659,23 @@
       resultCard.classList.remove("hidden");
       layout.classList.add("has-result");
       resultHtml.innerHTML =
-        '<div class="state-card">' +
-        '<div class="state-icon">' + icon + "</div>" +
-        '<div class="state-title">' + title + "</div>" +
-        (desc ? "<div>" + desc + "</div>" : "") +
-        (withRetry ? '<button type="button" class="btn-primary" onclick="document.getElementById(\'queryForm\').requestSubmit()">重试</button>' : "") +
+        '<div class="empty-state">' +
+        '<div class="empty-state-art" aria-hidden="true">' + icon + "</div>" +
+        '<p class="empty-state-text">' + title + "</p>" +
+        (desc ? '<p class="empty-state-text">' + desc + "</p>" : "") +
+        (withRetry ? '<button type="button" class="empty-state-action btn btn-primary" onclick="document.getElementById(\'queryForm\').requestSubmit()">重试</button>' : "") +
         "</div>";
       resultCard.classList.remove("fade-in");
       resultCard.classList.add("fade-in");
     }
 
     function showErrorCard(message) {
-      showStateCard("😵", "数据加载失败", message, true);
+      showStateCard(ALERT_SVG, "数据加载失败", message, true);
       showStatus("查询失败", false);
     }
 
     function showEmptyState() {
-      showStateCard("📭", "没有找到相关记录", "请尝试更换学期或查询项目", false);
+      showStateCard(INBOX_SVG, "没有找到相关记录", "请尝试更换学期或查询项目", false);
     }
 
     function looksEmptyMarkdown(text) {
@@ -1263,6 +695,14 @@
         if (restOnly) return true;
       }
       return false;
+    }
+
+    function countMarkdownTableRows(text) {
+      if (!text) return 0;
+      const lines = String(text).split("\n").filter(function (line) {
+        return line.trim().indexOf("|") === 0;
+      });
+      return Math.max(0, lines.length - 2);
     }
 
     function tableRowsAllEmpty(text) {
@@ -1565,7 +1005,7 @@
               }
               return '<td data-label="' + label + '">' + renderInline(cell) + "</td>";
             }
-            html.push('<div class="table-scroll"><table><thead><tr>');
+            html.push('<div class="table-shell"><table><thead><tr>');
             cells(rows[0]).forEach(function (cell) {
               html.push("<th>" + renderInline(cell) + "</th>");
             });
@@ -1773,6 +1213,68 @@
       }, 200);
     }
 
+    const DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>';
+
+    function pdfFilename(username) {
+      const d = new Date();
+      const pad = function (n) { return n < 10 ? "0" + n : String(n); };
+      return "成绩单_" + username + "_" + d.getFullYear() + pad(d.getMonth() + 1) +
+        pad(d.getDate()) + "_" + pad(d.getHours()) + pad(d.getMinutes()) +
+        pad(d.getSeconds()) + ".pdf";
+    }
+
+    function downloadPdfData(pdfBase64, username) {
+      if (!pdfBase64) return false;
+      try {
+        const bin = atob(pdfBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = pdfFilename(username);
+        document.body.appendChild(a);
+        a.click();
+        // 延迟清理：过早移除锚点/回收 blob 会中断浏览器的下载
+        setTimeout(function () {
+          a.remove();
+          URL.revokeObjectURL(url);
+        }, 60000);
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function autoDownloadPdf(pdfBase64, username) {
+      downloadPdfData(pdfBase64, username);
+    }
+
+    function renderPdfAction(pdfBase64, username) {
+      const box = document.getElementById("pdfActions");
+      if (!box) return;
+      box.classList.remove("hidden");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-primary btn-sm";
+      btn.innerHTML = DOWNLOAD_ICON + "<span>下载 PDF 文档</span>";
+      btn.addEventListener("click", function () {
+        if (downloadPdfData(pdfBase64, username)) showToast("success", "PDF 已开始下载");
+        else showToast("error", "PDF 生成失败，请重试");
+      });
+      box.innerHTML = "";
+      box.appendChild(btn);
+    }
+
+    function hidePdfAction() {
+      const box = document.getElementById("pdfActions");
+      if (box) {
+        box.classList.add("hidden");
+        box.innerHTML = "";
+      }
+    }
+
     function authHeaders() {
       // 令牌由 nginx 反代时注入 Authorization 头，页面不持有令牌
       return GATEWAY_TOKEN ? { "Authorization": "Bearer " + GATEWAY_TOKEN } : {};
@@ -1808,6 +1310,7 @@
 
       setButtonLoading(true);
       hideOfflineBar();
+      hidePdfAction();
       skeleton.classList.remove("hidden");
       resultHtml.classList.add("hidden");
       resultBox.classList.add("hidden");
@@ -1816,6 +1319,7 @@
       updateUrlParams(payload);
       const savedScrollY = window.scrollY;
       showLoading();
+      let rowCount = 0;
       try {
         const resp = await fetch("/run", {
           method: "POST",
@@ -1842,24 +1346,45 @@
           showErrorCard(message);
           showToast("error", "查询失败");
         } else {
-          const meta = data && typeof data === "object" && data._meta ? data._meta : null;
+          const meta = data && typeof data === "object"
+            ? (data._meta || data.meta || null) : null;
           const markdown = extractMarkdownValue(data);
-          businessFail = meta
-            ? meta.kind === "business_error" || meta.kind === "upstream_error"
-            : markdown !== null && /账号或密码错误|用户名或密码错误|服务异常|登录失败|会话失效|未登录|查询失败|数据获取失败|请求失败|获取失败|下载失败|解析失败|处理失败|操作失败|系统繁忙|请稍后重试|出错了/.test(markdown);
-          const noData = (meta && meta.kind === "no_data") ||
+          const kind = (meta && meta.kind) ||
+            (data && typeof data === "object" ? data.kind : "") || "";
+          const ERROR_KINDS = {
+            login_error: true, grades_error: true, schedule_error: true,
+            request_error: true, internal_error: true
+          };
+          businessFail = (data && typeof data === "object" && data.success === false) ||
+            (meta && (meta.kind === "business_error" || meta.kind === "upstream_error")) ||
+            ERROR_KINDS[kind] === true ||
+            (markdown !== null && /账号或密码错误|用户名或密码错误|服务异常|登录失败|会话失效|未登录|查询失败|数据获取失败|请求失败|获取失败|下载失败|解析失败|处理失败|操作失败|系统繁忙|请稍后重试|出错了/.test(markdown));
+          const noData = kind === "grades_empty" ||
+            (meta && meta.kind === "no_data") ||
             (markdown !== null && (/尚未发布|暂无|没有找到|未查询到|无课/.test(markdown) || looksEmptyMarkdown(markdown)));
           if (businessFail) {
-            showErrorCard("查询失败，请检查学号/密码或稍后重试");
+            hidePdfAction();
+            if (markdown !== null) {
+              // 展示后端确定性分类的友好报告（无密码/session/token）
+              showResult(resp.status, data);
+            } else {
+              showErrorCard("查询失败，请检查学号/密码或稍后重试");
+            }
             showToast("error", "查询失败");
           } else if (noData) {
+            hidePdfAction();
             if (markdown !== null && /尚未发布/.test(markdown)) {
-              showStateCard("☁️", "成绩尚未发布", "成绩公布后会自动显示在这里", false);
+              showStateCard(CLOUD_SVG, "成绩尚未发布", "成绩公布后会自动显示在这里", false);
             } else {
               showEmptyState();
             }
           } else {
             showResult(resp.status, data);
+            rowCount = markdown !== null ? countMarkdownTableRows(markdown) : 0;
+            if (payload.md2pdf && data && typeof data === "object" && data.pdf_base64) {
+              renderPdfAction(data.pdf_base64, payload.username);
+              autoDownloadPdf(data.pdf_base64, payload.username);
+            }
             saveResultRecord({
               username: payload.username,
               option: payload.option,
@@ -1878,7 +1403,6 @@
           }
         }
         renderServiceStatus();
-        const rowCount = document.querySelectorAll("#resultHtml tbody tr").length;
         const queryOk = resp.ok && !businessFail;
         showStatus(
           queryOk
@@ -1935,6 +1459,7 @@
       layout.classList.remove("has-result");
       statusBox.classList.add("hidden");
       hideOfflineBar();
+      hidePdfAction();
     });
 
     document.getElementById("togglePassword").addEventListener("click", function () {
@@ -1949,7 +1474,7 @@
       const rect = btn.getBoundingClientRect();
       const size = Math.max(rect.width, rect.height);
       const span = document.createElement("span");
-      span.className = "ripple";
+      span.className = "btn-ripple";
       span.style.width = size + "px";
       span.style.height = size + "px";
       span.style.left = event.clientX - rect.left - size / 2 + "px";
@@ -1967,7 +1492,8 @@
       renderServiceStatus();
     }, { passive: true });
     requestAnimationFrame(function () {
-      document.body.classList.add("page-loaded");
+      var shell = document.querySelector(".wrap");
+      if (shell) shell.classList.add("page-enter");
     });
   </script>
 </body>

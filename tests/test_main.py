@@ -49,3 +49,50 @@ def test_run_with_token_reaches_pipeline():
     assert body["success"] is False
     assert body["kind"] == "login_error"
     assert body["run_id"]
+
+
+def test_run_records_structured_query_log_without_password(caplog):
+    import json
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="edu-query-app.query"):
+        resp = _client().post(
+            "/run",
+            headers={"Authorization": "Bearer test-token"},
+            json={"username": "2023000001", "password": "pw", "option": "成绩"})
+    assert resp.status_code == 200
+    query_records = [
+        r for r in caplog.records
+        if getattr(r, "name", "") == "edu-query-app.query"
+        and '"event": "query"' in r.getMessage()
+    ]
+    assert query_records, "应输出一条结构化查询日志"
+    data = json.loads(query_records[0].getMessage())
+    assert data["username"] == "2023000001"
+    assert data["option"] == "成绩"
+    assert data["success"] is False and data["kind"] == "login_error"
+    assert data["run_id"]
+    assert "password" not in query_records[0].getMessage()
+
+
+def test_query_logs_requires_bearer_token():
+    resp = _client().get("/query-logs")
+    assert resp.status_code == 401
+
+
+def test_query_logs_returns_entries_after_run():
+    client = _client()
+    resp = client.post(
+        "/run",
+        headers={"Authorization": "Bearer test-token"},
+        json={"username": "2023000001", "password": "pw", "option": "成绩"})
+    assert resp.status_code == 200
+    resp = client.get("/query-logs", headers={"Authorization": "Bearer test-token"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] >= 1
+    assert body["logs"][0]["username"] == "2023000001"
+    assert body["logs"][0]["kind"] == "login_error"
+    serialized = str(body)
+    for forbidden in ("password", "session", "token"):
+        assert forbidden not in serialized

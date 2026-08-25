@@ -16,6 +16,7 @@
 | 优雅退出 | 无后台任务，uvicorn 默认处理 SIGTERM | 配合 `terminationGracePeriodSeconds` |
 | 客户端 IP | `TRUST_PROXY=true` 后按 `X-Forwarded-For` 限流 | Ingress/Service 传递真实 IP |
 | 跨副本限流/状态历史 | `REDIS_URL` 可选开启共享 | 接入托管 Redis（云 Redis / Operator） |
+| 查询日志 | 结构化 JSON 单行输出 stdout + 内存环形缓冲（可选 Redis `gw:query-logs`）+ `GET /query-logs` | 采集器消费 stdout，`/query-logs` 仅作运维临时查看 |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
 ## 二、迁入 K8s 时的映射清单（三容器 → 三个 Deployment）
@@ -44,7 +45,7 @@
 4. **优雅退出**：`terminationGracePeriodSeconds: 30`（uvicorn 默认在 SIGTERM
    后完成在途请求）。
 5. **Redis 高可用**：多副本 + 限流/历史共享时用托管 Redis，避免单点。
-6. **可观测**：接入 Prometheus `/metrics` 与集中日志（当前日志输出 stdout）。
+6. **可观测**：查询日志已按结构化 JSON 单行输出 stdout（`event/run_id/username/option/success/kind/elapsed_ms`，无密码/session/token），迁入 K8s 后由 Fluentd / Promtail 采集；再接入 Prometheus `/metrics` 指标。
 7. **密钥轮换**：`API_TOKEN`、`LLM_API_KEY`、`SERVICE_API_TOKEN` 按周期轮换。
 
 ## 四、示例（仅供未来参考，不在当前仓库落地）

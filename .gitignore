@@ -21,3 +21,6 @@ data/
 .coverage
 htmlcov/
 .DS_Store
+
+# 前端构建依赖
+frontend/node_modules/

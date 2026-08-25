@@ -18,7 +18,8 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 - `docker-compose.yml`：三容器、端口与网络的唯一事实（仅 frontend 暴露宿主端口）。
 - `format-service/app/`：编排与渲染代码事实。
 - `frontend/`：页面与 nginx 模板事实。
-- `tests/`：行为契约（渲染、分类、编排、HTTP）。
+- `design-system/edu-query-app/`：项目内品牌方案（BRAND/MASTER），前端视觉决策的唯一事实来源。
+- `tests/`：行为契约（渲染、分类、编排、HTTP、查询日志）。
 - `docs/kubernetes-migration.md`：未来 K8s 迁移映射。
 - `Li-Design/`：Git 子模块，**仅作设计/README 规范参考，非运行时依赖**。
 
@@ -57,10 +58,13 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 # 1. 编排配置合法
 docker compose config --quiet
 
-# 2. 单元测试（22 个用例，全部通过）
+# 2. 单元测试（27 个用例，全部通过）
 docker build -q -t format-service:test format-service
 docker run --rm -v "$PWD":/app -w /app format-service:test \
   sh -c "pip install -q pytest pytest-asyncio && pytest -q"
+
+# 2b. 前端令牌构建（改动 frontend/src/ 或 brand.js 后必须重编译）
+cd frontend && npm install && npm run build && cd ..
 
 # 3. 三容器端到端冒烟（需 Docker daemon）
 API_TOKEN=smoke-token AUTO_ROTATE_TOKEN=false docker compose up -d --build
