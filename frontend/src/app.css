@@ -332,6 +332,19 @@
   .score-high {
     @apply font-semibold text-success;
   }
+  /* 色阶需高于 .table-shell tbody td 的默认前景色（特异性 0,1,2 会覆盖单类） */
+  .markdown-body .table-shell td.score-high {
+    color: var(--eduquery-success);
+  }
+  .markdown-body .table-shell td.score-mid {
+    color: var(--eduquery-warning);
+  }
+  .markdown-body .table-shell td.score-low {
+    color: var(--eduquery-destructive);
+  }
+  .markdown-body .table-shell td.score-unpub {
+    color: var(--eduquery-muted);
+  }
   .score-mid {
     @apply font-semibold text-warning;
   }
