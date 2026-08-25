@@ -15,7 +15,7 @@
     min-height: 100dvh;
   }
   .wrap {
-    @apply relative z-[1] mx-auto w-full max-w-[1600px] flex-1 px-4 sm:px-6;
+    @apply relative z-[1] mx-auto flex w-full max-w-[1600px] flex-1 flex-col px-4 sm:px-6;
     overflow-x: clip;
   }
   .head {
@@ -50,6 +50,10 @@
     align-items: start;
     max-width: 680px;
     margin-inline: auto;
+  }
+  .layout:not(.has-result) {
+    margin-top: auto;
+    margin-bottom: auto;
   }
   .layout.has-result {
     max-width: none;
