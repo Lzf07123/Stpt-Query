@@ -117,6 +117,36 @@ flowchart LR
 - 中期：查询日志接入集中式日志平台；Prometheus 指标告警；HTTPS 与密钥轮换
 - 远期：扩展成绩分析能力与可复用编排方案沉淀
 
+## 构建加速与镜像源（可选）
+
+国内环境可经环境变量切换基础镜像与依赖下载源，无需修改 Dockerfile：
+
+```bash
+# .env 中配置（示例）
+IMAGE_REGISTRY=docker.m.daocloud.io          # 基础镜像加速站
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple  # PyPI 镜像
+```
+
+| 变量 | 作用 | 默认 |
+| --- | --- | --- |
+| `IMAGE_REGISTRY` | 三个容器基础镜像的仓库前缀（python/nginx） | 空 = Docker Hub |
+| `PIP_INDEX_URL` | format-service 与查询代理构建期 `pip install` 的源 | `https://pypi.org/simple` |
+| `PUBLIC_BASE_URL` | 免密登录/课表下载链接的浏览器可达地址 | `http://127.0.0.1:8000` |
+
+前端样式需要重新编译时，npm 源可在构建前单独切换（产物已预编译提交，普通部署无需 npm）：
+
+```bash
+cd frontend
+npm config set registry https://registry.npmmirror.com   # 可选：npm 镜像
+npm install && npm run build
+```
+
+开发环境清理（全部可再生，不影响运行）：
+
+```bash
+rm -rf frontend/node_modules .venv .pytest_cache format-service/app/__pycache__ tests/__pycache__
+```
+
 ## 快速开始
 
 ```bash

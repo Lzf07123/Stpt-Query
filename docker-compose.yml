@@ -6,6 +6,7 @@ services:
       context: ../STPT-Query/get-infomation-service
       args:
         BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}jwxt-service:latest
     restart: unless-stopped
     networks:
@@ -32,7 +33,11 @@ services:
   # ===== 容器 2：格式化后端（编排 + 渲染 + 分析 + PDF）=====
   # 同时挂 web 与 internal：对外只经 nginx 反代，向内调查询代理
   format-service:
-    build: ./format-service
+    build:
+      context: ./format-service
+      args:
+        BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-format:latest
     restart: unless-stopped
     networks:
@@ -69,7 +74,10 @@ services:
   # ===== 容器 3：前端（唯一对外入口）=====
   # nginx 静态页 + 反代 /run、/service-status、/health* 到格式化后端
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}nginx:1.27-alpine
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-frontend:latest
     restart: unless-stopped
     networks:

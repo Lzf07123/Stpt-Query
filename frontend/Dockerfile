@@ -1,4 +1,6 @@
-FROM nginx:1.27-alpine
+# 基础镜像可经 IMAGE_REGISTRY 切换镜像加速站（由 docker compose 传入 BASE_IMAGE）
+ARG BASE_IMAGE=nginx:1.27-alpine
+FROM ${BASE_IMAGE}
 
 COPY static /usr/share/nginx/html
 # 官方 nginx 镜像启动时会用 envsubst 渲染 /etc/nginx/templates/*.template，
