@@ -12,7 +12,6 @@
   body {
     display: flex;
     flex-direction: column;
-    min-height: 100dvh;
   }
   .wrap {
     @apply relative z-[1] mx-auto w-full max-w-[1600px] flex-1 px-4 sm:px-6;
@@ -223,45 +222,14 @@
     @apply m-0 text-base;
   }
   .result-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    align-items: center;
-    gap: 12px;
+    @apply flex flex-col items-center gap-3;
     margin-bottom: 16px;
   }
   .result-head .section-title {
-    grid-column: 2;
     margin-bottom: 0;
-  }
-  .result-head .section-title::after {
-    margin-bottom: 0;
-  }
-  .result-head .result-head-spacer {
-    grid-column: 3;
   }
   .result-back {
-    grid-column: 1;
-    justify-self: start;
-  }
-  @media (max-width: 600px) {
-    .result-head {
-      grid-template-columns: 1fr;
-      gap: 10px;
-    }
-    .result-head .section-title,
-    .result-head .result-head-spacer,
-    .result-back {
-      grid-column: 1;
-    }
-    .result-back {
-      justify-self: start;
-    }
-    .result-head .section-title {
-      order: 2;
-    }
-    .result-back {
-      order: 1;
-    }
+    @apply flex-none;
   }
   .pdf-actions {
     @apply mt-4 flex flex-wrap items-center justify-center gap-3;
@@ -474,12 +442,14 @@
 body {
   display: flex;
   flex-direction: column;
-  min-height: 100dvh;
+}
+/* 收敛页底留白：原视觉刷新 96px 在短内容页会形成大片空白 */
+body > .page-shell {
+  padding-bottom: 16px;
 }
 .page-shell {
   display: flex;
   flex-direction: column;
-  flex: 1 0 auto;
 }
 .page-shell .wrap {
   flex: 1 0 auto;
