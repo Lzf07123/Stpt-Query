@@ -400,7 +400,7 @@
     border-radius: 2px;
     background: var(--eduquery-border);
   }
-  .status-seg.ok {
+  .status-seg.success {
     background: var(--eduquery-success);
   }
   .status-seg.fail {
