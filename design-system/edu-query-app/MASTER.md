@@ -41,7 +41,6 @@
 | 模式 | 落地类 | 说明 |
 | --- | --- | --- |
 | 页面外壳 | `.page-shell`（外套）> `.wrap`（内层） | 底部 96px 留白、顶部 32px；`.wrap` `overflow-x:clip` 防辉光外溢 |
-| 顶栏 | `.site-header` > `.site-header-inner` | 粘性顶栏 56px：Logo + 品牌名（brand.js）+ 主题切换；底部流光线 `.flow-line` |
 | 居中标题 | `.page-title` / `.section-title` | 48×3px 主色装饰线 |
 | 认证表单卡 | `.card.card-signature.card-halo` | 签名描边 9s + 呼吸辉光 4.5s；内边距 24px（≥640px 为 24×28） |
 | 输入/下拉 | `.input`、`.dropdown` / `.dropdown-trigger` / `.dropdown-menu` / `.dropdown-item` | 触发器 48px、选项 44px 触达；菜单 `max-height:min(320px,40vh)` 滚动、不超出视口；焦点 ring 主色；键盘契约由既有 JS 提供 |
@@ -50,8 +49,6 @@
 | 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪；查询/清空整行 7:3，控件统一 48px |
 | 结果卡 | `.project-card`（液态玻璃） | hover 上浮 3px、顶部主色细线展开 |
 | 结果表格 | `.table-shell`（规范表格组件） | 表头 surface-2、行 hover `bg-surface-2/60`；移动端横向滚动（表格 `min-width:480px`） |
-| 主按钮扫光 | `.btn-primary::after`（`btn-sheen`） | 105° 白扫光带 4s、1s 延迟，`translateX(-130%→130%)`；与模板/Li&Pass 逐值一致；disabled 关闭 |
-| 流光线 | `.flow-line`（顶栏底部，附录 F 零依赖变体） | 2px 高、`background-size:200% 100%`、opacity 0.7、5s 线性位移（`eduquery-flow-line`） |
 | 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | shimmer 1.35s |
 | 空状态 | `.empty-state` / `.empty-state-art` / `.empty-state-text` | SVG 小图 + 引导文案 |
 | 提示/状态 | `.notice` 变体、`.status`（ok/error）、`.status-dot` | 语义色只表状态 |
@@ -60,10 +57,11 @@
 | 页脚 | `.site-footer` / `.site-footer-inner` / `.filing-icon-placeholder` | 56px 单行、muted 链接、brand.js 驱动 |
 | 返回顶部 | `.back-to-top` | 纯锚点 44×44 |
 | 氛围层 | `.tech-ambience--soft` + `.tech-grid` | 工作台 soft；移动端停用/减量 |
+| 扫掠光束 | `.tech-beam` ×3（默认 / `--violet` / `--sage`） | 斜切 16° 透明渐变带 `translateX(-150%→560%)` 扫过并长停顿，10s、错峰 0.8/4.2/7.5s；soft 降浓度；<768px 隐藏 |
 
 ## 4. 页面模式：单页查询工具
 
-- 粘性顶栏（品牌 + 主题切换 + 底部流光线）→ 顶部居中标题；主区默认居中单列（查询表单卡 680px），有结果后
+- 顶部居中标题 + 主题切换；主区默认居中单列（查询表单卡 680px），有结果后
   ≥960px 切「340px 表单 + 自适应结果玻璃卡」双栏（结果卡 sticky）；窄屏单栏；
   服务状态条居中 680px；右下角返回顶部；`site-footer` 贴底。
 - 结果渲染：服务端 Markdown → 本地零依赖解析（表格/引用/列表/代码），
@@ -102,21 +100,18 @@
 - 断点：320/390/769/1440 四档 `scrollWidth == innerWidth`，无横向溢出。
 - 源码：`{{PROJECT_PREFIX}}` 零残留；组件层无硬编码 hex；页面无 emoji 图标。
 
+**扫掠光束与扫光验收（2026-08-25 补充）**：无头 Chrome 实测氛围层 3 束 `.tech-beam`
+（`animationName=tech-beam-sweep`、10s、错峰 0.8/4.2/7.5s、`playState=running`、斜切矩阵
+`matrix(1,0,-0.2867,1,*,0)` ≈ `skewX(-16deg)`）；暂停到可见相位截图可见贯穿背景的斜向
+亮带；<768px `display:none`；`prefers-reduced-motion` 时长收敛 `0.01ms`、迭代 1 次；
+主按钮 `::after` 的 `btn-sheen` 扫光保持 4s 运行；320/390/768/769/1024/1440 六档
+`scrollWidth == innerWidth` 无横向溢出；预览截图已更新。
+
 **规范表格组件对齐（2026-08-25 补充）**：Markdown 结果表格由项目自有 `.table-scroll`
 改为规范 `.table-shell`（移除重复实现），行 hover 计算样式实测 `oklab(0.966 -0.009 0.001 / 0.6)`
 （= `surface-2` 60%）；`min-width:480px` 保留横向滚动；320/390/768/769/1024/1440 六档
 `scrollWidth == innerWidth` 无横向溢出；无头 Chrome 无页面 JS 异常（静态预览下
 `/service-status` 404 属预期，网关反代后提供）。
-
-**扫光与流光验收（2026-08-25 补充）**：与 Li&Design 子模块及参考实现逐值核对——
-主按钮 `.btn-primary::after` 与模板 `btn-sheen` 完全一致（4000ms、1s 延迟、
-`playState=running`；深色模式暂停到波段居中相位实测按钮内出现贯穿全高的白色扫光带，
-`transform` 帧间位移）；顶栏底部 `.flow-line` 对齐附录 F 零依赖变体（2px、
-`background-size:200% 100%`、opacity 0.7、5s infinite、`bottom:-1px` 绝对定位，
-`animationName=eduquery-flow-line`）；`prefers-reduced-motion` 下两者时长均收敛
-`0.01ms`、迭代 1 次；320/390/768/769/1024/1440 六档 `scrollWidth == innerWidth`
-无横向溢出；预览截图已更新（`preview/light-home-1440.png`、`dark-home-1440.png`、
-`light-home-390.png`）。
 
 **功能回归 17/17 通过**：品牌单点/主题持久化/分段联动/下拉鼠标+键盘契约/密码显隐/
 学号校验/后端失败分类渲染/服务状态条/成绩表格着色与徽章/空状态/课表下载/PDF 落盘/

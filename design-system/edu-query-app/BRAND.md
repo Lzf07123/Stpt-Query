@@ -79,7 +79,7 @@ PDF 导出。
 | 16 | 令牌前缀 | `eduquery`（`--eduquery-*`） | 槽位 2 |
 | 17 | 主题存储键 | `eduquery-theme` | 首帧脚本与主题切换共用 |
 | 18 | slogan / 备案 | slogan「汕职院教务信息查询」；ICP/公安备案上线前留空占位，不写假号 | 单点 `brand.js` |
-| 19 | 氛围浓度 | 工作台/后台 `soft`（网格 + 少量光点；移动端更减量） | 单页工具，可读性优先 |
+| 19 | 氛围浓度 | 工作台/后台 `soft`（网格 + 3 束扫掠光束 + 少量光点；移动端隐藏光束/光点并更减量） | 单页工具，可读性优先 |
 | 20 | 浏览器品牌位 | favicon `icon.svg`、`theme-color` 明暗两套、`description`、首帧主题脚本 | `index.html` |
 | 21 | 强调色板 | 模板六色相 strong/soft（ice/aqua/lilac/sage/mint/sand） | 仅图例/状态分区小面积，≤15% |
 | 22 | 按钮与光效 | 半透明单色按钮（浅 10% / 深 13% + 细描边 + 扫光）；光效「可见但克制」 | 模板默认 |
@@ -96,9 +96,7 @@ PDF 导出。
 - 技术栈不变：样式层 Tailwind CSS 4 同栈（`@theme` 语义别名 + `@apply` 组件），
   效果逐值对齐模板；运行时页面不引入任何第三方/远程资源。
 - 只移植需要的组件：card/card-signature/card-halo、input、btn/btn-primary/btn-ghost、
-  dropdown-menu、notice、toast、table-shell、badge、spinner、btn-ripple、flow-line
-  （顶栏底部流光线，附录 F 零依赖变体）、site-header/site-header-inner（粘性顶栏）、
-  site-footer、
+  dropdown-menu、notice、toast、table-shell、badge、spinner、btn-ripple、site-footer、
   page-shell/section/page-title/section-title、project-card（液态玻璃）、search-skeleton
   （查询加载）、empty-state（空结果）、back-to-top、tech-ambience--soft。
 - 不适用项（明确跳过，非偏离）：瀑布流/真实封面（无内容列表）、移动端二级菜单

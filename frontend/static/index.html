@@ -20,12 +20,15 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=7">
-  <script src="/brand.js?v=2" defer></script>
+  <link rel="stylesheet" href="/style.css?v=8">
+  <script src="/brand.js?v=3" defer></script>
 </head>
 <body>
   <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
     <div class="tech-grid"></div>
+    <span class="tech-beam"></span>
+    <span class="tech-beam tech-beam--violet"></span>
+    <span class="tech-beam tech-beam--sage"></span>
     <span class="tech-dot" style="left:14%; top:18%; --tech-dot-color:var(--eduquery-accent-aqua); animation-delay:-1.4s"></span>
     <span class="tech-dot" style="left:78%; top:12%; --tech-dot-color:var(--eduquery-accent-ice); animation-delay:-3.2s"></span>
     <span class="tech-dot" style="left:62%; top:30%; --tech-dot-color:var(--eduquery-accent-mint); animation-delay:-5.1s"></span>
@@ -33,21 +36,12 @@
     <span class="tech-dot" style="left:86%; top:72%; --tech-dot-color:var(--eduquery-accent-lilac); animation-delay:-2.7s"></span>
     <span class="tech-dot" style="left:42%; top:86%; --tech-dot-color:var(--eduquery-accent-sand); animation-delay:-4.4s"></span>
   </div>
-  <header class="site-header">
-    <div class="site-header-inner">
-      <a class="brand" href="#main" aria-label="教务信息查询">
-        <img class="brand-logo" src="/image/icon.svg" alt="" width="28" height="28">
-        <span data-brand-name></span>
-      </a>
-      <button type="button" id="themeToggle" class="icon-btn" aria-label="切换主题">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
-      </button>
-    </div>
-    <span class="flow-line" aria-hidden="true"></span>
-  </header>
   <div class="page-shell" id="main">
     <div class="wrap">
     <div class="head">
+      <button type="button" id="themeToggle" class="theme-toggle icon-btn" aria-label="切换主题">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
       <h1 class="page-title">教务信息查询</h1>
       <div class="sub" id="brandSub">汕职院教务信息查询</div>
     </div>

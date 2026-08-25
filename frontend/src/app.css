@@ -19,52 +19,13 @@
     overflow-x: clip;
   }
   .head {
-    @apply relative mb-8 text-center;
+    @apply relative mb-8 px-12 text-center;
   }
   .head .sub {
     @apply mt-2 text-sm text-muted;
   }
-  /* ---------- 站点页头：粘性顶栏 + 底部流光线（附录 F 零依赖变体） ---------- */
-  .site-header {
-    @apply sticky top-0 z-50 shrink-0 border-b border-border;
-    background: var(--eduquery-bg);
-  }
-  .site-header-inner {
-    @apply mx-auto flex w-full max-w-5xl items-center justify-between gap-3 px-4 sm:px-6;
-    min-height: 56px;
-  }
-  .brand {
-    @apply inline-flex min-h-11 items-center gap-2.5 rounded-[10px] text-base font-semibold text-foreground no-underline;
-    transition: color var(--motion-fast) var(--ease-out);
-  }
-  .brand:hover,
-  .brand:focus-visible {
-    color: var(--eduquery-primary);
-  }
-  .brand-logo {
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-  }
-  .flow-line {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: -1px;
-    height: 2px;
-    background: var(--eduquery-flow-gradient);
-    background-size: 200% 100%;
-    opacity: 0.7;
-    pointer-events: none;
-    animation: eduquery-flow-line 5s linear infinite;
-  }
-  @keyframes eduquery-flow-line {
-    from {
-      background-position: 0% 0;
-    }
-    to {
-      background-position: 200% 0;
-    }
+  .theme-toggle {
+    @apply absolute right-0 top-0 h-11 w-11;
   }
 
   /* 表单卡整体提升一层：card-halo 的 isolation 会把下拉菜单的 z-index
@@ -444,9 +405,4 @@ body {
 }
 .page-shell .wrap {
   flex: 1 0 auto;
-}
-
-/* 锚点滚动预留粘性页头高度，避免目标被顶栏遮挡 */
-html {
-  scroll-padding-top: 72px;
 }
