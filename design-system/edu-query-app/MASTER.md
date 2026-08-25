@@ -46,7 +46,7 @@
 | 输入/下拉 | `.input`、`.dropdown` / `.dropdown-trigger` / `.dropdown-menu` / `.dropdown-item` | 触发器 48px、选项 44px 触达；菜单 `max-height:min(320px,40vh)` 滚动、不超出视口；焦点 ring 主色；键盘契约由既有 JS 提供 |
 | 分段选择 | `.segmented` / `.seg-btn` | 查询项目（课表/成绩），active 半透明主色底 |
 | 复选框 | `input[type=checkbox]` + `.field-check` | 18px、accent-color 主色 |
-| 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪 |
+| 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪；查询/清空整行 7:3，控件统一 48px |
 | 结果卡 | `.project-card`（液态玻璃） | hover 上浮 3px、顶部主色细线展开 |
 | 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | shimmer 1.35s |
 | 空状态 | `.empty-state` / `.empty-state-art` / `.empty-state-text` | SVG 小图 + 引导文案 |

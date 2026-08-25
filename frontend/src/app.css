@@ -104,7 +104,7 @@
     @apply flex w-full rounded-lg border border-border bg-surface-2 p-1;
   }
   .seg-btn {
-    @apply min-h-11 flex-1 cursor-pointer rounded-md border-0 bg-transparent px-3 py-2 text-sm font-medium text-muted transition-colors duration-150;
+    @apply min-h-12 flex-1 cursor-pointer rounded-md border-0 bg-transparent px-3 py-2 text-sm font-medium text-muted transition-colors duration-150;
   }
   .seg-btn:hover {
     @apply bg-surface text-foreground;
@@ -128,9 +128,19 @@
   .history-row {
     @apply flex items-end gap-3;
   }
+  .history-row .btn {
+    min-height: 48px;
+  }
 
   .actions {
-    @apply mt-6 flex flex-wrap items-center gap-3;
+    display: grid;
+    grid-template-columns: 7fr 3fr;
+    gap: 12px;
+    margin-top: 1.5rem;
+  }
+  .actions .btn {
+    width: 100%;
+    min-height: 48px;
   }
 
   /* ---------- 自定义下拉（复用 .dropdown-menu 视觉语言） ---------- */
