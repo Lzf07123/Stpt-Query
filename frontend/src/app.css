@@ -125,10 +125,11 @@
   }
 
   .checks {
-    @apply flex flex-col items-center gap-2 rounded-xl border border-border bg-surface-2/60 p-4 text-center;
+    @apply flex flex-col items-start gap-2 rounded-xl border border-border bg-surface-2/60 p-4 text-left;
   }
   .field-check {
-    justify-content: center;
+    justify-content: flex-start;
+    text-align: left;
   }
   .history-row {
     @apply flex items-end gap-3;
@@ -308,6 +309,20 @@
      仅保留本项目移动端横向滚动的列宽下限 */
   .markdown-body .table-shell table {
     min-width: 480px;
+  }
+  /* 补齐结果表格内框线：列间纵向分隔线（末列不画，外框由容器描边承担） */
+  .markdown-body .table-shell th,
+  .markdown-body .table-shell td {
+    border-right: 1px solid var(--eduquery-border);
+  }
+  .markdown-body .table-shell th:last-child,
+  .markdown-body .table-shell td:last-child {
+    border-right: 0;
+  }
+  /* 模板 `last:border-b-0` 会让每行末格缺下边框：非末行的末格补齐下边框，
+     末行整行仍无下边框（由容器外框承担） */
+  .markdown-body .table-shell tbody tr:not(:last-child) td:last-child {
+    border-bottom: 1px solid var(--eduquery-border);
   }
   .score-high {
     @apply font-semibold text-success;
