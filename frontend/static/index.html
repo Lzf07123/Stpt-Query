@@ -20,7 +20,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=8">
+  <link rel="stylesheet" href="/style.css?v=9">
   <script src="/brand.js?v=3" defer></script>
 </head>
 <body>
@@ -333,6 +333,7 @@
     function displaySavedRecord(rec) {
       if (!rec) return;
       clearTimeout(resultTimer);
+      skeleton.classList.add("hidden");
       resultCard.classList.remove("hidden");
       layout.classList.add("has-result");
       resultCard.classList.remove("fade-in");
@@ -1311,6 +1312,7 @@
       setButtonLoading(true);
       hideOfflineBar();
       hidePdfAction();
+      clearTimeout(resultTimer);
       skeleton.classList.remove("hidden");
       resultHtml.classList.add("hidden");
       resultBox.classList.add("hidden");

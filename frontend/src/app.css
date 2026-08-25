@@ -55,6 +55,11 @@
       position: sticky;
       top: 16px;
     }
+    /* 结果态放宽内容容器：分栏后结果列需要足够宽度容纳课表/成绩宽表，
+       上限与页脚 max-w-7xl 对齐，避免窄视口下横向滚动 */
+    .wrap:has(> .layout.has-result) {
+      max-width: 80rem;
+    }
   }
 
   /* ---------- 查询表单 ---------- */
