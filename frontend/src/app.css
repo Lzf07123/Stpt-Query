@@ -445,22 +445,24 @@
   }
 }
 
-/* 查询骨架屏：参考原版文档式结构（60% 标题条 + 46px 全宽行），
-   shimmer 1.5s 复用视觉刷新模块的 skeleton-shimmer 关键帧 */
+/* 查询骨架屏：参考原版文档式结构（60% 标题条 + 46px 全宽行）。
+   高光使用主题语义令牌（primary-soft，明暗两套自动适配），
+   复用 skeleton-shimmer 无缝关键帧；容器淡入避免出现时突兀 */
 .skeleton {
   padding: 4px 2px;
+  animation: skeleton-enter 240ms var(--ease-out) both;
 }
 .skeleton-line,
 .skeleton-row {
   border-radius: 8px;
   background: linear-gradient(
     90deg,
-    var(--eduquery-surface-2) 25%,
-    rgba(255, 255, 255, 0.65) 50%,
-    var(--eduquery-surface-2) 75%
+    var(--eduquery-surface-2) 20%,
+    var(--eduquery-primary-soft) 50%,
+    var(--eduquery-surface-2) 80%
   );
   background-size: 200% 100%;
-  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
 }
 .skeleton-line {
   height: 18px;
@@ -470,6 +472,16 @@
 .skeleton-row {
   height: 46px;
   margin: 8px 0;
+}
+@keyframes skeleton-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* 返回结果标题降级：.section-title（无层）固定 1.25rem，结果卡用更高优先级无层规则降为 16px */

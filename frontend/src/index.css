@@ -2054,18 +2054,19 @@ html { scroll-behavior: smooth; }
   background: linear-gradient(
     90deg,
     var(--eduquery-surface-2) 20%,
-    var(--eduquery-glass-highlight) 48%,
-    var(--eduquery-surface-2) 76%
+    var(--eduquery-primary-soft) 50%,
+    var(--eduquery-surface-2) 80%
   );
-  background-size: 220% 100%;
-  animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
 }
 .search-skeleton-bar:first-child { width: 58%; }
 .search-skeleton-bar:nth-child(2) { width: 88%; }
 .search-skeleton-bar:last-child { width: 34%; }
 @keyframes skeleton-shimmer {
-  from { background-position: 120% 0; }
-  to { background-position: -20% 0; }
+  /* 200% 画布上恰好平移一个周期：末帧=首帧，循环无跳动 */
+  from { background-position: 200% 0; }
+  to { background-position: 0% 0; }
 }
 
 /* ---------- 空状态（SVG 小图 + 引导文案） ---------- */

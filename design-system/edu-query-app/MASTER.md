@@ -49,7 +49,7 @@
 | 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪；查询/清空整行 7:3，控件统一 48px |
 | 结果卡 | `.project-card`（液态玻璃） | hover 上浮 3px、顶部主色细线展开 |
 | 结果表格 | `.table-shell`（规范表格组件） | 表头 surface-2、行 hover `bg-surface-2/60`；移动端横向滚动（表格 `min-width:480px`） |
-| 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | shimmer 1.35s |
+| 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | shimmer 1.6s 无缝循环 + 容器 240ms 淡入 |
 | 空状态 | `.empty-state` / `.empty-state-art` / `.empty-state-text` | SVG 小图 + 引导文案 |
 | 提示/状态 | `.notice` 变体、`.status`（ok/error）、`.status-dot` | 语义色只表状态 |
 | Toast | `.toast` / `.toast-success` / `.toast-error` / `.toast-info` | 进度条 + 进入/离开动画 |
@@ -201,6 +201,13 @@ qwen3-vl-flash 复验内容紧凑无残留骨架条。注：左侧表单卡 `.ca
 （模板 `:last-child=34%` 面向三根条布局）；实测加载期 `display:flex` 且条宽 305.9/464.1px，
 完成后 `display:none`、结果内容回到标题下方（h2 结束 197 → 正文起点 217），
 playwright-cli 截图 + qwen3-vl-flash 复验无残留骨架条与错位；六档视口无横向溢出。
+
+**骨架屏动效优化（2026-08-27 补充）**：骨架条高光从硬编码 `rgba(255,255,255,.65)`
+（深色模式过亮）改为主题语义令牌 `--eduquery-primary-soft`，明暗两套自动适配；
+`@keyframes skeleton-shimmer` 由 `120%→-20%`（首尾不闭合、每圈跳动）改为
+`200%→0%`（200% 画布上恰好一个周期，末帧=首帧，循环无缝）；查询骨架屏新增
+`@keyframes skeleton-enter` 240ms 淡入上浮，避免出现瞬间突兀；`prefers-reduced-motion`
+沿用全局单帧收敛。缓存版本号 `style.css?v=32`。
 
 **规范表格组件对齐（2026-08-25 补充）**：Markdown 结果表格由项目自有 `.table-scroll`
 改为规范 `.table-shell`（移除重复实现），行 hover 计算样式实测 `oklab(0.966 -0.009 0.001 / 0.6)`
