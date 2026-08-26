@@ -209,6 +209,12 @@ playwright-cli 截图 + qwen3-vl-flash 复验无残留骨架条与错位；六�
 `@keyframes skeleton-enter` 240ms 淡入上浮，避免出现瞬间突兀；`prefers-reduced-motion`
 沿用全局单帧收敛。缓存版本号 `style.css?v=32`。
 
+**品牌文案环境变量覆盖（2026-08-27 补充）**：标题/slogan/description/页脚作者与
+GitHub 链接支持运行时覆盖——`brand-env.js` 由 nginx 官方 `/docker-entrypoint.d` 脚本按
+`BRAND_NAME/BRAND_SLOGAN/BRAND_DESCRIPTION/BRAND_AUTHOR/BRAND_GITHUB` 生成（JSON 转义防注入），
+`brand.js` 保留内置默认值作为兜底，`BRAND_GITHUB=none` 隐藏页脚链接；本地静态预览的
+`brand-env.js` 为空对象、行为不变。compose 与 `.env.example` 已同步，README 快速开始补充说明。
+
 **规范表格组件对齐（2026-08-25 补充）**：Markdown 结果表格由项目自有 `.table-scroll`
 改为规范 `.table-shell`（移除重复实现），行 hover 计算样式实测 `oklab(0.966 -0.009 0.001 / 0.6)`
 （= `surface-2` 60%）；`min-width:480px` 保留横向滚动；320/390/768/769/1024/1440 六档

@@ -159,6 +159,10 @@ docker compose up -d --build
 > 前端令牌样式已预编译提交（`frontend/static/style.css`），普通部署无需 npm；修改
 > 样式后重新构建：`cd frontend && npm install && npm run build`。
 
+> 品牌文案（标题 / slogan / 页脚作者与 GitHub 链接）可由环境变量 `BRAND_NAME`、
+> `BRAND_SLOGAN`、`BRAND_DESCRIPTION`、`BRAND_AUTHOR`、`BRAND_GITHUB` 覆盖；留空即使用
+> `frontend/static/brand.js` 的内置默认值，`BRAND_GITHUB=none` 隐藏页脚 GitHub 链接。
+
 > 前端与 `format-service` 共用固定 `API_TOKEN`（默认 `change-me`），由 nginx 反代时注入 `Authorization` 头，浏览器页面不持有令牌；`SERVICE_API_TOKEN` 必须与 `get-infomation-service` 的 `JWXT_API_TOKEN` 一致；`SERVICE_BASE_URL` 留空时 Compose 自动使用内部服务，仅当查询代理独立部署时才填其公网地址。
 
 ## 测试

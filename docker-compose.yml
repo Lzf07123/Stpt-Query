@@ -90,6 +90,12 @@ services:
     environment:
       # 与 format-service 共用同一 API_TOKEN，由 nginx 反代时注入 Authorization
       - API_TOKEN=${API_TOKEN:-change-me}
+      # 品牌文案覆盖（留空使用 brand.js 内置默认值；BRAND_GITHUB=none 隐藏页脚链接）
+      - BRAND_NAME=${BRAND_NAME:-}
+      - BRAND_SLOGAN=${BRAND_SLOGAN:-}
+      - BRAND_DESCRIPTION=${BRAND_DESCRIPTION:-}
+      - BRAND_AUTHOR=${BRAND_AUTHOR:-}
+      - BRAND_GITHUB=${BRAND_GITHUB:-}
     ports:
       - "8000:80"
     depends_on:

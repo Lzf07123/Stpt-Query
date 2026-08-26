@@ -3,16 +3,26 @@
 (function () {
   "use strict";
 
+  var env = window.EDU_QUERY_BRAND_ENV || {};
+
+  function pick(key, fallback) {
+    var value = env[key];
+    return typeof value === "string" && value.length > 0 ? value : fallback;
+  }
+
+  var github = pick("BRAND_GITHUB", "https://github.com/Lzf07123/STPT-Query");
+  if (github === "none") github = "";
+
   var BRAND = Object.freeze({
-    name: "教务信息查询",
+    name: pick("BRAND_NAME", "教务信息查询"),
     repo: "edu-query-app",
     techId: "eduquery",
-    slogan: "汕职院教务信息查询",
-    description: "通过学校统一身份认证查询成绩与课表，支持成绩分析与 PDF 导出。",
+    slogan: pick("BRAND_SLOGAN", "汕职院教务信息查询"),
+    description: pick("BRAND_DESCRIPTION", "通过学校统一身份认证查询成绩与课表，支持成绩分析与 PDF 导出。"),
     themeKey: "eduquery-theme",
-    author: "Lzf07123",
+    author: pick("BRAND_AUTHOR", "Lzf07123"),
     links: {
-      github: "https://github.com/Lzf07123/STPT-Query"
+      github: github
     },
     /* ICP/公安备案上线前留空；禁止写入假备案号 */
     filing: {

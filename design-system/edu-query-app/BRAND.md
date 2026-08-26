@@ -29,7 +29,8 @@ PDF 导出。
 3. **以动衬静**：氛围光效极慢极淡（工作台 `soft` 档），只动 transform/opacity/
    background-position，永不阻塞交互；尊重 `prefers-reduced-motion`。
 4. **单一事实来源**：颜色/间距/阴影/动效只在 `frontend/src/index.css` 令牌；
-   品牌文案只在 `frontend/static/brand.js`；提示词/分类/渲染单点维持后端既有契约。
+   品牌文案默认值只在 `frontend/static/brand.js`，运行时可由 `brand-env.js`（容器启动按
+   环境变量生成）覆盖；提示词/分类/渲染单点维持后端既有契约。
 5. **无障碍与节能**：正文对比 ≥ 4.5:1，焦点可见，触达 ≥ 44px，移动端减量。
 
 ### 2.2 视觉语法：几何暗线（符号重映射）
@@ -78,7 +79,7 @@ PDF 导出。
 | 15 | Logo / favicon | 复用 `frontend/static/image/icon.svg` | 既有资产，SVG 单格式 |
 | 16 | 令牌前缀 | `eduquery`（`--eduquery-*`） | 槽位 2 |
 | 17 | 主题存储键 | `eduquery-theme` | 首帧脚本与主题切换共用 |
-| 18 | slogan / 备案 | slogan「汕职院教务信息查询」；ICP/公安备案上线前留空占位，不写假号 | 单点 `brand.js` |
+| 18 | slogan / 备案 | slogan「汕职院教务信息查询」；ICP/公安备案上线前留空占位，不写假号；名称/slogan/description/页脚作者与 GitHub 链接可由 `BRAND_*` 环境变量覆盖 | 单点 `brand.js` 默认值 + `brand-env.js` 运行时覆盖 |
 | 19 | 氛围浓度 | 工作台/后台 `soft`（网格 + 3 束扫掠光束 + 少量光点；移动端隐藏光束/光点并更减量） | 单页工具，可读性优先 |
 | 20 | 浏览器品牌位 | favicon `icon.svg`、`theme-color` 明暗两套、`description`、首帧主题脚本 | `index.html` |
 | 21 | 强调色板 | 模板六色相 strong/soft（ice/aqua/lilac/sage/mint/sand） | 仅图例/状态分区小面积，≤15% |
@@ -108,7 +109,7 @@ PDF 导出。
 
 ## 5. 验收基线（Pre-Delivery Checklist 摘要）
 
-- 无 emoji 充当图标；全部内联 SVG；无硬编码 hex（组件层）；文案由 brand.js 单点。
+- 无 emoji 充当图标；全部内联 SVG；无硬编码 hex（组件层）；文案默认值由 brand.js 单点，运行时经 `BRAND_*` 环境变量覆盖（`BRAND_GITHUB=none` 隐藏页脚链接）。
 - 浅色正文对比 ≥ 4.5:1；`focus-visible` 2px 主色描边；`prefers-reduced-motion` 单帧。
 - 375px / 768px / 1024px / 1440px 四档响应式，无横向滚动，无内容被固定导航遮挡。
 - 页脚链接 muted、hover 转前景色；可点击元素 `cursor-pointer`；动效 150–300ms。
