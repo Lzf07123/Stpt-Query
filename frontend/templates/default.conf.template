@@ -10,10 +10,10 @@ server {
     }
 
     # 反向代理到格式化后端；令牌由服务端注入，外部请求无需携带
-    location ~ ^/(run|v1/workflows/run|service-status|query-logs|health.*|jump(/.*)?|get_schedule/export)$ {
+    location ~ ^/(run|v1/workflows/run|service-status|health.*|jump(/.*)?|get_schedule/export)$ {
         proxy_pass http://format-service:8000;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Authorization "Bearer ${API_TOKEN}";
         proxy_http_version 1.1;

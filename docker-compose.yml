@@ -59,7 +59,12 @@ services:
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-1024}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-60}
       - RATE_LIMIT=${RATE_LIMIT:-30}
+      # 唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
+      - TRUST_PROXY=${TRUST_PROXY:-true}
+      - REDIS_URL=${REDIS_URL:-}
+      - TZ=${TZ:-Asia/Shanghai}
     depends_on:
       get-infomation-service:
         condition: service_healthy
@@ -90,6 +95,12 @@ services:
     depends_on:
       format-service:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
 
 networks:
   # 对外边缘网络：nginx ↔ 格式化后端

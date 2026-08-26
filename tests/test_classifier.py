@@ -37,6 +37,13 @@ def test_timeout():
     assert r["meta"]["category"] == "节点超时"
 
 
+def test_session_expired_is_classified():
+    r = classify_error("grades", 401,
+                       '{"success": false, "error": "session 无效或已过期，请重新登录"}')
+    assert r["meta"]["category"] == "会话失效或已过期"
+    assert "重新登录" in r["output"]
+
+
 def test_empty_result_is_not_error():
     assert classify_empty_result("grades", {"success": True, "count": 0})
     assert not classify_empty_result("grades", {"success": False, "count": 0})

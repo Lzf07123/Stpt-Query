@@ -19,7 +19,7 @@ class WorkflowRequest(BaseModel):
         description="学号（10 位数字）",
     )
     password: str = Field(..., min_length=1, description="密码")
-    option: str = Field(..., description="查询项目：成绩 / 课表")
+    option: str = Field(..., max_length=20, description="查询项目：成绩 / 课表")
     semesters: Optional[str] = Field(
         default=None,
         pattern=r"^$|^\d{4}-\d{4}-[1-2]$",

@@ -40,6 +40,10 @@
   function applyBrandSlots() {
     var sub = document.getElementById("brandSub");
     if (sub && BRAND.slogan) sub.textContent = BRAND.slogan;
+    var title = document.querySelector(".page-title");
+    if (title && BRAND.name) title.textContent = BRAND.name;
+    var metaDesc = document.querySelector('meta[name="description"]');
+    if (metaDesc && BRAND.description) metaDesc.setAttribute("content", BRAND.description);
     document.title = BRAND.name;
   }
 

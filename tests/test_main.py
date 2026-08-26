@@ -1,6 +1,7 @@
-"""HTTP 层测试：探针端点与鉴权。"""
+"""HTTP 层测试：探针端点、鉴权、生产校验与限流。"""
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import Settings, create_app
@@ -142,3 +143,41 @@ def test_passthrough_rejects_unlisted_path():
     # /jump 基路径不在白名单（仅 /jump/go），返回 404
     resp = _client().get("/jump")
     assert resp.status_code == 404
+
+
+def test_production_rejects_default_weak_token():
+    with pytest.raises(RuntimeError, match="API_TOKEN"):
+        create_app(Settings(environment="production", auto_rotate_token=False,
+                            api_token="change-me"))
+
+
+def test_production_rejects_short_token():
+    with pytest.raises(RuntimeError, match="API_TOKEN"):
+        create_app(Settings(environment="production", auto_rotate_token=False,
+                            api_token="short-token"))
+
+
+def test_production_accepts_strong_fixed_token():
+    strong = "a" * 24
+    cfg = Settings(environment="production", auto_rotate_token=False, api_token=strong,
+                   service_base_url="http://127.0.0.1:9", service_api_token="x")
+    app = create_app(cfg)
+    assert app.state.api_token == strong
+
+
+def test_rate_limit_returns_429_by_client_ip():
+    cfg = Settings(
+        environment="development",
+        auto_rotate_token=False,
+        api_token="test-token",
+        service_base_url="http://127.0.0.1:9",
+        service_api_token="x",
+        llm_api_key="",
+        rate_limit=2,
+    )
+    client = TestClient(create_app(cfg))
+    headers = {"Authorization": "Bearer test-token"}
+    payload = {"username": "2023000001", "password": "pw", "option": "成绩"}
+    assert client.post("/run", headers=headers, json=payload).status_code == 200
+    assert client.post("/run", headers=headers, json=payload).status_code == 200
+    assert client.post("/run", headers=headers, json=payload).status_code == 429

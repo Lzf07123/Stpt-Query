@@ -102,8 +102,9 @@ flowchart LR
 - 日志**不包含**密码 / session / token；白名单字段之外一律丢弃（`app/querylog.py`）。
 - 查询日志只写 stdout，不落盘、不引入文件存储/PV，与「编排层无状态」硬规则一致；
   生产环境由集中日志平台（Fluentd / Promtail / 云日志）采集。
-- 运维可经网关调用 `GET /query-logs`（与 `/service-status` 同样由 nginx 注入令牌）
-  查看最近日志；生产建议经集中日志查询，不长期依赖进程内存。
+- `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
+  `docker compose exec format-service curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/query-logs`；
+  生产建议经集中日志查询，不长期依赖进程内存。
 
 ## 当前目标
 
@@ -127,11 +128,8 @@ IMAGE_REGISTRY=docker.m.daocloud.io          # 基础镜像加速站
 PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple  # PyPI 镜像
 ```
 
-| 变量 | 作用 | 默认 |
-| --- | --- | --- |
-| `IMAGE_REGISTRY` | 三个容器基础镜像的仓库前缀（python/nginx） | 空 = Docker Hub |
-| `PIP_INDEX_URL` | format-service 与查询代理构建期 `pip install` 的源 | `https://pypi.org/simple` |
-| `PUBLIC_BASE_URL` | 免密登录/课表下载链接的浏览器可达地址 | `http://127.0.0.1:8000` |
+> 全部环境变量、默认值与说明以 [`.env.example`](.env.example) 为唯一事实来源
+> （含 `SERVICE_BASE_URL`、`TRUST_PROXY`、`REDIS_URL`、`TZ`、`LLM_TIMEOUT` 等），README 不重复维护。
 
 前端样式需要重新编译时，npm 源可在构建前单独切换（产物已预编译提交，普通部署无需 npm）：
 
@@ -161,7 +159,7 @@ docker compose up -d --build
 > 前端令牌样式已预编译提交（`frontend/static/style.css`），普通部署无需 npm；修改
 > 样式后重新构建：`cd frontend && npm install && npm run build`。
 
-> 前端与 `format-service` 共用固定 `API_TOKEN`（默认 `change-me`），由 nginx 反代时注入 `Authorization` 头，浏览器页面不持有令牌；`SERVICE_API_TOKEN` 必须与 `get-infomation-service` 的 `JWXT_API_TOKEN` 一致；若生产部署在独立服务器，`SERVICE_BASE_URL` 指向已部署的查询代理。
+> 前端与 `format-service` 共用固定 `API_TOKEN`（默认 `change-me`），由 nginx 反代时注入 `Authorization` 头，浏览器页面不持有令牌；`SERVICE_API_TOKEN` 必须与 `get-infomation-service` 的 `JWXT_API_TOKEN` 一致；`SERVICE_BASE_URL` 留空时 Compose 自动使用内部服务，仅当查询代理独立部署时才填其公网地址。
 
 ## 测试
 

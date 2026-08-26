@@ -36,6 +36,12 @@ _RULES: Tuple[Tuple[str, str, List[str], List[str]], ...] = (
         ["核对上游服务的 Bearer 令牌配置与请求头"],
     ),
     (
+        "会话失效或已过期",
+        r"session.{0,32}(invalid|expired)|会话无效|会话已过期|SessionInvalid|TokenError|重新登录",
+        ["重新登录后再查询"],
+        ["检查会话 TTL、Redis 配置与多副本令牌一致性"],
+    ),
+    (
         "请求参数错误",
         r"\b400\b|username|password|必填",
         ["确认学号、密码已完整填写，字段名正确"],

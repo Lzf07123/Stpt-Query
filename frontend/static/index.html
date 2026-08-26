@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>教务信息查询</title>
+  <title></title>
   <link rel="icon" href="/image/icon.svg">
-  <meta name="description" content="通过学校统一身份认证查询成绩与课表，支持成绩分析与 PDF 导出。">
+  <meta name="description" content="">
   <meta name="theme-color" content="#F6FBF9">
   <meta name="color-scheme" content="light dark">
   <script>
@@ -42,8 +42,8 @@
       <button type="button" id="themeToggle" class="theme-toggle icon-btn" aria-label="切换主题">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
       </button>
-      <h1 class="page-title">教务信息查询</h1>
-      <div class="sub" id="brandSub">汕职院教务信息查询</div>
+      <h1 class="page-title"></h1>
+      <div class="sub" id="brandSub"></div>
     </div>
 
     <div id="offlineBar" class="notice notice-warning hidden" aria-live="polite"></div>
@@ -190,7 +190,8 @@
 
   <div id="toastWrap" class="toast-viewport"></div>
   <script>
-    // 网关令牌由 FastAPI 根路径渲染时从服务端配置注入，不在静态文件中写死
+    // 页面不持有令牌：Authorization 由 nginx 反代时在服务端注入；
+    // 本地直开静态文件调试时该值为空，查询请求会被后端 401 拒绝
     const GATEWAY_TOKEN = "";
 
     const themeToggle = document.getElementById("themeToggle");
@@ -692,8 +693,8 @@
       resultHtml.innerHTML =
         '<div class="empty-state">' +
         '<div class="empty-state-art" aria-hidden="true">' + icon + "</div>" +
-        '<p class="empty-state-text">' + title + "</p>" +
-        (desc ? '<p class="empty-state-text">' + desc + "</p>" : "") +
+        '<p class="empty-state-text">' + escapeHtml(title) + "</p>" +
+        (desc ? '<p class="empty-state-text">' + escapeHtml(desc) + "</p>" : "") +
         (withRetry ? '<button type="button" class="empty-state-action btn btn-primary" onclick="document.getElementById(\'queryForm\').requestSubmit()">重试</button>' : "") +
         "</div>";
       resultCard.classList.remove("fade-in");

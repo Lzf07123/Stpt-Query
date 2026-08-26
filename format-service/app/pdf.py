@@ -71,16 +71,18 @@ def markdown_to_pdf(text: str, title: str = "教务信息查询结果") -> bytes
     story: List[Any] = []
     paragraphs, tables = _split_markdown(text or "")
 
+    def _xml_escape(text: str) -> str:
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     def add_md(block: str) -> None:
         for raw in block.splitlines():
             raw = raw.strip()
             if not raw:
                 continue
             if raw.startswith(">"):
-                story.append(Paragraph(raw.lstrip("> ").replace("&", "&amp;"),
-                                       _STYLE_QUOTE))
+                story.append(Paragraph(_xml_escape(raw.lstrip("> ")), _STYLE_QUOTE))
             else:
-                story.append(Paragraph(raw.replace("&", "&amp;"), _STYLE_BODY))
+                story.append(Paragraph(_xml_escape(raw), _STYLE_BODY))
             story.append(Spacer(1, 3))
 
     table_idx = 0

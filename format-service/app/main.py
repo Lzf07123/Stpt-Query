@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-v4-flash"
     llm_temperature: float = 0.0
     llm_max_tokens: int = 1024
+    llm_timeout: float = 60.0
     rate_limit: int = 30
     trust_proxy: bool = False
     redis_url: str = ""
@@ -62,6 +63,9 @@ def _validate_production(environment: str, auto_rotate_token: bool, api_token: s
                 "AUTO_ROTATE_TOKEN=false 并使用固定 API_TOKEN")
         if not api_token.strip():
             raise RuntimeError("生产环境必须配置 API_TOKEN")
+        if api_token.strip().lower() == "change-me" or len(api_token.strip()) < 16:
+            raise RuntimeError(
+                "生产环境必须配置足够强的固定 API_TOKEN（禁止默认值 change-me，建议至少 16 字符）")
 
 
 # 对外跳转/下载透传白名单：免密登录桥接页与课表 Word 下载必须经公网入口可达
@@ -86,7 +90,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     api_token = _resolve_api_token(cfg)
     llm = LLMClient(
         base_url=cfg.llm_base_url, api_key=cfg.llm_api_key, model=cfg.llm_model,
-        temperature=cfg.llm_temperature, max_tokens=cfg.llm_max_tokens)
+        temperature=cfg.llm_temperature, max_tokens=cfg.llm_max_tokens,
+        timeout=cfg.llm_timeout)
     service = HTTPServiceClient(cfg.service_base_url, cfg.service_api_token, cfg.service_timeout)
     pipeline = Pipeline(service=service, llm=llm)
 
@@ -146,9 +151,17 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         return request.client.host if request.client else "unknown"
 
     def _check_rate_limit(ip: str) -> None:
+        nonlocal rate_hits
         now = time.time()
         limit = app.state.rate_limit
         with rate_lock:
+            if len(rate_hits) > 4096:
+                pruned = {}
+                for key, stamps in rate_hits.items():
+                    recent = [t for t in stamps if now - t < 60]
+                    if recent:
+                        pruned[key] = recent
+                rate_hits = pruned
             hits = [t for t in rate_hits.get(ip, []) if now - t < 60]
             if len(hits) >= limit:
                 log_query({"event": "rate_limited", "client_ip": ip,
@@ -199,7 +212,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             "time": datetime.now().astimezone().isoformat(timespec="seconds"),
             "run_id": run_id or new_run_id(),
             "client_ip": client_ip,
-            "username": body.username,
+            "username": body.user or body.username,
             "option": body.option,
             "semesters": body.semesters or "",
             "weeks": body.weeks,
@@ -226,10 +239,11 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         except Exception as exc:  # 兜底：未知异常也返回统一 JSON
             LOG.exception("run 执行异常")
             _record(False, "internal_error")
+            run_id = new_run_id()
             result = {"success": False, "kind": "internal_error"}
-            _record_query_log(_query_log_entry(body, client_ip, started, result))
+            _record_query_log(_query_log_entry(body, client_ip, started, result, run_id))
             return QueryResult(
-                success=False, kind="internal_error",
+                success=False, kind="internal_error", run_id=run_id,
                 output="服务内部异常：%s" % exc.__class__.__name__,
                 meta={"elapsed_ms": int((time.time() - started) * 1000)})
 
@@ -262,7 +276,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             except Exception:
                 redis_status = "error"
         return {"status": "degraded" if redis_status == "error" else "ok",
-                "service_base_url": cfg.service_base_url,
                 "auth_mode": "fixed-token" if cfg.api_token else "auto-token",
                 "redis": redis_status}
 
