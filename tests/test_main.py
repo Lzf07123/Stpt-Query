@@ -33,6 +33,16 @@ def test_readiness_without_redis():
     assert body["redis"] == "not-configured"
 
 
+def test_public_health_reports_coarse_dependencies():
+    resp = _client().get("/health/public")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["site"]["status"] == "up"
+    assert body["proxy"]["status"] == "down"
+    assert body["school"]["status"] == "unknown"
+    assert "127.0.0.1:9" not in str(body)
+
+
 def test_run_requires_bearer_token():
     resp = _client().post("/run", json={
         "username": "2023000001", "password": "pw", "option": "成绩"})
@@ -73,6 +83,9 @@ def test_run_records_structured_query_log_without_password(caplog):
     assert data["option"] == "成绩"
     assert data["success"] is False and data["kind"] == "login_error"
     assert data["run_id"]
+    assert data["analysis"] is False
+    assert data["analysis_usage"] == "—"
+    assert data["response_summary"].startswith("HTTP 0；响应：")
     assert "password" not in query_records[0].getMessage()
 
 
@@ -94,6 +107,7 @@ def test_query_logs_returns_entries_after_run():
     assert body["total"] >= 1
     assert body["logs"][0]["username"] == "2023000001"
     assert body["logs"][0]["kind"] == "login_error"
+    assert body["logs"][0]["response_summary"].startswith("HTTP 0；响应：")
     serialized = str(body)
     for forbidden in ("password", "session", "token"):
         assert forbidden not in serialized
@@ -157,9 +171,17 @@ def test_production_rejects_short_token():
                             api_token="short-token"))
 
 
-def test_production_accepts_strong_fixed_token():
+def test_production_rejects_weak_admin_token():
+    with pytest.raises(RuntimeError, match="ADMIN_TOKEN"):
+        create_app(Settings(
+            environment="production", auto_rotate_token=False,
+            api_token="a" * 24, admin_token="admin-token"))
+
+
+def test_production_accepts_strong_fixed_tokens():
     strong = "a" * 24
     cfg = Settings(environment="production", auto_rotate_token=False, api_token=strong,
+                   admin_token="b" * 24,
                    service_base_url="http://127.0.0.1:9", service_api_token="x")
     app = create_app(cfg)
     assert app.state.api_token == strong

@@ -1,28 +1,33 @@
 services:
-  # ===== 容器 1：查询代理（复用 get-infomation-service）=====
+      # ===== 容器 1：查询代理（本仓库自包含源码）=====
   # 仅挂在 internal 内网，只有格式化后端可调用，不映射任何宿主端口
   get-infomation-service:
     build:
-      context: ../STPT-Query/get-infomation-service
+      context: ./get-infomation-service
       args:
         BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}jwxt-service:latest
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/log/jwxt:size=16m,uid=10001,gid=10001
     networks:
       - internal
     expose:
       - "8766"
-    env_file:
-      - path: ../STPT-Query/get-infomation-service/.env
-        required: false
     environment:
       - JWXT_API_TOKEN=${SERVICE_API_TOKEN:-}
       # 对外链接（免密登录/课表下载）基准地址：公网入口，浏览器可达
       - JWXT_PUBLIC_URL=${PUBLIC_BASE_URL:-http://127.0.0.1:8000}
-      # 小项目单实例：不启用 Redis 共享状态
-      - JWXT_REDIS_URL=
+      - JWXT_REDIS_URL=${JWXT_REDIS_URL:-}
       - JWXT_TRUST_PROXY=0
+      - JWXT_LOG_FILE=
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/health')"]
       interval: 30s
@@ -40,6 +45,17 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-format:latest
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - format-query-logs:/var/log/edu-query
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
     networks:
       - web
       - internal
@@ -52,19 +68,31 @@ services:
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - AUTO_ROTATE_TOKEN=${AUTO_ROTATE_TOKEN:-false}
       - API_TOKEN=${API_TOKEN:-change-me}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - SERVICE_BASE_URL=${SERVICE_BASE_URL:-http://get-infomation-service:8766}
       - SERVICE_API_TOKEN=${SERVICE_API_TOKEN:-}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
       - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
+      - LLM_MODEL=${LLM_MODEL:-glm-4.5-flash}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0}
-      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-1024}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
       - LLM_TIMEOUT=${LLM_TIMEOUT:-60}
+      - LLM_ENABLE_THINKING=${LLM_ENABLE_THINKING:-true}
+      - LLM_SYSTEM_PROMPT=${LLM_SYSTEM_PROMPT:-}
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-100}
+      - CONCURRENCY_WAIT_TIMEOUT=${CONCURRENCY_WAIT_TIMEOUT:-2}
+      - GLOBAL_CONCURRENCY=${GLOBAL_CONCURRENCY:-4}
       - RATE_LIMIT=${RATE_LIMIT:-30}
       # 唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
       - TRUST_PROXY=${TRUST_PROXY:-true}
       - REDIS_URL=${REDIS_URL:-}
+      - FILE_LOG_ENABLED=${FILE_LOG_ENABLED:-true}
+      - FILE_LOG_PATH=${FILE_LOG_PATH:-/var/log/edu-query/queries.jsonl}
+      - FILE_LOG_MAX_BYTES=${FILE_LOG_MAX_BYTES:-52428800}
+      - FILE_LOG_BACKUP_COUNT=${FILE_LOG_BACKUP_COUNT:-7}
       - TZ=${TZ:-Asia/Shanghai}
+      - HOST_PROC_ROOT=/host/proc
+      - HOST_CGROUP_ROOT=/host/sys/fs/cgroup
     depends_on:
       get-infomation-service:
         condition: service_healthy
@@ -82,9 +110,17 @@ services:
     build:
       context: ./frontend
       args:
-        BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}nginx:1.27-alpine
+        BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}nginxinc/nginx-unprivileged:1.27-alpine
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-frontend:latest
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /etc/nginx/conf.d:size=64k,uid=101,gid=101
     networks:
       - web
     environment:
@@ -97,12 +133,12 @@ services:
       - BRAND_AUTHOR=${BRAND_AUTHOR:-}
       - BRAND_GITHUB=${BRAND_GITHUB:-}
     ports:
-      - "8000:80"
+      - "8000:8080"
     depends_on:
       format-service:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -113,3 +149,12 @@ networks:
   web: {}
   # 内部网络：格式化后端 ↔ 查询代理（宿主与前端均不可达）
   internal: {}
+
+volumes:
+  # 查询日志文件通道；业务编排仍无状态，日志卷由 Docker 按 appuser UID 预置权限
+  format-query-logs:
+    driver: local
+    driver_opts:
+      device: tmpfs
+      o: size=512m,uid=10001,gid=10001
+      type: tmpfs

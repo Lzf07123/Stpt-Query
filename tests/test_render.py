@@ -1,7 +1,8 @@
 """渲染纯函数测试：与原 Dify 代码节点行为一致。"""
 from __future__ import annotations
 
-from app.render import assemble, extract_session, format_grades, format_schedule, preprocess_grades
+from app.render import (assemble, extract_session, format_grades, format_schedule,
+                        preprocess_grades, sanitize_markdown)
 
 
 def test_extract_session_from_json_string():
@@ -60,3 +61,21 @@ def test_strip_login_note_for_pdf_and_history():
     assert "jump/go" not in out
     assert "我的成绩" in out
     assert "| 1 | 高数 | 90 |" in out
+
+
+def test_upstream_markdown_is_sanitized_before_output():
+    malicious = ("![x](https://attacker.example/pixel)\n"
+                 "<script>alert(1)</script>\n"
+                 "[文本](javascript:alert(1))\n"
+                 "| A |\n|---|\n| B |")
+    cleaned = sanitize_markdown(malicious)
+    rendered = format_grades({
+        "rows": [{"semester": "2025", "courseName": "bad | course", "score": "80"}]
+    }, {})
+    assert "<script>" not in cleaned
+    assert "![" not in cleaned
+    assert "javascript:" not in cleaned
+    assert "<script>" not in rendered
+    assert "![" not in rendered
+    assert "javascript:" not in rendered
+    assert "bad \\| course" in rendered

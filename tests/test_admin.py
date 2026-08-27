@@ -1,0 +1,105 @@
+"""管理端契约：独立鉴权、文件历史检索与资源监控。"""
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from app.main import Settings, create_app
+from app.querylog import JSONLFileWriter
+
+
+ADMIN = {"Authorization": "Bearer " + ("b" * 24)}
+
+
+def _settings(tmp_path, **kwargs):
+    options = {
+        "environment": "development",
+        "auto_rotate_token": False,
+        "api_token": "gateway-token",
+        "admin_token": "b" * 24,
+        "service_base_url": "http://127.0.0.1:9",
+        "service_api_token": "upstream-token",
+        "llm_api_key": "",
+        "file_log_enabled": True,
+        "file_log_path": str(tmp_path / "queries.jsonl"),
+    }
+    options.update(kwargs)
+    return Settings(**options)
+
+
+def test_admin_endpoints_require_independent_admin_token(tmp_path):
+    app = create_app(_settings(tmp_path))
+    with TestClient(app) as client:
+        assert client.get("/admin/api/query-logs").status_code == 404
+        wrong = client.get("/admin/api/metrics", headers={"Authorization": "Bearer gateway-token"})
+        assert wrong.status_code == 404
+        assert client.get("/admin/api/metrics", headers=ADMIN).status_code == 200
+        # 管理员令牌不能反向访问网关 API，避免身份复用。
+        assert client.get("/query-logs", headers=ADMIN).status_code == 401
+
+
+def test_admin_query_logs_filters_and_paginates_file_history(tmp_path):
+    path = tmp_path / "nested" / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    records = [
+        {"event": "query", "time": "2026-08-26T10:00:00+08:00", "run_id": "run-a",
+         "client_ip": "192.168.1.2", "username": "2023000001", "option": "成绩",
+         "success": True, "kind": "grades", "elapsed_ms": 100},
+        {"event": "query", "time": "2026-08-27T11:00:00+08:00", "run_id": "run-b",
+         "client_ip": "192.168.1.3", "username": "2023000002", "option": "课表",
+         "success": False, "kind": "login_error", "elapsed_ms": 200},
+        {"event": "query", "time": "2026-08-28T12:00:00+08:00", "run_id": "run-c",
+         "client_ip": "192.168.1.4", "username": "2023000003", "option": "成绩",
+         "success": False, "kind": "render_error", "elapsed_ms": 300},
+    ]
+    for record in reversed(records):
+        writer.write_raw(record)
+
+    with TestClient(create_app(_settings(tmp_path, file_log_path=str(path)))) as client:
+        payload = client.get("/admin/api/query-logs?limit=1", headers=ADMIN).json()
+        assert [item["run_id"] for item in payload["logs"]] == ["run-c"]
+        assert payload["total"] == 3
+        assert payload["source"] == "file"
+        assert payload["pagination"]["has_more"] is True
+        assert payload["stats"] == {
+            "success": 1, "failure": 2,
+            "kinds": {"grades": 1, "login_error": 1, "render_error": 1},
+        }
+
+        failed = client.get("/admin/api/query-logs?success=false&keyword=3000002",
+                            headers=ADMIN).json()
+        assert failed["total"] == 1
+        assert failed["logs"][0]["kind"] == "login_error"
+        assert all(key not in failed["logs"][0] for key in ("password", "token", "session"))
+
+
+def test_admin_metrics_reports_snapshot_and_service_status(tmp_path):
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        body = client.get("/admin/api/metrics", headers=ADMIN).json()
+        assert body["services"]["redis"] == "not-configured"
+        assert body["services"]["file_log"] == "ok"
+        assert isinstance(body["history"], list)
+        snapshot = body["latest"]
+        assert snapshot is not None
+        assert snapshot["cpu_percent"] is None
+        assert snapshot["memory"]["limit_source"] == "cgroup"
+        assert set(snapshot) >= {"collected_at", "process", "disk", "network", "uptime_seconds"}
+        assert set(snapshot) >= {"host", "storage", "orchestration"}
+        assert snapshot["host"]["source"] in {"host_proc", "container_kernel"}
+        assert snapshot["host"]["scope"] in {"docker_vm", "linux_kernel"}
+        assert set(snapshot["host"]) >= {
+            "cpu_percent", "cpu_count", "memory", "load", "uptime_seconds", "disk", "network",
+        }
+        assert set(snapshot["storage"]) >= {
+            "available", "file_bytes", "file_growth_bytes_per_second", "backup_count", "disk",
+        }
+        stack = snapshot["orchestration"]["memory"]
+        assert set(stack) >= {
+            "memory_bytes", "limit_bytes", "source", "discovered_services", "expected_services", "services",
+        }
+        assert stack["expected_services"] == 3
+        assert stack["services"]["format-service"]["source"] == "cgroup"
+        assert set(stack["services"]) == {"format-service", "get-infomation-service", "frontend"}
+        assert set(body) >= {"generated_at", "application", "services"}
+        assert body["application"]["window_seconds"] == 300
+        assert body["application"]["requests"] == 0
+        assert body["application"]["elapsed_p95_ms"] is None

@@ -6,21 +6,22 @@
   <title></title>
   <link rel="icon" href="/image/icon.svg">
   <meta name="description" content="">
-  <meta name="theme-color" content="#F6FBF9">
+  <meta name="theme-color" content="#3A3F45">
   <meta name="color-scheme" content="light dark">
+  <script src="/health-status.js?v=1" defer></script>
   <script>
     (function () {
       var t = null;
       try { t = localStorage.getItem("eduquery-theme"); } catch (e) {}
       if (t !== "dark" && t !== "light") {
-        t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        t = "dark";
       }
       document.documentElement.classList.toggle("dark", t === "dark");
       var meta = document.querySelector('meta[name="theme-color"]');
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=32">
+  <link rel="stylesheet" href="/style.css?v=43">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
 </head>
@@ -50,6 +51,11 @@
     <div id="offlineBar" class="notice notice-warning hidden" aria-live="polite"></div>
     <div class="layout">
       <form id="queryForm" class="card card-signature card-halo">
+        <div id="healthStatus" class="health-strip" role="status" aria-live="polite">
+          <span class="health-pill unknown"><i class="health-dot"></i><span>本站 · 检测中</span></span>
+          <span class="health-pill unknown"><i class="health-dot"></i><span>查询代理 · 检测中</span></span>
+          <span class="health-pill unknown"><i class="health-dot"></i><span>学校服务 · 检测中</span></span>
+        </div>
         <div class="row">
           <div>
             <label for="username">学号</label>
@@ -160,6 +166,13 @@
             <span>返回查询</span>
           </button>
         </div>
+        <div id="runIdMeta" class="run-id-meta hidden">
+          <span>运行ID</span>
+          <button class="run-id-copy" id="runIdCopy" type="button" aria-label="复制运行ID">
+            <code id="runIdValue">—</code>
+            <span class="run-id-copy-state" id="runIdCopyState">复制</span>
+          </button>
+        </div>
         <div id="skeleton" class="skeleton" hidden aria-hidden="true">
           <div class="skeleton-line"></div>
           <div class="skeleton-row"></div>
@@ -228,6 +241,10 @@
     const skeleton = document.getElementById("skeleton");
     const statusBox = document.getElementById("status");
     const resultCard = document.getElementById("resultCard");
+    const runIdMeta = document.getElementById("runIdMeta");
+    const runIdValue = document.getElementById("runIdValue");
+    const runIdCopy = document.getElementById("runIdCopy");
+    const runIdCopyState = document.getElementById("runIdCopyState");
     const resultHtml = document.getElementById("resultHtml");
     const resultBox = document.getElementById("result");
     const layout = document.querySelector(".layout");
@@ -244,12 +261,14 @@
     // Cookie 工具：历史查询记录（不含密码）
     const HISTORY_KEY = "dify_query_results_v3";
     const MAX_HISTORY = 5;
+    const MAX_CACHE_AGE_MS = 6 * 60 * 60 * 1000;
 
     function setCookie(name, value, days) {
       const date = new Date();
       date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
       document.cookie = name + "=" + encodeURIComponent(value) +
-        "; expires=" + date.toUTCString() + "; path=/; SameSite=Lax";
+        "; expires=" + date.toUTCString() + "; path=/; SameSite=Lax" +
+        (window.location.protocol === "https:" ? "; Secure" : "");
     }
 
     function getCookie(name) {
@@ -344,6 +363,20 @@
       setCookie(HISTORY_KEY, JSON.stringify(arr), 30);
     }
 
+    function pruneExpiredHistory() {
+      const now = Date.now();
+      const original = loadHistory();
+      const valid = original.filter(function (r) {
+        return typeof r.savedAt === "number" && now - r.savedAt < MAX_CACHE_AGE_MS;
+      });
+      if (valid.length !== original.length) {
+        original.filter(function (r) { return valid.indexOf(r) === -1; })
+          .forEach(function (r) { removeResultText(r.id); });
+        setCookie(HISTORY_KEY, JSON.stringify(valid), 30);
+      }
+      return valid;
+    }
+
     function renderHistorySelect() {
       const arr = loadHistory();
       const current = historyTrigger.getAttribute("data-label") || "";
@@ -378,6 +411,7 @@
             (mins < 1 ? "刚刚" : mins + " 分钟前") + "</div>";
         }
         if (rec.isMarkdown) {
+          setRunId(rec.runId);
           resultHtml.classList.remove("hidden");
           resultBox.classList.add("hidden");
           resultHtml.innerHTML = note + renderMarkdown(stripLoginNote(text));
@@ -635,6 +669,54 @@
       statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
     }
 
+    function setRunId(value) {
+      const runId = String(value || "");
+      clearTimeout(runIdCopyTimer);
+      runIdCopyState.textContent = "复制";
+      runIdCopy.classList.remove("copied");
+      if (runId) {
+        runIdMeta.classList.remove("hidden");
+        runIdValue.textContent = runId;
+        runIdValue.title = runId;
+        runIdCopy.title = "点击复制运行ID";
+      } else {
+        runIdMeta.classList.add("hidden");
+        runIdValue.textContent = "—";
+        runIdValue.removeAttribute("title");
+        runIdCopy.removeAttribute("title");
+      }
+    }
+
+    async function copyRunId() {
+      const runId = runIdValue.textContent.trim();
+      if (!runId || runId === "—") return;
+      let copied = false;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(runId);
+          copied = true;
+        } else {
+          const helper = document.createElement("textarea");
+          helper.value = runId;
+          helper.setAttribute("readonly", "readonly");
+          helper.className = "sr-only";
+          document.body.appendChild(helper);
+          helper.select();
+          copied = document.execCommand("copy");
+          helper.remove();
+        }
+      } catch (error) {
+        copied = false;
+      }
+      runIdCopyState.textContent = copied ? "已复制" : "复制失败";
+      runIdCopy.classList.toggle("copied", copied);
+      clearTimeout(runIdCopyTimer);
+      runIdCopyTimer = window.setTimeout(function () {
+        runIdCopyState.textContent = "复制";
+        runIdCopy.classList.remove("copied");
+      }, 1600);
+    }
+
     const TOAST_ICONS = {
       success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>',
       error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>',
@@ -685,6 +767,7 @@
 
     function showStateCard(icon, title, desc, withRetry) {
       clearTimeout(resultTimer);
+      setRunId("");
       skeleton.hidden = true;
       skeleton.setAttribute("aria-hidden", "true");
       resultBox.classList.add("hidden");
@@ -805,8 +888,8 @@
             const cls = item ? (item.success ? "success" : "fail") : "";
             const attrs = item
               ? ' data-success="' + (item.success ? "1" : "0") +
-                '" data-kind="' + (item.kind || (item.success ? "success" : "business_error")) +
-                '" data-time="' + (item.time || "") + '"'
+                '" data-kind="' + escapeHtml(item.kind || (item.success ? "success" : "business_error")) +
+                '" data-time="' + escapeHtml(item.time || "") + '"'
               : "";
             segments[i] = '<span class="status-seg ' + cls + '"' + attrs + "></span>";
           }
@@ -1222,8 +1305,10 @@
     }
 
     let resultTimer = 0;
+    let runIdCopyTimer = 0;
     function showResult(statusCode, body) {
       clearTimeout(resultTimer);
+      setRunId(body && typeof body === "object" ? body.run_id : "");
       skeleton.hidden = true;
       skeleton.setAttribute("aria-hidden", "true");
       resultCard.classList.remove("hidden");
@@ -1428,6 +1513,7 @@
               weeks: payload.weeks,
               md2pdf: payload.md2pdf,
               check: payload.check,
+              runId: data && typeof data === "object" ? data.run_id || "" : "",
               isMarkdown: markdown !== null,
               resultText: markdown !== null
                 ? stripLoginNote(markdown)
@@ -1448,7 +1534,7 @@
         );
       } catch (err) {
         if (err && err.name === "AbortError") return;
-        const cached = loadHistory().find(function (r) {
+        const cached = pruneExpiredHistory().find(function (r) {
           return r.username === payload.username &&
             r.option === payload.option &&
             (r.semesters || "") === (payload.semesters || "");
@@ -1516,6 +1602,13 @@
       this.textContent = show ? "隐藏" : "显示";
     });
 
+    runIdCopy.addEventListener("click", function () {
+      copyRunId().catch(function () {
+        runIdCopyState.textContent = "复制失败";
+        runIdCopy.classList.remove("copied");
+      });
+    });
+
     document.addEventListener("mousedown", function (event) {
       const btn = event.target.closest ? event.target.closest(".btn-primary, .btn-ghost") : null;
       if (!btn) return;
@@ -1531,6 +1624,7 @@
       setTimeout(function () { span.remove(); }, 600);
     });
 
+    pruneExpiredHistory();
     renderServiceStatus();
     renderHistorySelect();
     restoreUrlParams();

@@ -18,7 +18,7 @@ class WorkflowRequest(BaseModel):
         pattern=r"^\d{10}$",
         description="学号（10 位数字）",
     )
-    password: str = Field(..., min_length=1, description="密码")
+    password: str = Field(..., min_length=1, max_length=256, description="密码")
     option: str = Field(..., max_length=20, description="查询项目：成绩 / 课表")
     semesters: Optional[str] = Field(
         default=None,
@@ -32,7 +32,8 @@ class WorkflowRequest(BaseModel):
     )
     md2pdf: bool = Field(default=False, description="仅生成 PDF（仅成绩适用）")
     check: bool = Field(default=False, description="分析成绩（默认不分析）")
-    user: Optional[str] = Field(default=None, description="终端用户标识，默认取 username")
+    user: Optional[str] = Field(default=None, max_length=100,
+                                description="终端用户标识，默认取 username")
     inputs: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Dify 风格 inputs（兼容），字段自动合并到顶层，平铺字段优先",

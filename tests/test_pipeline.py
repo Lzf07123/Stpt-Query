@@ -32,6 +32,8 @@ class FakeService:
 
 
 class FakeLLM:
+    last_usage = {"total_tokens": 46}
+
     def __init__(self) -> None:
         self.called = False
 
@@ -53,6 +55,7 @@ async def test_grades_without_check():
     assert "免密登录教务系统" in result["output"]
     assert "高数" in result["output"]
     assert "session" not in result["output"]  # 不泄漏登录响应
+    assert "count\":1" in result["meta"]["response_summary"]
 
 
 async def test_grades_with_check_calls_llm_and_assembles():
@@ -61,6 +64,9 @@ async def test_grades_with_check_calls_llm_and_assembles():
     result = await Pipeline(service=svc, llm=llm).run(_req(check=True))
     assert llm.called
     assert result["output"].endswith("分析正文")
+    assert result["meta"]["analysis_used"] is True
+    assert result["meta"]["analysis_usage"] == 46
+    assert "count\":1" in result["meta"]["response_summary"]
     assert "TABLE".lower() in result["output"].lower() or "高数" in result["output"]
 
 
@@ -75,6 +81,7 @@ async def test_login_connection_failure_is_classified_not_500():
     assert not result["success"]
     assert result["kind"] == "login_error"
     assert "上游服务连接失败" in result["output"]
+    assert "ConnectTimeout" in result["meta"]["response_summary"]
 
 
 async def test_login_failure_returns_friendly_report():
@@ -95,3 +102,4 @@ async def test_schedule_branch():
     result = await Pipeline(service=svc, llm=FakeLLM()).run(_req(option="课表"))
     assert result["success"] and result["kind"] == "schedule"
     assert result["output"].startswith("[点击下载课表（Word 文件）]")
+    assert "download_url" in result["meta"]["response_summary"]

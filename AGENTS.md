@@ -6,7 +6,7 @@
 
 edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写为三容器编排服务，不再依赖 Dify：
 
-- **get-infomation-service（查询代理）**：复用 `../STPT-Query/get-infomation-service`，负责学校统一认证登录、免密跳转、成绩/课表原始查询。
+- **get-infomation-service（查询代理）**：源码自包含于本仓库同名目录，负责学校统一认证登录、免密跳转、成绩/课表原始查询。
 - **format-service（格式化后端）**：本仓库维护，负责编排固定工作流、成绩/课表 Markdown 渲染、成绩分析 LLM、异常分类与 PDF。
 - **frontend（前端）**：Nginx 托管原 dify-workflow-api 页面，是唯一对外入口，反向代理 `/run`、`/service-status`、`/health*` 并注入网关令牌。
 
@@ -19,13 +19,13 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 - `format-service/app/`：编排与渲染代码事实。
 - `frontend/`：页面与 nginx 模板事实。
 - `design-system/edu-query-app/`：项目内品牌方案（BRAND/MASTER），前端视觉决策的唯一事实来源。
-- `tests/`：行为契约（渲染、分类、编排、HTTP、查询日志）。
+- `tests/`：行为契约（渲染、分类、编排、HTTP、查询日志、安全与过载保护）。
 - `docs/kubernetes-migration.md`：未来 K8s 迁移映射。
 - `Li-Design/`：Git 子模块，**仅作设计/README 规范参考，非运行时依赖**。
 
 ## 三、硬性规则
 
-1. **三容器边界不变**：查询代理复用 `../STPT-Query/get-infomation-service`，禁止在本仓库复制或修改其代码；需要调整查询能力时改上游仓库。
+1. **三容器边界不变**：查询代理源码自包含在 `get-infomation-service/`；禁止把查询代理再复制到其他服务目录，也不允许绕过本仓库恢复兄弟仓库构建依赖。
 2. **唯一对外入口**：只有 `frontend` 映射宿主端口；`format-service` 与 `get-infomation-service` 不得暴露宿主端口；查询代理仅挂 `internal` 网络。
 3. **编排层无状态**：`format-service` 不落盘业务状态；PDF 以 Base64 内联返回，不引入文件存储/PV。
 4. **令牌安全**：固定 `API_TOKEN`（前端与后端共用）；nginx 反代时注入 `Authorization`；页面不得持有令牌；日志与响应不得输出密码/session/token。
@@ -58,7 +58,7 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 # 1. 编排配置合法
 docker compose config --quiet
 
-# 2. 单元测试（38 个用例，全部通过）
+# 2. 单元测试（43 个用例，全部通过）
 docker build -q -t format-service:test format-service
 docker run --rm -v "$PWD":/app -w /app format-service:test \
   sh -c "pip install -q pytest pytest-asyncio && pytest -q"

@@ -1,7 +1,7 @@
-"""OpenAI 兼容 LLM 客户端：替代 Dify 的 DeepSeek 插件。
+"""OpenAI 兼容 LLM 客户端：替代 Dify 的成绩分析插件。
 
-默认直连 DeepSeek（https://api.deepseek.com），通过 LLM_BASE_URL/LLM_MODEL
-可切换任意 OpenAI 兼容供应商（阿里云百炼、通义等），不依赖任何供应商 SDK。
+默认直连智谱开放平台（https://open.bigmodel.cn/api/paas/v4），通过
+LLM_BASE_URL/LLM_MODEL 可切换任意 OpenAI 兼容供应商，不依赖供应商 SDK。
 """
 from __future__ import annotations
 
@@ -19,12 +19,15 @@ class LLMError(RuntimeError):
 class LLMClient:
     def __init__(
         self,
-        base_url: str = "https://api.deepseek.com",
+        base_url: str = "https://open.bigmodel.cn/api/paas/v4",
         api_key: str = "",
-        model: str = "deepseek-v4-flash",
+        model: str = "glm-4.5-flash",
         timeout: float = 60.0,
         temperature: float = 0.0,
-        max_tokens: int = 1024,
+        max_tokens: int = 2048,
+        enable_thinking: bool = True,
+        system_prompt: str = "",
+        transport: Optional[httpx.AsyncBaseTransport] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -32,36 +35,48 @@ class LLMClient:
         self.timeout = timeout
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.enable_thinking = enable_thinking
+        self.system_prompt = system_prompt.strip()
+        self.last_usage: Optional[Dict[str, Any]] = None
+        self.client = httpx.AsyncClient(timeout=timeout, transport=transport)
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
 
     async def chat(self, system: str, user: str) -> str:
         """调用 chat/completions，返回纯文本内容。"""
         if not self.api_key:
             raise LLMError("LLM_API_KEY 未配置")
+        self.last_usage = None
+        effective_system = self.system_prompt or system
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system},
+                {"role": "system", "content": effective_system},
                 {"role": "user", "content": user},
             ],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": False,
+            "thinking": {"type": "enabled" if self.enable_thinking else "disabled"},
         }
         headers = {
             "Authorization": "Bearer %s" % self.api_key,
             "Content-Type": "application/json",
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.post(
-                    self.base_url + "/chat/completions", json=payload, headers=headers)
+            resp = await self.client.post(
+                self.base_url + "/chat/completions", json=payload, headers=headers)
         except httpx.HTTPError as exc:
             raise LLMError("LLM 请求失败：%s" % exc.__class__.__name__) from exc
         if resp.status_code >= 400:
             LOG.warning("LLM 上游错误 status=%s body=%s", resp.status_code, resp.text[:200])
             raise LLMError("LLM 上游错误 status=%s" % resp.status_code)
         try:
-            content = resp.json()["choices"][0]["message"]["content"]
+            response_payload = resp.json()
+            content = response_payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, ValueError) as exc:
             raise LLMError("LLM 响应缺少 choices[0].message.content") from exc
+        usage = response_payload.get("usage")
+        self.last_usage = usage if isinstance(usage, dict) else None
         return str(content or "").strip()

@@ -1,16 +1,57 @@
+log_format privacy '$remote_addr - $remote_user [$time_local] '
+                   '"$request_method $uri $server_protocol" $status '
+                   '$body_bytes_sent "$http_referer" "$http_user_agent"';
+
 server {
-    listen 80;
     server_name _;
+
+    listen 8080;
+    server_tokens off;
+    access_log /dev/stdout privacy;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-CuiBh61aS0QMjNZpnt4If4kDCSmsx4XSZ/OE4EOCZe8=' 'sha256-U321n3FrTBv0T9llVwk7omTz8J7XMKyB/OBllj/NZlE=' 'sha256-y8JRKoR5pl+X52aZ3ZYKWOSTroVbem8eD1908CUt0to='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
 
     root /usr/share/nginx/html;
     index index.html;
+
+    location = /brand-env.js {
+        root /tmp/brand;
+    }
 
     location / {
         try_files $uri $uri/ /index.html;
     }
 
-    # 反向代理到格式化后端；令牌由服务端注入，外部请求无需携带
-    location ~ ^/(run|v1/workflows/run|service-status|health.*|jump(/.*)?|get_schedule/export)$ {
+    location = /admin {
+        root /usr/share/nginx/html;
+        try_files /admin.html =404;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # 管理端浏览器凭据必须原样透传；这里禁止服务端注入公共网关令牌。
+    location ^~ /admin/api/ {
+        proxy_pass http://format-service:8000/admin/api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_http_version 1.1;
+        proxy_read_timeout 15s;
+        client_max_body_size 16k;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # 查询串包含一次性个人票号；不在边缘日志保留这些 URL。
+    location = /jump/go {
+        access_log off;
+        # 桥接页是一次性内联脚本；精确哈希避免继承静态站点 CSP 后脚本被拦截。
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-OH8gUQ7Q9SYCDbphqBc7Cs4B7CWHxFl43qPdr39Enns='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
         proxy_pass http://format-service:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -19,5 +60,47 @@ server {
         proxy_http_version 1.1;
         proxy_read_timeout 300s;
         client_max_body_size 2m;
+        proxy_hide_header X-Content-Type-Options;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Referrer-Policy;
+        proxy_hide_header Permissions-Policy;
+        proxy_hide_header Cross-Origin-Opener-Policy;
+        proxy_hide_header Content-Security-Policy;
+    }
+
+    location = /get_schedule/export {
+        access_log off;
+        proxy_pass http://format-service:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization "Bearer ${API_TOKEN}";
+        proxy_http_version 1.1;
+        proxy_read_timeout 300s;
+        client_max_body_size 2m;
+        proxy_hide_header X-Content-Type-Options;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Referrer-Policy;
+        proxy_hide_header Permissions-Policy;
+        proxy_hide_header Cross-Origin-Opener-Policy;
+        proxy_hide_header Content-Security-Policy;
+    }
+
+    # 反向代理到格式化后端；令牌由服务端注入，外部请求无需携带
+    location ~ ^/(run|v1/workflows/run|service-status|health(/.*)?|jump(/.*)?|get_schedule/export)$ {
+        proxy_pass http://format-service:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization "Bearer ${API_TOKEN}";
+        proxy_http_version 1.1;
+        proxy_read_timeout 300s;
+        client_max_body_size 2m;
+        proxy_hide_header X-Content-Type-Options;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Referrer-Policy;
+        proxy_hide_header Permissions-Policy;
+        proxy_hide_header Cross-Origin-Opener-Policy;
+        proxy_hide_header Content-Security-Policy;
     }
 }

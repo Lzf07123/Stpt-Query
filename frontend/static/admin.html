@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>后台 · 教务信息查询</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" href="/image/icon.svg">
+  <meta name="theme-color" content="#3A3F45">
+  <script>
+    (function () {
+      var theme = null;
+      try { theme = localStorage.getItem("eduquery-theme"); } catch (e) {}
+      if (theme !== "dark" && theme !== "light") theme = "dark";
+      document.documentElement.classList.toggle("dark", theme === "dark");
+    })();
+  </script>
+  <link rel="stylesheet" href="/style.css?v=55">
+</head>
+<body>
+  <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
+    <div class="tech-grid"></div>
+    <span class="tech-beam"></span>
+    <span class="tech-beam tech-beam--violet"></span>
+  </div>
+
+  <main class="wrap" id="main">
+    <section class="layout admin-layout" aria-labelledby="loginHeading">
+      <form class="card admin-card" id="loginForm">
+        <h2 id="loginHeading" class="section-title">管理员验证</h2>
+        <p class="muted-text">请输入 ADMIN_TOKEN。凭据仅保存在当前标签页。</p>
+        <label class="field-label" for="adminToken">管理员令牌</label>
+        <input class="input" id="adminToken" type="password" autocomplete="current-password" required>
+        <button class="btn btn-primary" type="submit">进入后台</button>
+        <output class="notice notice-info hidden" id="loginMessage" role="status"></output>
+      </form>
+    </section>
+
+    <section class="layout admin-app layout-wide" id="adminApp" hidden aria-label="后台工作台">
+      <header class="admin-page-head" aria-label="后台页眉">
+        <div class="admin-brand">
+          <h1 class="admin-title">后台管理</h1>
+          <span class="admin-scope">仅管理员</span>
+        </div>
+        <nav class="segmented tab-group admin-nav" aria-label="后台视图">
+          <button class="seg-btn admin-nav-btn active" id="tabMetrics" data-tab="metrics" type="button" aria-current="page">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20a8 8 0 1 1 8-8"/><path d="M12 12l4-4"/></svg>
+            <span>资源监控</span>
+          </button>
+          <button class="seg-btn admin-nav-btn" id="tabLogs" data-tab="logs" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v15H4z"/><path d="M8 9h8M8 13h8M8 17h4"/></svg>
+            <span>查询日志</span>
+          </button>
+        </nav>
+        <div class="admin-head-actions">
+          <button class="btn secondary-btn" id="logoutBtn" type="button">退出</button>
+          <button class="btn theme-toggle" id="themeToggle" type="button" aria-label="切换主题"></button>
+        </div>
+      </header>
+
+      <section class="panel" id="metricsPanel">
+        <div class="card resource-hero">
+          <div class="resource-head">
+            <div>
+              <p class="resource-eyebrow">实时采集</p>
+              <h2>资源监控</h2>
+              <small id="metricsUpdated">等待采样</small>
+            </div>
+            <div class="resource-actions">
+              <span class="resource-notice" id="metricsNotice" aria-live="polite">连接中</span>
+              <button class="btn secondary-btn" id="metricsRefresh" type="button">立即刷新</button>
+            </div>
+          </div>
+
+          <div class="key-metric-grid">
+            <article class="card key-metric">
+              <span>查询成功率</span>
+              <strong id="requestSuccessRate">—</strong>
+              <small><b id="requestCount">—</b> 个请求</small>
+            </article>
+            <article class="card key-metric">
+              <span>P95 耗时</span>
+              <strong id="requestP95">—</strong>
+              <small>近 5 分钟响应</small>
+            </article>
+            <article class="card key-metric">
+              <span>宿主机 CPU</span>
+              <strong id="hostCpu">—</strong>
+              <small id="hostCpuMeta">—</small>
+            </article>
+            <article class="card key-metric">
+              <span>编排内存</span>
+              <strong id="memoryValue">—</strong>
+              <small id="stackMemoryInfo">等待采样</small>
+            </article>
+          </div>
+        </div>
+
+        <div class="section-caption">应用负载（近 5 分钟）</div>
+        <div class="metric-grid monitor-grid application-grid">
+          <article class="card metric-card"><span>成绩分析</span><strong id="analysisCount">—</strong><small>已执行分析</small></article>
+          <article class="card metric-card"><span>Token 用量</span><strong id="analysisTokens">—</strong><small>近 5 分钟累计</small></article>
+        </div>
+
+        <div class="section-caption">容器趋势与进程</div>
+        <div class="metric-grid monitor-grid">
+          <article class="card metric-card metric-card-wide">
+            <span>CPU 趋势（3 分钟 · 当前）</span>
+            <strong id="trendMax">—</strong>
+            <canvas class="trend-chart" id="cpuChart"></canvas>
+            <div class="trend-facts">
+              <small>峰值 <b id="trendPeak">—</b></small>
+              <small>均值 <b id="trendAverage">—</b></small>
+              <small>样本 <b id="trendSamples">0</b></small>
+            </div>
+          </article>
+          <article class="card metric-card metric-card-wide">
+            <span>编排内存分布</span>
+            <strong id="stackMemoryTotal">—</strong>
+            <div class="stack-service-list" id="stackServices">等待采样</div>
+          </article>
+          <article class="card metric-card"><span>进程 RSS</span><strong id="rssValue">—</strong><small id="threadInfo"></small></article>
+          <article class="card metric-card"><span>容器磁盘</span><strong id="diskValue">—</strong><small id="diskPath"></small></article>
+          <article class="card metric-card"><span>容器网络</span><strong id="networkValue">—</strong><small id="uptimeValue"></small></article>
+        </div>
+
+        <div class="section-caption">宿主机内核</div>
+        <div class="metric-grid monitor-grid host-grid">
+          <article class="card metric-card"><span>内存</span><strong id="hostMemory">—</strong><small id="hostMemoryMeta">—</small></article>
+          <article class="card metric-card"><span>负载</span><strong id="hostLoad">—</strong><small id="hostLoadMeta">—</small></article>
+          <article class="card metric-card"><span>运行时长</span><strong id="hostUptime">—</strong><small id="hostSource">—</small></article>
+          <article class="card metric-card"><span>磁盘读</span><strong id="hostDiskRead">—</strong><small id="hostDiskReadMeta">—</small></article>
+          <article class="card metric-card"><span>磁盘写</span><strong id="hostDiskWrite">—</strong><small id="hostDiskWriteMeta">—</small></article>
+          <article class="card metric-card"><span>网络下行</span><strong id="hostNetIn">—</strong><small id="hostNetInMeta">—</small></article>
+          <article class="card metric-card"><span>网络上行</span><strong id="hostNetOut">—</strong><small id="hostNetOutMeta">—</small></article>
+        </div>
+
+        <div class="section-caption">日志存储</div>
+        <div class="metric-grid monitor-grid">
+          <article class="card metric-card"><span>日志文件</span><strong id="storageFile">—</strong><small id="storageGrowth">—</small></article>
+          <article class="card metric-card"><span>轮转文件</span><strong id="storageBackups">—</strong><small>双写文件通道</small></article>
+          <article class="card metric-card"><span>磁盘可用</span><strong id="storageFree">—</strong><small id="storageTotal">—</small></article>
+          <article class="card metric-card"><span>写入状态</span><strong id="storageState">—</strong><small id="storageSource">—</small></article>
+        </div>
+
+        <div class="card service-card">
+          <h2 class="section-title">服务组件</h2>
+          <dl id="serviceList" class="service-list"></dl>
+          <label class="field-check live-check"><input id="autoMetrics" type="checkbox" checked> 每 5 秒采集</label>
+        </div>
+      </section>
+
+      <section class="panel" id="logsPanel" hidden>
+        <form class="card filter-card logs-primary" id="logFilter">
+          <div class="filter-grid">
+            <label>关键字<input class="input" name="keyword" placeholder="学号 / 运行ID / IP / 消息" maxlength="100"></label>
+            <div class="filter-fields" id="advancedFilters">
+              <div class="filter-control">
+                <label for="successTrigger">状态</label>
+                <div class="custom-select" data-custom-select>
+                  <select class="custom-select-native" name="success" aria-label="状态"><option value="">全部</option><option value="true">成功</option><option value="false">失败</option></select>
+                  <button class="custom-select-trigger" id="successTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="successMenu"><span class="custom-select-value">全部</span><svg class="custom-select-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+                  <ul class="custom-select-menu" id="successMenu" role="listbox" aria-labelledby="successTrigger" hidden><li class="custom-select-option" id="successOptionAll" role="option" data-value="" aria-selected="true" tabindex="-1">全部</li><li class="custom-select-option" id="successOptionTrue" role="option" data-value="true" aria-selected="false" tabindex="-1">成功</li><li class="custom-select-option" id="successOptionFalse" role="option" data-value="false" aria-selected="false" tabindex="-1">失败</li></ul>
+                </div>
+              </div>
+              <label>分类<input class="input" name="kind" placeholder="例如 login_error" maxlength="60"></label>
+              <div class="filter-control">
+                <label for="optionTrigger">项目</label>
+                <div class="custom-select" data-custom-select>
+                  <select class="custom-select-native" name="option" aria-label="查询项目"><option value="" selected>全部项目</option><option value="成绩">成绩</option><option value="课表">课表</option></select>
+                  <button class="custom-select-trigger" id="optionTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="optionMenu"><span class="custom-select-value">全部项目</span><svg class="custom-select-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+                  <ul class="custom-select-menu" id="optionMenu" role="listbox" aria-labelledby="optionTrigger" hidden><li class="custom-select-option" id="optionOptionAll" role="option" data-value="" aria-selected="true" tabindex="-1">全部项目</li><li class="custom-select-option" id="optionOptionGrades" role="option" data-value="成绩" aria-selected="false" tabindex="-1">成绩</li><li class="custom-select-option" id="optionOptionSchedule" role="option" data-value="课表" aria-selected="false" tabindex="-1">课表</li></ul>
+                </div>
+              </div>
+              <label>开始时间<input class="input" name="time_from" type="datetime-local"></label>
+              <label>结束时间<input class="input" name="time_to" type="datetime-local"></label>
+              <div class="filter-control">
+                <label for="limitTrigger">每页</label>
+                <div class="custom-select" data-custom-select>
+                  <select class="custom-select-native" name="limit" aria-label="每页数量"><option value="20">20 条</option><option value="50" selected>50 条</option><option value="100">100 条</option><option value="200">200 条</option></select>
+                  <button class="custom-select-trigger" id="limitTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="limitMenu"><span class="custom-select-value">50 条</span><svg class="custom-select-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+                  <ul class="custom-select-menu" id="limitMenu" role="listbox" aria-labelledby="limitTrigger" hidden><li class="custom-select-option" id="limitOption20" role="option" data-value="20" aria-selected="false" tabindex="-1">20 条</li><li class="custom-select-option" id="limitOption50" role="option" data-value="50" aria-selected="true" tabindex="-1">50 条</li><li class="custom-select-option" id="limitOption100" role="option" data-value="100" aria-selected="false" tabindex="-1">100 条</li><li class="custom-select-option" id="limitOption200" role="option" data-value="200" aria-selected="false" tabindex="-1">200 条</li></ul>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="filter-actions">
+            <button class="btn btn-primary" type="submit">查询</button>
+            <button class="btn secondary-btn filter-toggle" id="filterToggle" type="button" aria-expanded="false" aria-controls="advancedFilters">展开筛选</button>
+            <button class="btn secondary-btn" type="reset">重置</button>
+            <button class="btn secondary-btn" id="exportBtn" type="button">导出当前页</button>
+            <label class="field-check live-check"><input id="autoLogs" type="checkbox" checked> 每 10 秒刷新</label>
+          </div>
+        </form>
+
+        <div class="stat-row logs-primary">
+          <article class="card metric-card stat-card"><span>总匹配</span><strong id="statTotal">—</strong></article>
+          <article class="card metric-card stat-card"><span>成功</span><strong id="statSuccess">—</strong></article>
+          <article class="card metric-card stat-card"><span>失败</span><strong id="statFailure">—</strong></article>
+          <article class="card metric-card stat-card"><span>数据源</span><strong id="statSource">—</strong></article>
+        </div>
+
+        <div class="card table-card logs-primary">
+          <div class="table-scroll">
+            <table>
+              <caption class="sr-only">查询日志记录，仅管理员可见</caption>
+              <thead><tr><th>时间</th><th>学号</th><th>项目</th><th>结果</th><th>分类</th><th>分析</th><th>Token用量</th><th>耗时</th><th>运行ID</th><th>IP</th><th>详情</th></tr></thead>
+              <tbody id="logsBody"><tr><td colspan="11" class="empty-cell">暂无数据</td></tr></tbody>
+            </table>
+          </div>
+          <div class="pagination">
+            <button class="btn secondary-btn" id="prevPage" type="button">上一页</button>
+            <span id="pageInfo">第 1 页</span>
+            <button class="btn secondary-btn" id="nextPage" type="button">下一页</button>
+          </div>
+        </div>
+
+        <section class="card log-detail-panel" id="logDetailPanel" hidden aria-labelledby="logDetailTitle">
+          <div class="log-detail-head">
+            <div>
+              <p class="detail-eyebrow">二级日志查询</p>
+              <h2 id="logDetailTitle">日志详情</h2>
+              <small id="detailMeta">等待加载</small>
+            </div>
+            <div class="log-detail-actions">
+              <button class="btn secondary-btn" id="detailBack" type="button">返回日志列表</button>
+              <button class="btn secondary-btn" id="detailCopy" type="button">复制 JSON</button>
+            </div>
+          </div>
+
+          <div class="detail-summary">
+            <article><span>结果</span><strong id="detailResult">—</strong></article>
+            <article><span>分类</span><strong id="detailKind">—</strong></article>
+            <article><span>耗时</span><strong id="detailElapsed">—</strong></article>
+            <article><span>运行ID</span><strong id="detailRun">—</strong></article>
+          </div>
+
+          <section class="detail-section">
+            <h3>完整字段</h3>
+            <dl id="detailFields" class="detail-fields"></dl>
+          </section>
+
+          <section class="detail-section">
+            <h3>关联日志查询</h3>
+            <div class="scope-row" id="detailScopes"></div>
+            <p class="related-status" id="relatedStatus" aria-live="polite">准备查询</p>
+            <div class="table-scroll related-table">
+              <table>
+                <caption class="sr-only">二级关联查询日志记录</caption>
+                <thead><tr><th>时间</th><th>事件</th><th>学号</th><th>项目</th><th>结果</th><th>分类</th><th>分析</th><th>Token用量</th><th>耗时</th><th>消息</th><th>操作</th></tr></thead>
+                <tbody id="relatedBody"><tr><td colspan="11" class="empty-cell">暂无数据</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <details class="json-details">
+            <summary>原始 JSON</summary>
+            <pre id="detailJson"></pre>
+          </details>
+        </section>
+      </section>
+
+    </section>
+  </main>
+
+  <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
+  <script src="/brand-env.js?v=1" defer></script>
+  <script src="/brand.js?v=4" defer></script>
+  <script src="/admin.js?v=9" defer></script>
+</body>
+</html>

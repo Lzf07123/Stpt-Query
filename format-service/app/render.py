@@ -7,6 +7,12 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict, List, Tuple
+from urllib.parse import urlparse
+
+
+_IMAGE_SYNTAX = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+_HTML_TAG = re.compile(r"</?[a-zA-Z][^>]*>")
+_MD_LINK = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+\"[^\"]*\")?\s*\)")
 
 
 def _as_dict(data: Any) -> Dict[str, Any]:
@@ -26,6 +32,30 @@ def _as_dict(data: Any) -> Dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def _safe_http_url(raw: Any) -> str:
+    url = str(raw or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    return url
+
+
+def sanitize_markdown(text: str) -> str:
+    """只保留无脚本文本、标准 Markdown 和显式 HTTP(S) 链接。"""
+    cleaned = str(text or "")
+    cleaned = _IMAGE_SYNTAX.sub("", cleaned)
+    cleaned = _HTML_TAG.sub("", cleaned)
+
+    def _link(match: re.Match[str]) -> str:
+        label, url = match.group(1), match.group(2)
+        if _safe_http_url(url):
+            return "[%s](%s)" % (label.replace("[", "\\[").replace("]", "\\]"), url)
+        return label
+
+    cleaned = _MD_LINK.sub(_link, cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
 def _body_text(data: Any) -> str:
@@ -48,11 +78,7 @@ def _body_text(data: Any) -> str:
 
 
 def _extract_url(raw: Any) -> str:
-    if isinstance(raw, str):
-        m = re.search(r"https?://[^\s\"'<>，。；]+", raw)
-        if m:
-            return m.group(0).rstrip(".,;")
-    return ""
+    return _safe_http_url(_body_text(raw))
 
 
 def _login_note(raw: Any) -> str:
@@ -123,11 +149,16 @@ def _render_grade_table(data: Dict[str, Any]) -> str:
         for r in rows:
             lines.append(
                 "| %s | %s | %s | %s | %s | %s |"
-                % (r.get("semester", ""), r.get("courseName", ""), r.get("score", ""),
-                   r.get("gpa", ""), r.get("credit", ""), r.get("courseType", "")))
+                % tuple(_table_cell(r.get(key, "")) for key in (
+                    "semester", "courseName", "score", "gpa", "credit", "courseType")))
     else:
         lines.append("（暂无成绩数据）")
     return "\n".join(lines)
+
+
+def _table_cell(value: Any) -> str:
+    text = str(value or "").replace("\\", "\\\\").replace("|", "\\|")
+    return text.replace("\r", " ").replace("\n", " / ")
 
 
 def format_grades(http_response: Any, jump_body: Any) -> str:
@@ -139,14 +170,14 @@ def format_grades(http_response: Any, jump_body: Any) -> str:
     note = _login_note(jump_body)
     if note:
         output = note + "\n\n" + output
-    return output
+    return sanitize_markdown(output)
 
 
 def preprocess_grades(http_response: Any, jump_body: Any) -> Dict[str, str]:
     """原「成绩数据预处理」节点：拆出 prefix/table/stats 供成绩分析使用。"""
     data = _as_dict(http_response)
     output = str(data.get("output") or "").strip()
-    table = output or _render_grade_table(data)
+    table = sanitize_markdown(output) if output else _render_grade_table(data)
     note = _login_note(jump_body)
     prefix = (note + "\n\n" + table) if note else table
     stats = data.get("stats") or {}
@@ -161,7 +192,7 @@ def preprocess_grades(http_response: Any, jump_body: Any) -> Dict[str, str]:
 def assemble(prefix_text: str, analysis_text: str) -> str:
     """原「数据组装」节点：链接提示块 + 成绩表 + 分析正文。"""
     parts = [x for x in (str(prefix_text or "").strip(), str(analysis_text or "").strip()) if x]
-    return "\n\n".join(parts)
+    return sanitize_markdown("\n\n".join(parts))
 
 
 def _fmt_weeks(w: Any) -> str:
@@ -189,12 +220,15 @@ def _fmt_weeks(w: Any) -> str:
 
 
 def _cell_text(r: Dict[str, Any]) -> str:
-    bits = [str(r.get("courseName") or "").strip()]
+    def clean(value: Any) -> str:
+        return str(value or "").replace("|", "\\|").replace("\n", " ")
+
+    bits = [clean(r.get("courseName"))]
     extra = [
         x for x in (
-            str(r.get("teacherName") or "").strip(),
-            str(r.get("classroomName") or "").strip(),
-            _fmt_weeks(r.get("weeks")),
+            clean(r.get("teacherName")),
+            clean(r.get("classroomName")),
+            _fmt_weeks(r.get("weeks")).replace("|", "\\|").replace("\n", " "),
         ) if x
     ]
     if extra:
@@ -219,7 +253,7 @@ def _grid_from_rows(rows: List[Dict[str, Any]]) -> str:
     for t in time_codes:
         cells = [time_names.get(t, t)]
         for d in day_codes:
-            cells.append("<br>".join(_cell_text(r) for r in grid.get((t, d), [])))
+            cells.append(" / ".join(_cell_text(r) for r in grid.get((t, d), [])))
         lines.append("| " + " | ".join(c.replace("|", "\\|") for c in cells) + " |")
     return "\n".join(lines)
 
@@ -231,7 +265,7 @@ def format_schedule(http_response: Any, jump_body: Any) -> str:
     rows = data.get("rows") or []
     semester = str(data.get("semester") or "").strip() or (
         str(rows[0].get("semester") or "") if rows else "")
-    download_url = str(data.get("download_url") or "").strip()
+    download_url = _safe_http_url(data.get("download_url"))
 
     idx = output.find("### 课程明细")
     if idx != -1:
@@ -253,4 +287,4 @@ def format_schedule(http_response: Any, jump_body: Any) -> str:
     if download_url:
         lines.append("")
         lines.append("> ⚠️ 此链接含个人令牌，请勿外传。")
-    return "\n".join(lines)
+    return sanitize_markdown("\n".join(lines))

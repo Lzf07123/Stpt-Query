@@ -30,7 +30,7 @@
 
 ## 关于
 
-本仓库把固定的「汕职院教务信息查询」Dify 工作流重写为独立项目，由三个容器组成：`get-infomation-service`（查询代理）、`format-service`（格式化后端）与 `frontend`（前端）。查询代理复用 `../STPT-Query/get-infomation-service` 完成学校统一认证登录与教务查询；格式化后端负责编排固定工作流、成绩/课表渲染、成绩分析 LLM 与 PDF；前端托管原 dify-workflow-api 的完整页面，是唯一对外入口。
+本仓库把固定的「汕职院教务信息查询」Dify 工作流重写为自包含项目，由三个容器组成：`get-infomation-service`（查询代理）、`format-service`（格式化后端）与 `frontend`（前端）。查询代理源码保留在本仓库完成学校统一认证登录与教务查询；格式化后端负责编排固定工作流、成绩/课表渲染、成绩分析 LLM 与 PDF；前端托管原 dify-workflow-api 的完整页面，是唯一对外入口。
 
 | 项目 | 内容 |
 | --- | --- |
@@ -45,7 +45,7 @@
 | --- | --- |
 | 后端编排 | Python 3.11 · FastAPI + uvicorn · httpx（登录/跳转/成绩/课表编排与错误分类） |
 | 渲染与文档 | Markdown 渲染（1:1 移植原代码节点）· reportlab PDF（内置 CID 中文字体） |
-| LLM | OpenAI 兼容协议直连（默认 DeepSeek `deepseek-v4-flash`） |
+| LLM | OpenAI 兼容协议直连（默认智谱 `glm-4.5-flash`，可关闭深度思考并覆盖系统提示词） |
 | 前端 | Nginx 静态页面 + Tailwind CSS 4 品牌令牌（构建期 CLI 编译、运行时零第三方资源）+ 反向代理注入网关令牌 |
 | 部署 | Docker Compose 三容器 · 双层网络隔离 · 可选 Redis（多副本） |
 | 测试与文档 | pytest 单元测试 · K8s 迁移指引 |
@@ -54,7 +54,7 @@
 
 | 项目 | 简介 | 技术栈 | 状态 |
 | --- | --- | --- | --- |
-| [查询代理](https://github.com/Lzf07123/STPT-Query) | 复用 get-infomation-service：统一认证登录、免密跳转、成绩/课表查询 | Python · FastAPI · Redis | 活跃 |
+| [查询代理](get-infomation-service/) | 本仓库内嵌的 get-infomation-service：统一认证登录、免密跳转、成绩/课表查询 | Python · FastAPI · Redis | 活跃 |
 | [格式化后端](format-service/) | 编排固定工作流：查询代理调用、成绩/课表渲染、成绩分析 LLM、PDF | Python · FastAPI · httpx · reportlab | 活跃 |
 | [前端](frontend/) | Nginx 托管原 dify-workflow-api 页面并反向代理 /run 等接口 | Nginx | 活跃 |
 
@@ -69,7 +69,7 @@ flowchart LR
     G --> U2["学校教务系统（WebVPN/CAS）"]
 ```
 
-**端口与网络隔离**：仅 `frontend` 映射宿主端口 `8000`；`format-service` 挂 `web` 与 `internal` 两个网络；`get-infomation-service` 只挂 `internal` 内网——宿主与前端都无法直达查询代理，只能通过格式化后端在编排内调用。
+**端口与网络隔离**：仅 `frontend` 映射宿主端口 `8000`（容器内为无特权 `8080`）；`format-service` 挂 `web` 与 `internal` 两个网络；`get-infomation-service` 只挂 `internal` 内网——宿主与前端都无法直达查询代理，只能通过格式化后端在编排内调用。
 
 ## 与 Dify 工作流的映射
 
@@ -88,7 +88,8 @@ flowchart LR
 ## 查询日志与可观测性
 
 `format-service` 为每次查询输出**结构化 JSON 单行日志**（stdout），并保留最近 100 条到
-内存环形缓冲（配置 `REDIS_URL` 时写入 `gw:query-logs` 供多副本共享）。日志字段：
+内存环形缓冲。配置 `REDIS_URL` 时写入 `gw:query-logs`；启用 `FILE_LOG_ENABLED` 后
+同时以 JSONL 追加到 `FILE_LOG_PATH`，供文件与 Redis 双写留存。日志字段：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -97,14 +98,46 @@ flowchart LR
 | `client_ip` | 客户端地址（`TRUST_PROXY=true` 时取 `X-Forwarded-For` 首段） |
 | `username` / `option` | 学号 / 查询项目 |
 | `semesters` / `weeks` / `md2pdf` / `check` | 查询参数 |
+| `analysis` / `analysis_usage` | 成绩分析是否产出内容 / 消耗的总 token 数；无用量时为 `—` |
 | `success` / `kind` / `elapsed_ms` | 结果状态、分类与耗时 |
+| `response_summary` | 上游成功或失败响应的脱敏摘要，最多 300 字符；无摘要时为 `—` |
 
 - 日志**不包含**密码 / session / token；白名单字段之外一律丢弃（`app/querylog.py`）。
-- 查询日志只写 stdout，不落盘、不引入文件存储/PV，与「编排层无状态」硬规则一致；
-  生产环境由集中日志平台（Fluentd / Promtail / 云日志）采集。
+- 文件通道只保留白名单字段，权限为 `0600`；按 `FILE_LOG_MAX_BYTES` 轮转并最多保留
+  `FILE_LOG_BACKUP_COUNT` 个备份。Compose 默认挂载 512 MiB 的 managed tmpfs 卷，
+  Docker daemon 重启不保留文件；长期留存请改接持久卷或使用集中日志。
+- 业务编排数据仍不落盘；文件卷只承载查询日志。Redis 与文件互为冗余，任一失败不影响 `/run`
+  和另一条通道；最近一次文件错误可通过 `/health` 观察。
 - `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
   `docker compose exec format-service curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/query-logs`；
   生产建议经集中日志查询，不长期依赖进程内存。
+- 公开站通过 `GET /health/public` 获取本站、查询代理和学校服务的粗粒度状态；
+  接口只返回状态、延迟和检查时间，不暴露内部地址、错误详情或凭据，结果缓存 15 秒。
+
+### 管理后台
+
+打开 `/admin` 后输入独立 `ADMIN_TOKEN`；`ADMIN_TOKEN` 留空时后台 API 完全禁用。
+Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共网关令牌；因此查询用户无法访问。
+
+- `GET /admin/api/query-logs` 支持关键字、成功状态、分类、项目、时间范围和分页；
+  文件通道启用时默认按新→旧检索轮转 JSONL，未启用时降级 Redis/内存最近记录。
+- 响应返回匹配总数、成功率、失败分类和数据源。日志仍先经过白名单脱敏，页面只在当前
+  标签页的 `sessionStorage` 中保留管理员凭据，退出即清除。
+- `GET /admin/api/metrics` 暴露容器 CPU、内存/RSS、日志磁盘、网络累计、运行时长、
+  宿主机 CPU/内存/负载/磁盘 I/O/网络、日志文件存储增长和应用近 5 分钟负载；
+  编排内存按 format-service、查询代理、前端入口三个 cgroup 聚合，宿主 cgroup
+  不可读时按进程 RSS 估算并在界面标注；
+  并发与限流配置；后台 UI 每 5 秒刷新并绘制近三分钟 CPU 趋势（每 2 秒采样一次）。
+- 管理端是单实例运维视图：读取当前副本文件和本地进程指标；Redis 仅在无文件通道时作
+  历史降级源。生产多副本应继续把 stdout 交给集中平台聚合分析。
+- nginx 使用不含 query string 的隐私访问日志；携带个人票号的 `/jump/go` 与 `/get_schedule/export`
+  不写 access log。边缘响应启用 CSP、反点击劫持与 Referrer 隔离，本地历史结果只保留 6 小时。
+
+## 可靠性与过载保护
+
+- `format-service` 对 `/run` 设置全局并发槽位（默认 4）和等待超时；满载返回 HTTP 503。
+- 单次编排有总预算（默认 100 秒），避免学校上游或 LLM 故障长期占用连接。
+- `REDIS_URL` 配置后使用固定窗口共享限流；Redis 不可用时 `/run` 失败关闭，防止限流旁路。
 
 ## 当前目标
 
@@ -163,7 +196,7 @@ docker compose up -d --build
 > `BRAND_SLOGAN`、`BRAND_DESCRIPTION`、`BRAND_AUTHOR`、`BRAND_GITHUB` 覆盖；留空即使用
 > `frontend/static/brand.js` 的内置默认值，`BRAND_GITHUB=none` 隐藏页脚 GitHub 链接。
 
-> 前端与 `format-service` 共用固定 `API_TOKEN`（默认 `change-me`），由 nginx 反代时注入 `Authorization` 头，浏览器页面不持有令牌；`SERVICE_API_TOKEN` 必须与 `get-infomation-service` 的 `JWXT_API_TOKEN` 一致；`SERVICE_BASE_URL` 留空时 Compose 自动使用内部服务，仅当查询代理独立部署时才填其公网地址。
+> 前端与 `format-service` 共用固定 `API_TOKEN`（默认 `change-me`），由 nginx 反代时注入 `Authorization` 头，浏览器页面不持有令牌；`SERVICE_API_TOKEN` 必须与 `get-infomation-service` 的 `JWXT_API_TOKEN` 一致。生产环境必须把 `PUBLIC_BASE_URL` 改成 HTTPS 域名。
 
 ## 测试
 
@@ -187,8 +220,10 @@ cd frontend && npm install && npm run build
 
 ```text
 edu-query-app/
+├── get-infomation-service/    # 查询代理源码（登录/跳转/原始查询）
 ├── format-service/            # 格式化后端（编排 + 渲染 + 分析 + PDF）
 │   ├── app/main.py            # HTTP 层：/run /query-logs /health* /service-status
+│   ├── app/metrics.py         # 容器 CPU/内存/磁盘/网络资源监控
 │   ├── app/pipeline.py        # 固定工作流编排
 │   ├── app/render.py          # 成绩/课表渲染（原代码节点移植）
 │   ├── app/classifier.py      # 确定性异常分类
@@ -196,7 +231,7 @@ edu-query-app/
 │   ├── app/pdf.py             # Markdown→PDF
 │   ├── app/prompts.py         # 成绩分析提示词
 │   ├── app/schema.py          # 请求/响应模型
-│   ├── app/querylog.py        # 查询日志（stdout 结构化 JSON，脱敏）
+│   ├── app/querylog.py        # 查询日志（结构化 JSON、脱敏、可选文件轮转）
 │   ├── app/trace.py           # run_id 与日志
 │   ├── Dockerfile             # python:3.11-slim 镜像
 │   └── requirements.txt

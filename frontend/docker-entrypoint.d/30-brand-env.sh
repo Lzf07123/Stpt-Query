@@ -3,7 +3,8 @@
 # 未设置的变量写入空字符串，brand.js 会自动回退到内置默认值。
 set -e
 
-out=/usr/share/nginx/html/brand-env.js
+mkdir -p /tmp/brand
+out=/tmp/brand/brand-env.js
 
 json_escape() {
   awk -v s="$1" 'BEGIN {

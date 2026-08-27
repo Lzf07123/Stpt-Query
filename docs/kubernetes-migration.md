@@ -12,10 +12,11 @@
 | PDF 内联返回 | `pdf_base64` 直接放在响应里，无文件存储 | **无需 PV/PVC** |
 | 环境变量配置 | 全部配置来自 `.env`/环境变量（`Settings`） | ConfigMap + Secret 直接映射 |
 | 固定 API Token | 生产强制 `AUTO_ROTATE_TOKEN=false` + 固定 `API_TOKEN` | Secret 注入，多副本一致 |
+| 管理员后台查询 | `ADMIN_TOKEN` 独立鉴权 `/admin/api/query-logs`、`/admin/api/metrics` | Secret 注入；多副本需统一 Ingress 或逐副本查看 |
 | 存活/就绪探针 | `GET /health/live`、`GET /health/ready` | `livenessProbe` / `readinessProbe` |
-| 优雅退出 | 无后台任务，uvicorn 默认处理 SIGTERM | 配合 `terminationGracePeriodSeconds` |
+| 优雅退出 | 资源采样任务由应用 shutdown 取消 | 配合 `terminationGracePeriodSeconds` |
 | 客户端 IP | `TRUST_PROXY=true` 后按 `X-Forwarded-For` 限流 | Ingress/Service 传递真实 IP |
-| 跨副本限流/状态历史 | `REDIS_URL` 可选开启共享 | 接入托管 Redis（云 Redis / Operator） |
+| 跨副本限流/状态历史 | format-service 用 `REDIS_URL` 共享固定窗口限流、历史与日志；查询代理用 `JWXT_REDIS_URL` 共享会话与缓存 | 接入托管 Redis（云 Redis / Operator） |
 | 查询日志 | 结构化 JSON 单行输出 stdout + 内存环形缓冲（可选 Redis `gw:query-logs`）+ `GET /query-logs` | 采集器消费 stdout，`/query-logs` 仅作运维临时查看 |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
@@ -47,6 +48,7 @@
 5. **Redis 高可用**：多副本 + 限流/历史共享时用托管 Redis，避免单点。
 6. **可观测**：查询日志已按结构化 JSON 单行输出 stdout（`event/run_id/username/option/success/kind/elapsed_ms`，无密码/session/token），迁入 K8s 后由 Fluentd / Promtail 采集；再接入 Prometheus `/metrics` 指标。
 7. **密钥轮换**：`API_TOKEN`、`LLM_API_KEY`、`SERVICE_API_TOKEN` 按周期轮换。
+8. **过载保护**：format-service 已有全局并发槽位、槽位等待超时和单次编排总预算；副本数仍需结合 `GLOBAL_CONCURRENCY` 与查询代理容量评估。
 
 ## 四、示例（仅供未来参考，不在当前仓库落地）
 
@@ -74,9 +76,13 @@ spec:
             - name: SERVICE_BASE_URL
               value: "http://get-infomation-service:8766"
             - name: LLM_BASE_URL
-              value: "https://api.deepseek.com"
+              value: "https://open.bigmodel.cn/api/paas/v4"
             - name: LLM_MODEL
-              value: "deepseek-v4-flash"
+              value: "glm-4.5-flash"
+            - name: LLM_ENABLE_THINKING
+              value: "true"
+            - name: LLM_SYSTEM_PROMPT
+              value: ""
             - name: TRUST_PROXY
               value: "true"
           livenessProbe:

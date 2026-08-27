@@ -37,6 +37,17 @@ def test_timeout():
     assert r["meta"]["category"] == "节点超时"
 
 
+def test_schedule_semester_not_open_is_not_remote_error():
+    body = (
+        '{"success": false, "error": "SchoolError: 我的课表: 学校端返回错误 '
+        'code=50060002 message=2026-2027-1学期的课表查询暂未开放，请稍后再试!"}'
+    )
+    result = classify_error("schedule", body=body)
+    assert result["meta"]["category"] == "课表学期未开放"
+    assert "历史已开放学期" in result["output"]
+    assert "学校端控制课表开放时间" in result["output"]
+
+
 def test_session_expired_is_classified():
     r = classify_error("grades", 401,
                        '{"success": false, "error": "session 无效或已过期，请重新登录"}')
@@ -47,3 +58,33 @@ def test_session_expired_is_classified():
 def test_empty_result_is_not_error():
     assert classify_empty_result("grades", {"success": True, "count": 0})
     assert not classify_empty_result("grades", {"success": False, "count": 0})
+
+
+def test_error_evidence_redacts_nested_and_url_secrets():
+    import json
+    body = {
+        "message": "login failed",
+        "authorization": "Bearer super-secret-value",
+        "jump_code": "personal-code",
+        "detail": {"api_key": "llm-secret", "url": "/jump/go?code=link-code"},
+    }
+    result = classify_error("grades", 401, body)
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "super-secret-value" not in serialized
+    assert "personal-code" not in serialized
+    assert "llm-secret" not in serialized
+    assert "link-code" not in serialized
+
+
+def test_error_response_summary_is_redacted_and_bounded():
+    body = {
+        "error": "token required",
+        "authorization": "Bearer super-secret-value",
+        "detail": "x" * 500,
+    }
+    result = classify_error("grades", 401, body)
+    summary = result["meta"]["response_summary"]
+    assert summary.startswith("HTTP 401；响应：")
+    assert "super-secret-value" not in summary
+    assert len(summary) <= 320
+    assert "token" not in summary.lower()

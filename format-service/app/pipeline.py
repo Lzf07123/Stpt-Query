@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, Protocol
 
 import httpx
 
-from .classifier import classify_error, classify_empty_result
+from .classifier import classify_error, classify_empty_result, summarize_response
 from .llm import LLMClient, LLMError
 from .prompts import GRADE_ANALYSIS_SYSTEM, grade_analysis_user
 from .render import (assemble, extract_session, format_grades, format_schedule,
@@ -44,16 +44,22 @@ class HTTPServiceClient:
         self.base_url = base_url.rstrip("/")
         self.api_token = api_token
         self.timeout = timeout
+        self.client = httpx.AsyncClient(
+            timeout=timeout,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
 
     async def post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         if self.api_token:
             headers["Authorization"] = "Bearer %s" % self.api_token
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                resp = await client.post(self.base_url + path, json=payload, headers=headers)
-            except httpx.HTTPError as exc:
-                raise ServiceError(0, None, "上游服务连接失败：%s" % exc.__class__.__name__) from exc
+        try:
+            resp = await self.client.post(self.base_url + path, json=payload, headers=headers)
+        except httpx.HTTPError as exc:
+            raise ServiceError(0, None, "上游服务连接失败：%s" % exc.__class__.__name__) from exc
         try:
             data = resp.json()
         except ValueError:
@@ -61,6 +67,18 @@ class HTTPServiceClient:
         if resp.status_code >= 400:
             raise ServiceError(resp.status_code, data, "上游服务 HTTP %s" % resp.status_code)
         return data if isinstance(data, dict) else {"body": data}
+
+
+def _analysis_usage(usage: object) -> Optional[int]:
+    if not isinstance(usage, dict):
+        return None
+    for key in ("total_tokens", "totalTokens", "total"):
+        value = usage.get(key)
+        if isinstance(value, int) and value >= 0:
+            return value
+        if isinstance(value, float) and value.is_integer() and value >= 0:
+            return int(value)
+    return None
 
 
 class Pipeline:
@@ -72,9 +90,17 @@ class Pipeline:
         llm: Optional[LLMClient] = None,
         base_url: str = "https://school.lizf.cn",
         service_token: str = "",
+        request_timeout: float = 100.0,
     ) -> None:
         self.service = service or HTTPServiceClient(base_url, service_token)
         self.llm = llm or LLMClient()
+        self.request_timeout = request_timeout
+
+    async def aclose(self) -> None:
+        for client in (self.service, self.llm):
+            close = getattr(client, "aclose", None)
+            if close is not None:
+                await close()
 
     async def run(self, req: WorkflowRequest) -> Dict[str, Any]:
         started = time.time()
@@ -138,7 +164,8 @@ class Pipeline:
         if classify_empty_result("grades", data):
             # success:true 且 count:0 → 正常无数据，不算故障
             output = format_grades(data, jump_body)
-            return _ok("grades_empty", output, meta={"count": 0})
+            return _ok("grades_empty", output,
+                       meta={"count": 0, "response_summary": summarize_response(data)})
 
         if req.check:
             # 分析功能判断 true：预处理 → LLM 分析 → 数据组装
@@ -154,7 +181,15 @@ class Pipeline:
         else:
             output = format_grades(data, jump_body)
 
-        result = _ok("grades", output, meta={"count": data.get("count", 0)})
+        result = _ok("grades", output, meta={
+            "count": data.get("count", 0),
+            "response_summary": summarize_response(data),
+        })
+        if req.check:
+            result["meta"]["analysis_used"] = bool(analysis)
+            usage_total = _analysis_usage(getattr(self.llm, "last_usage", None))
+            if usage_total is not None:
+                result["meta"]["analysis_usage"] = usage_total
         if req.md2pdf:
             result["pdf_base64"] = await self._to_pdf_base64(strip_login_note(output))
             result["kind"] = "grades_pdf"
@@ -176,7 +211,8 @@ class Pipeline:
 
         if not _is_success(data):
             return classify_error("schedule", body=data)
-        return _ok("schedule", format_schedule(data, jump_body))
+        return _ok("schedule", format_schedule(data, jump_body),
+                   meta={"response_summary": summarize_response(data)})
 
     async def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return await self.service.post(path, payload)

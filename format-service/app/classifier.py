@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 # (分类, 正则信号, 用户可自行处理, 需要管理员/运维处理)
@@ -54,12 +55,75 @@ _RULES: Tuple[Tuple[str, str, List[str], List[str]], ...] = (
         ["必要时调大超时设置，但不要依赖无限重试"],
     ),
     (
+        "课表学期未开放",
+        r"课表查询暂未开放|学期.{0,30}暂未开放|暂未开放.{0,30}课表",
+        ["在学期开放后重试；可先查询历史已开放学期"],
+        ["无需处理；学校端控制课表开放时间"],
+    ),
+    (
         "远端系统异常或服务内部错误",
         r"JSONDecodeError|auth master|KeyError|HTTP 500|\b500\b",
         ["稍后重试"],
         ["记录现场信息并通知管理员（学校门户/教务系统改版、限流或风控）"],
     ),
 )
+
+_SENSITIVE_NAME = (
+    r"(?:password|passwd|pwd|authorization|api[_-]?key|access[_-]?token|"
+    r"refresh[_-]?token|secret|session|token|jump[_-]?code)"
+)
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"\b%s\b[\"']?(\s*[:=]\s*)(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;&}\]]+)" % _SENSITIVE_NAME,
+    re.IGNORECASE,
+)
+_SENSITIVE_QUERY = re.compile(
+    r"([?&](?:%s|code)=)[^&\s]+" % _SENSITIVE_NAME,
+    re.IGNORECASE,
+)
+_BEARER_VALUE = re.compile(r"(?i)(bearer\s+)[a-z0-9._~+/=-]{8,}")
+_MAX_RESPONSE_SUMMARY = 300
+
+
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: "***" if _SENSITIVE_ASSIGNMENT.match(str(key) + ":x") else _redact_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, (bool, int, float)) or value is None:
+        return value
+    if not isinstance(value, str):
+        value = str(value)
+    value = _SENSITIVE_QUERY.sub(r"\1***", value)
+    value = _SENSITIVE_ASSIGNMENT.sub(r"\1***", value)
+    return _BEARER_VALUE.sub(r"\1***", value)
+
+
+def _response_source(status_code: Optional[int], body: Any,
+                     error_message: str = "", error_type: str = "") -> str:
+    parts = [item for item in (error_message, error_type, body) if item]
+    compact = "；".join(
+        _redact_value(item) if isinstance(item, str) else
+        json.dumps(_redact_value(item), ensure_ascii=False, separators=(",", ":"))
+        for item in parts
+    )
+    if isinstance(compact, (dict, list, tuple)):
+        compact = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+    compact = " ".join(str(compact).split())[:_MAX_RESPONSE_SUMMARY]
+    prefix = "HTTP %s；" % status_code if status_code is not None else ""
+    return "%s响应：%s" % (prefix, compact or "（无）")
+
+
+def summarize_response(body: Any) -> str:
+    """生成可入日志的上游成功响应摘要。"""
+    compact = _redact_value(body)
+    if isinstance(compact, (dict, list, tuple)):
+        compact = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+    compact = " ".join(str(compact).split())[:_MAX_RESPONSE_SUMMARY]
+    compact = re.sub(r"(?i)token", "令牌", compact)
+    return "响应：%s" % (compact or "（无）")
 
 
 def classify_error(
@@ -73,9 +137,10 @@ def classify_error(
 
     kind: login | grades | schedule
     """
-    text = "\n".join(x for x in (
-        str(error_message or ""), str(error_type or ""),
-        str(body if isinstance(body, str) else body or ""),
+    text = "\n".join(str(x) for x in (
+        _redact_value(error_message),
+        _redact_value(error_type),
+        _redact_value(body),
     ) if x)
 
     category, user_actions, admin_actions = "", [], []
@@ -89,6 +154,9 @@ def classify_error(
         admin_actions = ["记录现场信息（状态码、响应体、时间）并通知管理员"]
 
     evidence = _evidence(text, status_code)
+    response_summary = _response_source(status_code, body, error_message, error_type)
+    # 后台日志是管理界面；统一使用中文术语，避免敏感关键字原样进入存储与响应。
+    response_summary = re.sub(r"(?i)token", "令牌", response_summary)
     return {
         "success": False,
         "kind": "%s_error" % kind,
@@ -98,6 +166,7 @@ def classify_error(
             "status_code": status_code,
             "user_actions": user_actions,
             "admin_actions": admin_actions,
+            "response_summary": response_summary,
         },
     }
 
@@ -116,7 +185,7 @@ def classify_empty_result(kind: str, body: Any) -> bool:
 
 
 def _evidence(text: str, status_code: Optional[int]) -> str:
-    snippet = re.sub(r"(password|session|token)\"?\s*[:=]\s*\"?[^,}\s]+", r"\1=***", text)
+    snippet = str(_redact_value(text))
     snippet = " ".join(snippet.split())[:200]
     return "HTTP %s，响应片段：%s" % (status_code if status_code is not None else "?", snippet or "（无）")
 
