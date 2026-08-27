@@ -72,6 +72,32 @@ def test_admin_query_logs_filters_and_paginates_file_history(tmp_path):
         assert all(key not in failed["logs"][0] for key in ("password", "token", "session"))
 
 
+def test_admin_query_logs_bounds_file_scan_by_default(tmp_path):
+    path = tmp_path / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    for index in range(6):
+        writer.write_raw({
+            "event": "query", "time": f"2026-08-28T10:{index:02d}:00+08:00",
+            "run_id": f"run-{index}", "username": "2023000001",
+            "option": "成绩", "success": True, "kind": "grades",
+        })
+
+    with TestClient(create_app(_settings(tmp_path, file_log_path=str(path)))) as client:
+        payload = client.get("/admin/api/query-logs?limit=2", headers=ADMIN).json()
+        assert payload["scanned"] == 6
+        assert payload["total"] == 6
+        assert payload["scan_limit"] == 5000
+        assert payload["scan_truncated"] is False
+
+        bounded = client.get("/admin/api/query-logs?limit=2&scan_limit=4",
+                             headers=ADMIN).json()
+        assert bounded["scanned"] == 4
+        assert bounded["total"] == 4
+        assert bounded["scan_limit"] == 4
+        assert bounded["scan_truncated"] is True
+        assert [item["run_id"] for item in bounded["logs"]] == ["run-5", "run-4"]
+
+
 def test_admin_metrics_reports_snapshot_and_service_status(tmp_path):
     with TestClient(create_app(_settings(tmp_path))) as client:
         body = client.get("/admin/api/metrics", headers=ADMIN).json()

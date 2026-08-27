@@ -81,6 +81,24 @@ def test_edge_hides_sensitive_query_strings_and_sets_csp():
     assert "img-src 'self' data:" in config
 
 
+def test_query_log_file_uses_persistent_named_volume():
+    compose = open("docker-compose.yml", encoding="utf-8").read()
+    volume_section = compose.split("\nvolumes:\n", 1)[1]
+    assert "format-query-logs:/var/log/edu-query" in compose
+    assert "name: edu-query-app_format-query-logs-persistent" in volume_section
+    assert "type: tmpfs" not in volume_section
+
+
+def test_runtime_memory_guardrails_are_configured():
+    compose = open("docker-compose.yml", encoding="utf-8").read()
+    assert "mem_limit: ${JWXT_MEM_LIMIT:-256m}" in compose
+    assert "mem_limit: ${FORMAT_MEM_LIMIT:-256m}" in compose
+    assert "mem_limit: ${FRONTEND_MEM_LIMIT:-64m}" in compose
+    assert compose.count("MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}") == 2
+    nginx = open("frontend/nginx.conf", encoding="utf-8").read()
+    assert "worker_processes 1;" in nginx
+
+
 def test_inline_script_hashes_are_covered_by_csp():
     config = open("frontend/templates/default.conf.template", encoding="utf-8").read()
     declared_hashes = set(re.findall(r"'(sha256-[A-Za-z0-9+/=]+)'", config))

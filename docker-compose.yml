@@ -14,6 +14,8 @@ services:
     cap_drop:
       - ALL
     read_only: true
+    mem_limit: ${JWXT_MEM_LIMIT:-256m}
+    pids_limit: 64
     tmpfs:
       - /tmp:size=64m,mode=1777
       - /var/log/jwxt:size=16m,uid=10001,gid=10001
@@ -26,6 +28,27 @@ services:
       # 对外链接（免密登录/课表下载）基准地址：公网入口，浏览器可达
       - JWXT_PUBLIC_URL=${PUBLIC_BASE_URL:-http://127.0.0.1:8000}
       - JWXT_REDIS_URL=${JWXT_REDIS_URL:-}
+      - JWXT_SESSION_TTL_HOURS=${JWXT_SESSION_TTL_HOURS:-1}
+      - JWXT_RATE_LIMIT=${JWXT_RATE_LIMIT:-600}
+      - JWXT_LOGIN_RATE_LIMIT=${JWXT_LOGIN_RATE_LIMIT:-60}
+      - JWXT_GRADES_CACHE_TTL=${JWXT_GRADES_CACHE_TTL:-300}
+      - JWXT_SCHEDULE_CACHE_TTL=${JWXT_SCHEDULE_CACHE_TTL:-300}
+      - JWXT_JUMP_CACHE_TTL=${JWXT_JUMP_CACHE_TTL:-30}
+      - JWXT_HEALTH_PROBE_INTERVAL=${JWXT_HEALTH_PROBE_INTERVAL:-30}
+      - JWXT_VERIFY_TLS=${JWXT_VERIFY_TLS:-1}
+      - JWXT_UPSTREAM_PARALLEL=${JWXT_UPSTREAM_PARALLEL:-4}
+      - JWXT_UPSTREAM_GLOBAL=${JWXT_UPSTREAM_GLOBAL:-8}
+      - JWXT_LIMIT_CONCURRENCY=${JWXT_LIMIT_CONCURRENCY:-0}
+      - JWXT_MAX_SEMESTERS=${JWXT_MAX_SEMESTERS:-20}
+      - JWXT_LOG_LEVEL=${JWXT_LOG_LEVEL:-INFO}
+      - JWXT_CORS_ORIGIN=${JWXT_CORS_ORIGIN:-}
+      - JWXT_ALLOW_GET_CREDENTIALS=${JWXT_ALLOW_GET_CREDENTIALS:-1}
+      - JWXT_PROTECT_LOGIN_STATUS=${JWXT_PROTECT_LOGIN_STATUS:-0}
+      - JWXT_MAX_SESSIONS=${JWXT_MAX_SESSIONS:-1000}
+      - JWXT_GRADES_CACHE_MAX_ITEMS=${JWXT_GRADES_CACHE_MAX_ITEMS:-1000}
+      - JWXT_SCHEDULE_CACHE_MAX_ITEMS=${JWXT_SCHEDULE_CACHE_MAX_ITEMS:-1000}
+      - JWXT_JUMP_CACHE_MAX_ITEMS=${JWXT_JUMP_CACHE_MAX_ITEMS:-1000}
+      - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
       - JWXT_TRUST_PROXY=0
       - JWXT_LOG_FILE=
     healthcheck:
@@ -50,6 +73,8 @@ services:
     cap_drop:
       - ALL
     read_only: true
+    mem_limit: ${FORMAT_MEM_LIMIT:-256m}
+    pids_limit: 64
     tmpfs:
       - /tmp:size=64m,mode=1777
     volumes:
@@ -71,6 +96,7 @@ services:
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - SERVICE_BASE_URL=${SERVICE_BASE_URL:-http://get-infomation-service:8766}
       - SERVICE_API_TOKEN=${SERVICE_API_TOKEN:-}
+      - SERVICE_TIMEOUT=${SERVICE_TIMEOUT:-60}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-glm-4.5-flash}
@@ -86,6 +112,7 @@ services:
       # 唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
       - TRUST_PROXY=${TRUST_PROXY:-true}
       - REDIS_URL=${REDIS_URL:-}
+      - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
       - FILE_LOG_ENABLED=${FILE_LOG_ENABLED:-true}
       - FILE_LOG_PATH=${FILE_LOG_PATH:-/var/log/edu-query/queries.jsonl}
       - FILE_LOG_MAX_BYTES=${FILE_LOG_MAX_BYTES:-52428800}
@@ -118,6 +145,8 @@ services:
     cap_drop:
       - ALL
     read_only: true
+    mem_limit: ${FRONTEND_MEM_LIMIT:-64m}
+    pids_limit: 32
     tmpfs:
       - /tmp:size=32m,mode=1777
       - /etc/nginx/conf.d:size=64k,uid=101,gid=101
@@ -151,10 +180,7 @@ networks:
   internal: {}
 
 volumes:
-  # 查询日志文件通道；业务编排仍无状态，日志卷由 Docker 按 appuser UID 预置权限
+  # 查询日志文件通道；业务编排仍无状态，日志随具名持久卷跨容器/守护进程重启保留
   format-query-logs:
+    name: edu-query-app_format-query-logs-persistent
     driver: local
-    driver_opts:
-      device: tmpfs
-      o: size=512m,uid=10001,gid=10001
-      type: tmpfs

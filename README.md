@@ -104,8 +104,8 @@ flowchart LR
 
 - 日志**不包含**密码 / session / token；白名单字段之外一律丢弃（`app/querylog.py`）。
 - 文件通道只保留白名单字段，权限为 `0600`；按 `FILE_LOG_MAX_BYTES` 轮转并最多保留
-  `FILE_LOG_BACKUP_COUNT` 个备份。Compose 默认挂载 512 MiB 的 managed tmpfs 卷，
-  Docker daemon 重启不保留文件；长期留存请改接持久卷或使用集中日志。
+  `FILE_LOG_BACKUP_COUNT` 个备份。Compose 默认挂载具名持久卷，容器与 Docker daemon
+  重启后日志保留；更长期的审计与检索建议接入集中日志平台。
 - 业务编排数据仍不落盘；文件卷只承载查询日志。Redis 与文件互为冗余，任一失败不影响 `/run`
   和另一条通道；最近一次文件错误可通过 `/health` 观察。
 - `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
@@ -120,7 +120,8 @@ flowchart LR
 Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共网关令牌；因此查询用户无法访问。
 
 - `GET /admin/api/query-logs` 支持关键字、成功状态、分类、项目、时间范围和分页；
-  文件通道启用时默认按新→旧检索轮转 JSONL，未启用时降级 Redis/内存最近记录。
+  文件通道启用时默认按新→旧扫描最近 5000 行（`scan_limit=0` 全量），降低大日志
+  带来的内存/CPU 尖峰；未启用时降级 Redis/内存最近记录。
 - 响应返回匹配总数、成功率、失败分类和数据源。日志仍先经过白名单脱敏，页面只在当前
   标签页的 `sessionStorage` 中保留管理员凭据，退出即清除。
 - `GET /admin/api/metrics` 暴露容器 CPU、内存/RSS、日志磁盘、网络累计、运行时长、
@@ -132,6 +133,8 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   历史降级源。生产多副本应继续把 stdout 交给集中平台聚合分析。
 - nginx 使用不含 query string 的隐私访问日志；携带个人票号的 `/jump/go` 与 `/get_schedule/export`
   不写 access log。边缘响应启用 CSP、反点击劫持与 Referrer 隔离，本地历史结果只保留 6 小时。
+- Compose 默认启用内存/PID 护栏：Python 服务 `256m / 64 PIDs`，Nginx `64m / 32 PIDs`，
+  并设置 `MALLOC_ARENA_MAX=2`；内存模式查询代理默认最多 1000 个会话与每类 1000 条缓存。
 
 ## 可靠性与过载保护
 

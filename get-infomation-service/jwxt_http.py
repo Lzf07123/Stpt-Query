@@ -24,7 +24,6 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import jwxt_core as _core_mod
-import jwxt_redis as _redis_mod
 from jwxt_core import (
     ALLOW_GET_CREDENTIALS, BASE, CORS_ORIGIN, DNS_FALLBACK_IPS, IDLE_TIMEOUT,
     JUMP_CODE_TTL, KNOWN_PATHS, LIMIT_CONCURRENCY, LOG, LOGIN_REUSE,
@@ -50,6 +49,21 @@ from jwxt_state import (
     _probe_session, _warm_background, _jump_target, _fetch_tgt, mint_st,
     probe_school, deep_check, _health_probe_loop, health_payload, _metrics_text,
 )
+
+_REDIS_MODULE = None
+_REDIS_IMPORT_LOCK = threading.Lock()
+
+
+def _redis_module():
+    """Redis 依赖只在配置共享状态后加载，降低单实例常驻内存。"""
+    global _REDIS_MODULE
+    if _REDIS_MODULE is not None:
+        return _REDIS_MODULE
+    with _REDIS_IMPORT_LOCK:
+        if _REDIS_MODULE is None:
+            import jwxt_redis as module
+            _REDIS_MODULE = module
+    return _REDIS_MODULE
 
 class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler 提供 FastAPI 适配）
 
@@ -1381,6 +1395,7 @@ class Runtime:
         self._redis_backend = None
         redis_url = (getattr(cfg, "redis_url", "") or "").strip()
         if redis_url:
+            _redis_mod = _redis_module()
             self._redis_backend = _redis_mod.RedisBackend(redis_url)
             LOG.info("Redis 共享状态已启用：会话/缓存/限流/短码/锁/上游信号量使用 Redis")
             self.sessions = _redis_mod.RedisSessionStore(
@@ -1391,11 +1406,14 @@ class Runtime:
                 self._redis_backend, cfg.login_rate_limit)
             self.login_locks = _redis_mod.RedisKeyedLocks(self._redis_backend)
             self.grades_cache = _redis_mod.RedisTTLCache(
-                self._redis_backend, cfg.grades_cache_ttl)
+                self._redis_backend, cfg.grades_cache_ttl,
+                max_items=cfg.grades_cache_max_items)
             self.schedule_cache = _redis_mod.RedisTTLCache(
-                self._redis_backend, cfg.schedule_cache_ttl)
+                self._redis_backend, cfg.schedule_cache_ttl,
+                max_items=cfg.schedule_cache_max_items)
             self.jump_cache = _redis_mod.RedisTTLCache(
-                self._redis_backend, cfg.jump_cache_ttl)
+                self._redis_backend, cfg.jump_cache_ttl,
+                max_items=cfg.jump_cache_max_items)
             self.jump_codes = _redis_mod.RedisJumpCodeStore(
                 self._redis_backend, JUMP_CODE_TTL)
             self.export_codes = _redis_mod.RedisShortCodeStore(
@@ -1408,9 +1426,12 @@ class Runtime:
             self.rate_limiter = RateLimiter(cfg.rate_limit)
             self.login_limiter = RateLimiter(cfg.login_rate_limit)
             self.login_locks = KeyedLocks()
-            self.grades_cache = TTLCache(cfg.grades_cache_ttl)
-            self.schedule_cache = TTLCache(cfg.schedule_cache_ttl)
-            self.jump_cache = TTLCache(cfg.jump_cache_ttl)
+            self.grades_cache = TTLCache(cfg.grades_cache_ttl,
+                                         max_items=cfg.grades_cache_max_items)
+            self.schedule_cache = TTLCache(cfg.schedule_cache_ttl,
+                                           max_items=cfg.schedule_cache_max_items)
+            self.jump_cache = TTLCache(cfg.jump_cache_ttl,
+                                       max_items=cfg.jump_cache_max_items)
             self.jump_codes = JumpCodeStore(JUMP_CODE_TTL)
             self.export_codes = ShortCodeStore(ttl=max(30, JUMP_CODE_TTL))
         # 服务端并发上限保持进程内：它是单实例自我保护；
@@ -2199,7 +2220,7 @@ def _parser():
     ap.add_argument("--login-reuse-probe", default=_env("JWXT_LOGIN_REUSE_PROBE", "1"),
                     help="复用前轻量探测学校会话有效性 1/0（默认开启）")
     ap.add_argument("--max-sessions", type=int,
-                    default=int(_env("JWXT_MAX_SESSIONS", "5000")),
+                    default=int(_env("JWXT_MAX_SESSIONS", "1000")),
                     help="会话数量上限，超出淘汰最旧（Redis 模式同样生效）")
     ap.add_argument("--public-url", default=_env("JWXT_PUBLIC_URL", ""),
                     help="对外公开地址（如 https://school.dev.lizf.cn）")

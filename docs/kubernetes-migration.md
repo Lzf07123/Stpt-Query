@@ -8,7 +8,7 @@
 
 | 能力 | 现状 | K8s 对应 |
 |---|---|---|
-| 无状态编排层 | 业务状态在 `get-infomation-service`（Redis 共享），本服务不落盘、无本地文件 | 可直接水平扩容，任意副本可调度 |
+| 无状态编排层 | 业务状态在 `get-infomation-service`（Redis 共享）；本服务只落盘查询日志，不落盘业务状态 | 可直接水平扩容，任意副本可调度 |
 | PDF 内联返回 | `pdf_base64` 直接放在响应里，无文件存储 | **无需 PV/PVC** |
 | 环境变量配置 | 全部配置来自 `.env`/环境变量（`Settings`） | ConfigMap + Secret 直接映射 |
 | 固定 API Token | 生产强制 `AUTO_ROTATE_TOKEN=false` + 固定 `API_TOKEN` | Secret 注入，多副本一致 |
@@ -17,7 +17,7 @@
 | 优雅退出 | 资源采样任务由应用 shutdown 取消 | 配合 `terminationGracePeriodSeconds` |
 | 客户端 IP | `TRUST_PROXY=true` 后按 `X-Forwarded-For` 限流 | Ingress/Service 传递真实 IP |
 | 跨副本限流/状态历史 | format-service 用 `REDIS_URL` 共享固定窗口限流、历史与日志；查询代理用 `JWXT_REDIS_URL` 共享会话与缓存 | 接入托管 Redis（云 Redis / Operator） |
-| 查询日志 | 结构化 JSON 单行输出 stdout + 内存环形缓冲（可选 Redis `gw:query-logs`）+ `GET /query-logs` | 采集器消费 stdout，`/query-logs` 仅作运维临时查看 |
+| 查询日志 | 结构化 JSON 单行输出 stdout + 内存环形缓冲（可选 Redis `gw:query-logs`）+ 持久 JSONL 文件 + `GET /query-logs` | 采集器消费 stdout；需要跨 Pod 留存时为 JSONL 配置 PVC，或继续使用集中日志 |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
 ## 二、迁入 K8s 时的映射清单（三容器 → 三个 Deployment）

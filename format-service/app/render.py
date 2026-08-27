@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 
 _IMAGE_SYNTAX = re.compile(r"!\[[^\]]*\]\([^)]+\)")
-_HTML_TAG = re.compile(r"</?[a-zA-Z][^>]*>")
+_HTML_TAG = re.compile(r"</?(?!br>)[a-zA-Z][^>]*>", re.IGNORECASE)
 _MD_LINK = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+\"[^\"]*\")?\s*\)")
 
 
@@ -45,6 +45,7 @@ def _safe_http_url(raw: Any) -> str:
 def sanitize_markdown(text: str) -> str:
     """只保留无脚本文本、标准 Markdown 和显式 HTTP(S) 链接。"""
     cleaned = str(text or "")
+    cleaned = re.sub(r"(?i)<br\s*/?>", "<br>", cleaned)
     cleaned = _IMAGE_SYNTAX.sub("", cleaned)
     cleaned = _HTML_TAG.sub("", cleaned)
 
@@ -221,14 +222,16 @@ def _fmt_weeks(w: Any) -> str:
 
 def _cell_text(r: Dict[str, Any]) -> str:
     def clean(value: Any) -> str:
-        return str(value or "").replace("|", "\\|").replace("\n", " ")
+        return str(value or "").replace("\r", "").replace("\n", "<br>") \
+            .replace("|", "\\|")
 
     bits = [clean(r.get("courseName"))]
     extra = [
         x for x in (
             clean(r.get("teacherName")),
             clean(r.get("classroomName")),
-            _fmt_weeks(r.get("weeks")).replace("|", "\\|").replace("\n", " "),
+            _fmt_weeks(r.get("weeks")).replace("\r", "").replace("\n", "<br>") \
+                .replace("|", "\\|"),
         ) if x
     ]
     if extra:
@@ -243,8 +246,16 @@ def _grid_from_rows(rows: List[Dict[str, Any]]) -> str:
         return ""
     time_codes = sorted({str(r.get("timeCode") or "") for r in rows})
     day_codes = sorted({str(r.get("dayOfWeekCode") or "") for r in rows})
-    time_names = {str(r.get("timeCode") or ""): str(r.get("timeName") or "").strip() for r in rows}
-    day_names = {str(r.get("dayOfWeekCode") or ""): str(r.get("dayOfWeekName") or "").strip() for r in rows}
+    time_names = {
+        str(r.get("timeCode") or ""):
+            str(r.get("timeName") or "").strip().replace("\r", "").replace("\n", "<br>")
+        for r in rows
+    }
+    day_names = {
+        str(r.get("dayOfWeekCode") or ""):
+            str(r.get("dayOfWeekName") or "").strip().replace("\r", "").replace("\n", "<br>")
+        for r in rows
+    }
     grid: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for r in rows:
         grid.setdefault((str(r.get("timeCode") or ""), str(r.get("dayOfWeekCode") or "")), []).append(r)

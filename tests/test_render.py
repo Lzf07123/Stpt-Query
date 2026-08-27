@@ -49,6 +49,26 @@ def test_format_schedule_puts_download_url_first():
     assert "请勿外传" in out
 
 
+def test_format_schedule_preserves_cell_line_breaks():
+    data = {
+        "success": True,
+        "output": "| 节次 | 周一 |\n|---|---|\n| 1 | 高数<br>张老师<br>A101 |",
+    }
+    out = format_schedule(data, "")
+    assert "高数<br>张老师<br>A101" in out
+
+
+def test_format_schedule_fallback_preserves_multiline_fields():
+    data = {"success": True, "rows": [{
+        "timeCode": "1", "timeName": "第1节", "dayOfWeekCode": "1",
+        "dayOfWeekName": "周一", "courseName": "高数", "teacherName": "张老师",
+        "classroomName": "A101\nA102", "weeks": "1-2",
+    }]}
+    out = format_schedule(data, "")
+    assert "A101<br>A102" in out
+    assert "A101 A102" not in out
+
+
 def test_strip_login_note_for_pdf_and_history():
     from app.render import strip_login_note
     md = ("> 🔗 免密登录教务系统：[点击进入](https://x/jump/go?code=abc)\n"

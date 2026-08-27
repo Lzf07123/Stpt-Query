@@ -1841,7 +1841,10 @@ class Config:
     login_reuse: str = "1"
     login_reuse_max_age: int = 1800
     login_reuse_probe: str = "1"
-    max_sessions: int = 5000
+    max_sessions: int = 1000
+    grades_cache_max_items: int = 1000
+    schedule_cache_max_items: int = 1000
+    jump_cache_max_items: int = 1000
     public_url: str = ""
     cors_origin: str = ""
     trust_proxy: str = "0"
@@ -1890,7 +1893,10 @@ def load_config():
         login_reuse=_env("JWXT_LOGIN_REUSE", "1"),
         login_reuse_max_age=int(_env("JWXT_LOGIN_REUSE_MAX_AGE", "1800")),
         login_reuse_probe=_env("JWXT_LOGIN_REUSE_PROBE", "1"),
-        max_sessions=int(_env("JWXT_MAX_SESSIONS", "5000")),
+        max_sessions=int(_env("JWXT_MAX_SESSIONS", "1000")),
+        grades_cache_max_items=int(_env("JWXT_GRADES_CACHE_MAX_ITEMS", "1000")),
+        schedule_cache_max_items=int(_env("JWXT_SCHEDULE_CACHE_MAX_ITEMS", "1000")),
+        jump_cache_max_items=int(_env("JWXT_JUMP_CACHE_MAX_ITEMS", "1000")),
         public_url=_env("JWXT_PUBLIC_URL", ""),
         cors_origin=_env("JWXT_CORS_ORIGIN", ""),
         trust_proxy=_env("JWXT_TRUST_PROXY", "0"),

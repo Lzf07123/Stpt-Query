@@ -8,7 +8,9 @@ COPY requirements.txt ./
 # 国内环境可设 PIP_INDEX_URL 指向 PyPI 镜像加速构建期下载
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
-RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p -m 700 /var/log/edu-query \
+    && chown -R 10001:10001 /var/log/edu-query
 
 COPY app ./app
 RUN chown -R 10001:10001 /app

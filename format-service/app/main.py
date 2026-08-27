@@ -21,7 +21,6 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from redis import asyncio as aioredis
 
 from .llm import LLMClient
 from .metrics import ResourceMonitor
@@ -166,6 +165,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     _redis = None
     if cfg.redis_url.strip():
+        from redis import asyncio as aioredis
+
         try:
             _redis = aioredis.from_url(
                 cfg.redis_url,
@@ -511,10 +512,15 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         success: Optional[bool] = None,
         time_from: Optional[datetime] = None,
         time_to: Optional[datetime] = None,
+        scan_limit: int = Query(default=5000, ge=0, le=100000),
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=200),
 ) -> dict:
-        """管理端查询历史；优先读取完整文件通道，无文件时降级 Redis/内存。"""
+        """管理端查询历史；优先读取文件通道，无文件时降级 Redis/内存。
+
+        scan_limit=0 表示全量扫描；默认限制 newest-first 扫描行数，避免大日志
+        拖高常驻内存。
+        """
         keyword = keyword.strip().casefold()
         kind = kind.strip().casefold()
         option = option.strip().casefold()
@@ -557,6 +563,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 matched: list[dict] = []
                 seen = 0
                 for line in writer.iter_recent_lines():
+                    if scan_limit and seen >= scan_limit:
+                        break
                     seen += 1
                     try:
                         item = json.loads(line)
@@ -602,6 +610,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             "logs": page,
             "total": len(entries),
             "scanned": scanned,
+            "scan_limit": scan_limit,
+            "scan_truncated": bool(scan_limit and scanned >= scan_limit),
             "source": source,
             "parse_errors": parse_errors,
             "stats": {
