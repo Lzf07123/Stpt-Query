@@ -106,13 +106,17 @@ flowchart LR
 - 文件通道只保留白名单字段，权限为 `0600`；按 `FILE_LOG_MAX_BYTES` 轮转并最多保留
   `FILE_LOG_BACKUP_COUNT` 个备份。Compose 默认挂载具名持久卷，容器与 Docker daemon
   重启后日志保留；更长期的审计与检索建议接入集中日志平台。
-- 业务编排数据仍不落盘；文件卷只承载查询日志。Redis 与文件互为冗余，任一失败不影响 `/run`
-  和另一条通道；最近一次文件错误可通过 `/health` 观察。
+- 业务编排数据仍不落盘；文件卷只承载查询日志（服务状态从 `event=query` 记录派生）。
+  Redis 与文件互为冗余，任一失败不影响 `/run` 和另一条通道；最近一次文件错误可通过
+  `/health` 观察。
 - `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
   `docker compose exec format-service curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/query-logs`；
   生产建议经集中日志查询，不长期依赖进程内存。
 - 公开站通过 `GET /health/public` 获取本站、查询代理和学校服务的粗粒度状态；
   接口只返回状态、延迟和检查时间，不暴露内部地址、错误详情或凭据，结果缓存 15 秒。
+- `GET /service-status` 返回最近 100 次查询的 `success/kind/time`，同一实例的所有客户端
+  共享相同历史；配置 Redis 后跨副本共享，重启后从持久 JSONL 日志恢复。响应不包含
+  学号、IP、错误详情等查询日志上下文。
 
 ### 管理后台
 

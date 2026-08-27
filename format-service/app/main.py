@@ -110,6 +110,29 @@ def _public_dependency(status: str, latency_ms: int | None = None,
     return item
 
 
+def _service_status_item(item: Any) -> Optional[dict]:
+    """将持久化事件压缩为公共状态字段，避免泄漏查询日志上下文。"""
+    if not isinstance(item, dict) or "success" not in item:
+        return None
+    return {
+        "success": bool(item.get("success")),
+        "kind": str(item.get("kind") or "unknown"),
+        "time": str(item.get("time") or ""),
+    }
+
+
+def _service_status_payload(items: list[dict]) -> dict:
+    """汇总最近 100 次查询的服务状态。"""
+    total = len(items)
+    success = sum(1 for item in items if item["success"])
+    return {
+        "results": items,
+        "total": total,
+        "success": success,
+        "availability": round(success / total * 100, 1) if total else None,
+    }
+
+
 def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     cfg = cfg or Settings()
     _validate_production(cfg.environment, cfg.auto_rotate_token, cfg.api_token,
@@ -717,22 +740,57 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     @app.get("/service-status")
     async def service_status(_: None = Depends(_require_auth)) -> dict:
+        """返回跨客户端共享的服务状态；文件通道用于进程重启后恢复。"""
+        redis_items: list[dict] = []
         if app.state.redis is not None:
             try:
                 raw = await app.state.redis.lrange("gw:service-status", 0, -1) or []
             except Exception:
                 raw = []
-            items = []
             for r in raw:
                 try:
                     item = json.loads(r)
                 except ValueError:
                     continue
-                if isinstance(item, dict) and "success" in item:
-                    items.append(item)
-        else:
-            with results_lock:
-                items = list(reversed(results))
+                view = _service_status_item(item)
+                if view is not None:
+                    redis_items.append(view)
+            if redis_items:
+                return _service_status_payload(redis_items)
+
+        writer = app.state.file_log_writer
+        if writer is not None:
+            def read_persisted_status() -> list[dict]:
+                items: list[dict] = []
+                for line in writer.iter_recent_lines():
+                    try:
+                        item = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(item, dict) or item.get("event") != "query":
+                        continue
+                    view = _service_status_item(item)
+                    if view is not None:
+                        items.append(view)
+                    if len(items) >= 100:
+                        break
+                return items
+
+            try:
+                persisted_items = await asyncio.to_thread(read_persisted_status)
+            except Exception as exc:
+                LOG.warning("服务状态文件恢复失败：%s", exc.__class__.__name__)
+            else:
+                if persisted_items:
+                    return _service_status_payload(persisted_items)
+
+        with results_lock:
+            items = [
+                view for view in
+                (_service_status_item(item) for item in reversed(results))
+                if view is not None
+            ]
+        return _service_status_payload(items)
         total = len(items)
         success = sum(1 for i in items if i.get("success"))
         availability = round(success / total * 100, 1) if total else None
