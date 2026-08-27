@@ -1,4 +1,4 @@
-# 教务查询编排 · edu-query-app
+# 教务查询编排 · Stpt-Query
 
 > 把固定的 Dify 工作流重写为三容器编排服务：查询代理 + 格式化后端 + 前端，不再依赖 Dify。
 
@@ -223,7 +223,7 @@ cd frontend && npm install && npm run build
 ## 仓库结构
 
 ```text
-edu-query-app/
+Stpt-Query/
 ├── get-infomation-service/    # 查询代理源码（登录/跳转/原始查询）
 ├── format-service/            # 格式化后端（编排 + 渲染 + 分析 + PDF）
 │   ├── app/main.py            # HTTP 层：/run /query-logs /health* /service-status
