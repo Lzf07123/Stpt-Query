@@ -162,7 +162,7 @@ services:
       - BRAND_AUTHOR=${BRAND_AUTHOR:-}
       - BRAND_GITHUB=${BRAND_GITHUB:-}
     ports:
-      - "8000:8080"
+      - "${APP_PORT:-8000}:8080"
     depends_on:
       format-service:
         condition: service_started
