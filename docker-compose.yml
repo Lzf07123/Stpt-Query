@@ -155,6 +155,8 @@ services:
     environment:
       # 与 format-service 共用同一 API_TOKEN，由 nginx 反代时注入 Authorization
       - API_TOKEN=${API_TOKEN:-change-me}
+      # 外层反代来源；nginx 仅信任该来源的 XFF 并恢复真实客户端 IP
+      - TRUSTED_PROXY_CIDR=${TRUSTED_PROXY_CIDR:-172.16.0.0/12}
       # 品牌文案覆盖（留空使用 brand.js 内置默认值；BRAND_GITHUB=none 隐藏页脚链接）
       - BRAND_NAME=${BRAND_NAME:-}
       - BRAND_SLOGAN=${BRAND_SLOGAN:-}
