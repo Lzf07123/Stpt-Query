@@ -164,6 +164,9 @@ IMAGE_REGISTRY=docker.m.daocloud.io          # 基础镜像加速站
 PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple  # PyPI 镜像
 ```
 
+> `PIP_INDEX_URL` 只接受 PyPI 兼容镜像；`registry.npmmirror.com` 是 npm 源，
+> 会导致 `pip install` 报“versions: none”。
+
 > 全部环境变量、默认值与说明以 [`.env.example`](.env.example) 为唯一事实来源
 > （含 `SERVICE_BASE_URL`、`TRUST_PROXY`、`REDIS_URL`、`TZ`、`LLM_TIMEOUT` 等），README 不重复维护。
 

@@ -15,7 +15,7 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=55">
+  <link rel="stylesheet" href="/style.css?v=58">
 </head>
 <body>
   <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
@@ -263,9 +263,23 @@
     </section>
   </main>
 
+  <div class="modal-backdrop hidden" id="detailValueModal" role="dialog" aria-modal="true" aria-labelledby="detailValueTitle">
+    <div class="modal-panel modal-info admin-modal-panel">
+      <div class="modal-accent"></div>
+      <button class="modal-close" id="detailValueClose" type="button" aria-label="关闭全文">&times;</button>
+      <div class="admin-modal-body">
+        <h3 class="admin-modal-title" id="detailValueTitle">字段全文</h3>
+        <pre class="admin-modal-value" id="detailValueText" tabindex="0"></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary-btn" id="detailValueDismiss" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=9" defer></script>
+  <script src="/admin.js?v=12" defer></script>
 </body>
 </html>

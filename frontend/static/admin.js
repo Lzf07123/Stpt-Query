@@ -17,6 +17,9 @@
     detailPanel: $("logDetailPanel"), detailBack: $("detailBack"), detailCopy: $("detailCopy"),
     detailMeta: $("detailMeta"), detailResult: $("detailResult"), detailKind: $("detailKind"),
     detailElapsed: $("detailElapsed"), detailRun: $("detailRun"), detailFields: $("detailFields"),
+    detailValueModal: $("detailValueModal"), detailValueTitle: $("detailValueTitle"),
+    detailValueText: $("detailValueText"), detailValueClose: $("detailValueClose"),
+    detailValueDismiss: $("detailValueDismiss"),
     detailScopes: $("detailScopes"), relatedStatus: $("relatedStatus"), relatedBody: $("relatedBody"),
     detailJson: $("detailJson"),
     total: $("statTotal"), success: $("statSuccess"), failure: $("statFailure"),
@@ -437,8 +440,19 @@
       return order.indexOf(left) - order.indexOf(right);
     });
     elements.detailFields.innerHTML = keys.map(function (key) {
-      return '<div><dt>' + escapeHtml(detailLabel(key)) + "</dt><dd>" + escapeHtml(formatDetailValue(item[key])) + "</dd></div>";
+      return '<div class="detail-field"><dt>' + escapeHtml(detailLabel(key)) + "</dt><dd>" + escapeHtml(formatDetailValue(item[key])) + "</dd></div>";
     }).join("");
+    window.requestAnimationFrame(function () {
+      Array.from(elements.detailFields.querySelectorAll(".detail-field")).forEach(function (field) {
+        var value = field.querySelector("dd");
+        if (!value || value.scrollWidth <= value.clientWidth + 1) return;
+        field.classList.add("detail-field-viewable");
+        field.setAttribute("role", "button");
+        field.setAttribute("tabindex", "0");
+        field.setAttribute("aria-haspopup", "dialog");
+        field.setAttribute("title", value.textContent);
+      });
+    });
     elements.detailJson.textContent = JSON.stringify(item, null, 2);
     renderDetailScopes(item);
   }
@@ -537,6 +551,29 @@
     state.relatedRequest += 1;
     elements.logsPanel.classList.remove("detail-open");
     elements.detailPanel.hidden = true;
+  }
+
+  var detailValueLastFocused = null;
+
+  function openDetailValueModal(field) {
+    var value = field.querySelector("dd");
+    if (!value || !value.textContent.trim()) return;
+    elements.detailValueTitle.textContent = field.querySelector("dt").textContent + " · 全文";
+    elements.detailValueText.textContent = value.textContent;
+    detailValueLastFocused = document.activeElement;
+    elements.detailValueModal.classList.remove("hidden", "modal-backdrop-out");
+    elements.detailValueModal.classList.add("modal-backdrop-in");
+    document.body.style.overflow = "hidden";
+    elements.detailValueClose.focus();
+  }
+
+  function closeDetailValueModal() {
+    elements.detailValueModal.classList.add("hidden");
+    document.body.style.overflow = "";
+    if (detailValueLastFocused && document.contains(detailValueLastFocused)) {
+      detailValueLastFocused.focus();
+    }
+    detailValueLastFocused = null;
   }
 
   function renderLogs(payload) {
@@ -822,6 +859,27 @@
       loadMetrics();
     });
     elements.detailBack.addEventListener("click", closeLogDetail);
+    elements.detailFields.addEventListener("click", function (event) {
+      var field = event.target.closest(".detail-field-viewable");
+      if (field) openDetailValueModal(field);
+    });
+    elements.detailFields.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      var field = event.target.closest(".detail-field-viewable");
+      if (!field) return;
+      event.preventDefault();
+      openDetailValueModal(field);
+    });
+    elements.detailValueClose.addEventListener("click", closeDetailValueModal);
+    elements.detailValueDismiss.addEventListener("click", closeDetailValueModal);
+    elements.detailValueModal.addEventListener("click", function (event) {
+      if (event.target === elements.detailValueModal) closeDetailValueModal();
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && !elements.detailValueModal.classList.contains("hidden")) {
+        closeDetailValueModal();
+      }
+    });
     elements.detailCopy.addEventListener("click", function () {
       if (!state.detail) return;
       navigator.clipboard.writeText(JSON.stringify(state.detail, null, 2)).then(function () {
