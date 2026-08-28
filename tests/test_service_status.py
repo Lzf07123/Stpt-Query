@@ -103,6 +103,31 @@ def test_redis_service_status_is_shared_before_file_and_memory(tmp_path):
         async def lrange(self, key: str, start: int, stop: int) -> list[str]:
             return self.values.get(key, [])[start:stop + 1]
 
+        def pipeline(self, transaction=True):
+            assert transaction is True
+            return self._FakePipeline(self)
+
+        class _FakePipeline:
+            def __init__(self, redis):
+                self.redis = redis
+                self.operations = []
+
+            def lpush(self, key, value):
+                self.operations.append(("lpush", key, value))
+
+            def ltrim(self, key, start, stop):
+                self.operations.append(("ltrim", key, start, stop))
+
+            async def execute(self):
+                for operation, *args in self.operations:
+                    if operation == "lpush":
+                        key, value = args
+                        self.redis.values.setdefault(key, []).insert(0, value)
+                    else:
+                        key, start, stop = args
+                        self.redis.values[key] = self.redis.values[key][start:stop + 1]
+                return True
+
     cfg = _cfg(tmp_path, file_log_enabled=False)
     app = create_app(cfg)
     redis = FakeAsyncRedis()
@@ -119,3 +144,73 @@ def test_redis_service_status_is_shared_before_file_and_memory(tmp_path):
     assert body["results"][0]["success"] is False
     assert body["results"][0]["kind"] == "login_error"
     assert json.loads(redis.values["gw:service-status"][0])["success"] is False
+
+
+async def test_redis_service_status_and_query_logs_commit_isolated_transactions(tmp_path):
+    class FakePipeline:
+        def __init__(self, redis):
+            self.redis = redis
+            self.operations = []
+
+        def lpush(self, key, value):
+            self.operations.append(("lpush", key, value))
+
+        def ltrim(self, key, start, stop):
+            self.operations.append(("ltrim", key, start, stop))
+
+        async def execute(self):
+            self.redis.transactions.append([
+                (operation, key) for operation, key, *_ in self.operations
+            ])
+            for operation, *args in self.operations:
+                if operation == "lpush":
+                    key, value = args
+                    self.redis.values.setdefault(key, []).insert(0, value)
+                else:
+                    key, start, stop = args
+                    self.redis.values[key] = self.redis.values[key][start:stop + 1]
+            return True
+
+    class FakeAsyncRedis:
+        def __init__(self):
+            self.values = {}
+            self.transactions = []
+
+        async def incr(self, key):
+            return 1
+
+        async def expire(self, key, seconds):
+            assert seconds == 60
+
+        async def ping(self):
+            return True
+
+        async def lrange(self, key, start, stop):
+            return self.values.get(key, [])[start:stop + 1]
+
+        def pipeline(self, transaction=True):
+            assert transaction is True
+            return FakePipeline(self)
+
+    cfg = _cfg(tmp_path, file_log_enabled=False)
+    app = create_app(cfg)
+    redis = FakeAsyncRedis()
+    app.state.redis = redis
+    client = TestClient(app)
+
+    assert client.post(
+        "/run", headers=HEADERS,
+        json={"username": "2023000001", "password": "pw", "option": "成绩"},
+    ).status_code == 200
+
+    assert [sorted(operation for operation, _ in transaction)
+            for transaction in redis.transactions] == [
+        ["lpush", "ltrim"], ["lpush", "ltrim"]
+    ]
+    assert all(len({key for _, key in transaction}) == 1
+               for transaction in redis.transactions)
+    assert {key for transaction in redis.transactions for _, key in transaction} == {
+        "gw:service-status", "gw:query-logs"
+    }
+    assert redis.values["gw:service-status"]
+    assert redis.values["gw:query-logs"]

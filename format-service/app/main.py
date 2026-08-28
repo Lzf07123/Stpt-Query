@@ -402,17 +402,22 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="请求过于频繁，请稍后再试")
 
+    async def _record_recent(key: str, value: str) -> None:
+        try:
+            pipeline = app.state.redis.pipeline(transaction=True)
+            pipeline.lpush(key, value)
+            pipeline.ltrim(key, 0, 99)
+            await pipeline.execute()
+        except Exception:
+            pass
+
     async def _record(success: bool, kind: str) -> None:
         item = {"success": success, "kind": kind,
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         with results_lock:
             results.append(item)
         if app.state.redis is not None:
-            try:
-                await app.state.redis.lpush("gw:service-status", json.dumps(item, ensure_ascii=False))
-                await app.state.redis.ltrim("gw:service-status", 0, 99)
-            except Exception:
-                pass
+            await _record_recent("gw:service-status", json.dumps(item, ensure_ascii=False))
 
     async def _record_query_log(entry: dict) -> None:
         """查询日志四路一致：内存、可选 Redis、可选文件和 stdout。"""
@@ -420,11 +425,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         with query_logs_lock:
             query_logs.append(entry)
         if app.state.redis is not None:
-            try:
-                await app.state.redis.lpush("gw:query-logs", json.dumps(entry, ensure_ascii=False))
-                await app.state.redis.ltrim("gw:query-logs", 0, 99)
-            except Exception:
-                pass
+            await _record_recent("gw:query-logs", json.dumps(entry, ensure_ascii=False))
         if app.state.file_log_writer is not None:
             app.state.file_log_writer.last_error = ""
             try:
