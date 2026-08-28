@@ -1,11 +1,15 @@
 """请求/响应模型：对齐原 Dify 开始节点与 dify-workflow-api 网关契约。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Option = str  # "成绩" | "课表"
+JobPhase = Literal[
+    "queued", "dispatching", "querying", "analyzing",
+    "generating_pdf", "done",
+]
 
 
 class WorkflowRequest(BaseModel):
@@ -69,3 +73,36 @@ class QueryResult(BaseModel):
     meta: Dict[str, Any] = Field(default_factory=dict)
     files: List[Dict[str, str]] = Field(default_factory=list)
     pdf_base64: str = ""
+
+
+class SessionWorkflowRequest(WorkflowRequest):
+    """任务 worker 使用的内部请求；队列中只允许短期 session，不允许密码。"""
+
+    password: Optional[str] = Field(default=None, max_length=256, description="密码")
+
+
+class JobSubmissionResponse(BaseModel):
+    """异步任务受理结果；前端以 job_id 轮询状态。"""
+
+    job_id: str
+    state: Literal["queued"] = "queued"
+    deduplicated: bool = False
+    position: Optional[int] = None
+    poll_url: str
+    retry_after: int = 1
+
+
+class JobStatusResponse(BaseModel):
+    """异步任务状态；绝不返回 session、密码、网关令牌或查询代理票据。"""
+
+    job_id: str
+    state: str
+    phase: JobPhase = "queued"
+    phase_index: int = 2
+    phase_label: str = "排队中"
+    phase_started_at: Optional[float] = None
+    position: Optional[int] = None
+    enqueued_at: float
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    result: Optional[QueryResult] = None

@@ -112,6 +112,12 @@ services:
       # 唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
       - TRUST_PROXY=${TRUST_PROXY:-true}
       - REDIS_URL=${REDIS_URL:-}
+      - JOB_WORKERS=${JOB_WORKERS:-2}
+      - JOB_PENDING_LIMIT=${JOB_PENDING_LIMIT:-500}
+      - JOB_RESULT_TTL_SECONDS=${JOB_RESULT_TTL_SECONDS:-900}
+      - JOB_STALE_AFTER_SECONDS=${JOB_STALE_AFTER_SECONDS:-200}
+      - LLM_CONCURRENCY=${LLM_CONCURRENCY:-8}
+      - PDF_CONCURRENCY=${PDF_CONCURRENCY:-2}
       - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
       - FILE_LOG_ENABLED=${FILE_LOG_ENABLED:-true}
       - FILE_LOG_PATH=${FILE_LOG_PATH:-/var/log/edu-query/queries.jsonl}
@@ -122,6 +128,9 @@ services:
       - HOST_CGROUP_ROOT=/host/sys/fs/cgroup
     depends_on:
       get-infomation-service:
+        condition: service_healthy
+        required: false
+      redis:
         condition: service_healthy
         required: false
     healthcheck:
@@ -174,6 +183,34 @@ services:
       timeout: 5s
       start_period: 5s
       retries: 3
+
+  # ===== 可选 Redis：由 .env 的 COMPOSE_PROFILES=redis 启用 =====
+  redis:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}redis:7-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    user: "999:999"
+    command: ["redis-server", "--dir", "/data", "--save", "", "--appendonly", "no"]
+    mem_limit: 128m
+    pids_limit: 48
+    tmpfs:
+      - /data:size=64m,uid=999,gid=999,mode=0700
+    networks:
+      - internal
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - redis
+      - async
 
 networks:
   # 对外边缘网络：nginx ↔ 格式化后端

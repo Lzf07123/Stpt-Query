@@ -203,3 +203,105 @@ def test_rate_limit_returns_429_by_client_ip():
     assert client.post("/run", headers=headers, json=payload).status_code == 200
     assert client.post("/run", headers=headers, json=payload).status_code == 200
     assert client.post("/run", headers=headers, json=payload).status_code == 429
+
+
+def test_async_jobs_require_redis():
+    resp = _client().post(
+        "/run/jobs",
+        headers={"Authorization": "Bearer test-token"},
+        json={"username": "2023000001", "password": "pw", "option": "成绩"})
+    assert resp.status_code == 503
+    assert "REDIS_URL" in resp.json()["detail"]
+
+
+async def test_async_worker_links_pipeline_phases_to_job_status():
+    import asyncio
+    import time
+
+    from app.schema import JobStatusResponse
+
+    job_id = "0" * 32
+    calls = []
+
+    class FakeAsyncRedis:
+        async def ping(self):
+            return True
+
+        async def aclose(self):
+            return None
+
+        async def lpush(self, key, value):
+            return 1
+
+        async def ltrim(self, key, start, stop):
+            return True
+
+    class FakeJobStore:
+        def __init__(self):
+            self.claimed = False
+            self.doc = {
+                "state": "queued", "phase": "queued", "phase_started_at": time.time()
+            }
+
+        async def claim(self, ttl_seconds):
+            if self.claimed:
+                await asyncio.sleep(0.05)
+                return None
+            self.claimed = True
+            return job_id, {
+                "username": "2023000001", "option": "成绩", "check": True
+            }, "short-lived-session", "127.0.0.1", time.time()
+
+        async def mark_phase(self, job_id, phase, ttl_seconds):
+            calls.append(phase)
+            self.doc["phase"] = phase
+            return True
+
+        async def mark_running(self, job_id, started_at, ttl_seconds):
+            self.doc["state"] = "running"
+            return True
+
+        async def complete(self, job_id, result, ttl_seconds):
+            self.doc.update({"state": "success", "result": result})
+
+        async def status(self, job_id):
+            return JobStatusResponse(
+                job_id=job_id,
+                state=self.doc["state"],
+                phase=self.doc["phase"],
+                enqueued_at=time.time(),
+            )
+
+    class PhasePipeline:
+        async def run(self, body, session=None, progress_cb=None):
+            await progress_cb("querying")
+            await progress_cb("analyzing")
+            return {"success": True, "kind": "grades", "run_id": "run-1"}
+
+    cfg = Settings(
+        environment="development",
+        auto_rotate_token=False,
+        api_token="test-token",
+        service_base_url="http://127.0.0.1:9",
+        service_api_token="x",
+        llm_api_key="",
+        job_workers=1,
+    )
+    app = create_app(cfg)
+    fake_redis = FakeAsyncRedis()
+    fake_store = FakeJobStore()
+    app.state.redis = fake_redis
+    app.state.job_store = fake_store
+    app.state.pipeline = PhasePipeline()
+
+    with TestClient(app):
+        for _ in range(50):
+            if fake_store.doc.get("state") == "success":
+                break
+            await asyncio.sleep(0.02)
+        status = await app.state.job_store.status(job_id)
+
+    assert status is not None
+    assert status.state == "success"
+    assert status.phase == "analyzing"
+    assert calls == ["dispatching", "querying", "querying", "analyzing"]

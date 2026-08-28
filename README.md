@@ -65,6 +65,7 @@ flowchart LR
     U[用户浏览器] -->|唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /run"]
     F -->|web 网络| S["format-service（格式化后端）<br/>编排 + 渲染 + LLM 分析 + PDF"]
     S -->|internal 内网| G["get-infomation-service（查询代理）<br/>统一认证登录 / 教务查询 / 免密跳转"]
+    S -.可选异步队列/状态.-> R["Redis（不暴露宿主端口）"]
     S -.成绩分析.-> L["DeepSeek（OpenAI 兼容）"]
     G --> U2["学校教务系统（WebVPN/CAS）"]
 ```
@@ -84,6 +85,31 @@ flowchart LR
 | md_exporter / file_tools | `format-service/app/pdf.py` + 内联 Base64 PDF |
 | sys.workflow_run_id | `format-service/app/trace.py::new_run_id` |
 | 3 个 END | `format-service/app/schema.py::QueryResult` 单一体 |
+
+## 异步查询任务
+
+`POST /run/jobs` 用于高峰排队。接口先同步完成学校登录，把密码换成查询代理的短期
+session/任务票据，然后立即返回 `job_id`；队列、去重键、任务状态和结果都保存在 Redis。
+**Redis 队列不保存密码**，任务负载不含明文凭据；日志和轮询响应也不返回 session 或 token。
+
+```text
+POST /run/jobs        请求体与 POST /run 相同，返回 {job_id, state, position, poll_url}
+GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
+```
+
+- 轮询响应包含 `phase`、`phase_index`、`phase_label` 和 `phase_started_at`。阶段依次为
+  `queued`（排队）、`dispatching`（等待查询槽位）、`querying`（查询成绩/课表）、
+  `analyzing`（成绩分析，可选）、`generating_pdf`（生成 PDF，可选）和 `done`（完成）。
+  登录校验在 `/run/jobs` 受理前同步完成，因此拿到 `job_id` 时登录步骤已完成。
+- `JOB_WORKERS` 是每个 format-service 副本的消费协程数；总活跃任务约为副本数 × worker 数，
+  并继续受 `GLOBAL_CONCURRENCY`、`LLM_CONCURRENCY`、`PDF_CONCURRENCY` 和查询代理上游
+  信号量保护。
+- 同一学号 + 查询参数在排队/执行中自动去重；终态结果按 `JOB_RESULT_TTL_SECONDS` 保留。
+- Redis 未配置时接口返回 503；前端识别未启用后会回退旧 `POST /run`，默认三容器部署不变。
+- 编排内 Redis 由 `.env` 的 `COMPOSE_PROFILES` 控制：设为 `redis` 时启动，留空时不启动。
+  启用后同步设 `REDIS_URL=redis://redis:6379/0`、`JWXT_REDIS_URL=redis://redis:6379/1`，
+  再执行 `docker compose up -d --build`。使用外部 Redis 时保持 `COMPOSE_PROFILES=` 留空，
+  并把两个 URL 改成外部地址。Redis 仅挂 internal 网络且不映射宿主端口。
 
 ## 查询日志与可观测性
 
@@ -145,6 +171,9 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 - `format-service` 对 `/run` 设置全局并发槽位（默认 4）和等待超时；满载返回 HTTP 503。
 - 单次编排有总预算（默认 100 秒），避免学校上游或 LLM 故障长期占用连接。
 - `REDIS_URL` 配置后使用固定窗口共享限流；Redis 不可用时 `/run` 失败关闭，防止限流旁路。
+- 异步任务使用 Redis 排队和去重；`JOB_PENDING_LIMIT` 限制全局排队，worker 使用查询、LLM
+  和 PDF 独立槽位，避免 500 个任务同时穿透到学校、模型或 CPU。
+- 前端 Nginx 使用多 worker 与 4096 连接，静态响应压缩/短缓存；`/run` 与任务轮询响应不缓存。
 
 ## 当前目标
 
@@ -154,7 +183,7 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 
 ## 路线图
 
-- 近期：真实账号端到端验收；多实例后台任务队列（异步 `/run/{id}` 轮询兼容）
+- 近期：真实账号端到端验收；异步任务多副本压测与学校上游安全并发标定
 - 中期：查询日志接入集中式日志平台；Prometheus 指标告警；HTTPS 与密钥轮换
 - 远期：扩展成绩分析能力与可复用编排方案沉淀
 
@@ -194,6 +223,10 @@ rm -rf frontend/node_modules .venv .pytest_cache format-service/app/__pycache__ 
 cp .env.example .env      # 填写 SERVICE_API_TOKEN / LLM_API_KEY（可选），务必修改 API_TOKEN
 docker compose up -d --build
 # 浏览器打开 http://127.0.0.1:8000
+
+# 启用编排内 Redis 和异步排队时，在 .env 设 COMPOSE_PROFILES=redis、
+# REDIS_URL=redis://redis:6379/0 和 JWXT_REDIS_URL=redis://redis:6379/1，然后：
+docker compose up -d --build
 ```
 
 > `PUBLIC_BASE_URL` 为浏览器可访问的对外入口地址，用于生成免密登录 `/jump/go` 与课表下载
@@ -220,7 +253,7 @@ pytest
 # 或容器内：
 docker build -t format-service:test format-service
 docker run --rm -v "$PWD":/app -w /app format-service:test \
-  sh -c "pip install -q pytest pytest-asyncio && pytest -q"
+  sh -c "pip install -q pytest pytest-asyncio && python -m pytest -q"
 
 # 前端令牌构建（Tailwind CSS 4 同栈，产物自托管）
 cd frontend && npm install && npm run build

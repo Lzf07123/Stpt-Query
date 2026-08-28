@@ -15,6 +15,7 @@
 | 管理员后台查询 | `ADMIN_TOKEN` 独立鉴权 `/admin/api/query-logs`、`/admin/api/metrics` | Secret 注入；多副本需统一 Ingress 或逐副本查看 |
 | 存活/就绪探针 | `GET /health/live`、`GET /health/ready` | `livenessProbe` / `readinessProbe` |
 | 优雅退出 | 资源采样任务由应用 shutdown 取消 | 配合 `terminationGracePeriodSeconds` |
+| 异步任务队列 | `POST /run/jobs` + Redis 队列/状态/阶段；每副本 `JOB_WORKERS` 消费 | Redis 中的队列仅保存短期 session 和粗粒度阶段，不保存密码 |
 | 客户端 IP | `TRUST_PROXY=true` 后按 `X-Forwarded-For` 限流 | Ingress/Service 传递真实 IP |
 | 跨副本限流/状态历史 | format-service 用 `REDIS_URL` 共享固定窗口限流、历史与日志；查询代理用 `JWXT_REDIS_URL` 共享会话与缓存 | 接入托管 Redis（云 Redis / Operator） |
 | 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 内存环形缓冲 + 可选 Redis（`gw:query-logs`、`gw:service-status`）+ 持久 JSONL 文件 + `GET /query-logs`、`GET /service-status` | 采集器消费 stdout；需要跨 Pod 留存时为 JSONL 配置 PVC，或继续使用集中日志；跨副本状态历史接入 Redis |
@@ -48,7 +49,7 @@
 5. **Redis 高可用**：多副本 + 限流/历史共享时用托管 Redis，避免单点。
 6. **可观测**：查询日志已按结构化 JSON 单行输出 stdout（`event/run_id/username/option/success/kind/elapsed_ms`，无密码/session/token），迁入 K8s 后由 Fluentd / Promtail 采集；再接入 Prometheus `/metrics` 指标。
 7. **密钥轮换**：`API_TOKEN`、`LLM_API_KEY`、`SERVICE_API_TOKEN` 按周期轮换。
-8. **过载保护**：format-service 已有全局并发槽位、槽位等待超时和单次编排总预算；副本数仍需结合 `GLOBAL_CONCURRENCY` 与查询代理容量评估。
+8. **过载保护**：format-service 已有全局并发槽位、异步任务队列、LLM/PDF 独立槽位、槽位等待超时和单次编排总预算；副本数仍需结合 `GLOBAL_CONCURRENCY`、`JOB_WORKERS` 与查询代理容量评估。
 
 ## 四、示例（仅供未来参考，不在当前仓库落地）
 

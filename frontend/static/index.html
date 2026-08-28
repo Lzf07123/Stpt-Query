@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=51">
+  <link rel="stylesheet" href="/style.css?v=56">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
 </head>
@@ -173,6 +173,9 @@
             <span class="run-id-copy-state" id="runIdCopyState">复制</span>
           </button>
         </div>
+        <div id="progressTrack" class="query-progress hidden" role="status" aria-live="polite">
+          <div id="progressSteps" class="query-progress-track"></div>
+        </div>
         <div id="skeleton" class="skeleton" hidden aria-hidden="true">
           <div class="skeleton-line"></div>
           <div class="skeleton-row"></div>
@@ -240,6 +243,8 @@
     const submitBtnText = document.getElementById("submitBtnText");
     const skeleton = document.getElementById("skeleton");
     const statusBox = document.getElementById("status");
+    const progressTrack = document.getElementById("progressTrack");
+    const progressSteps = document.getElementById("progressSteps");
     const resultCard = document.getElementById("resultCard");
     const runIdMeta = document.getElementById("runIdMeta");
     const runIdValue = document.getElementById("runIdValue");
@@ -667,6 +672,78 @@
     function showLoading() {
       statusBox.innerHTML = '<span class="spinner"></span>正在查询';
       statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
+    }
+
+    function showQueued(position) {
+      const suffix = position ? " · 第 " + position + " 位" : "";
+      statusBox.innerHTML = '<span class="spinner"></span>排队中' + suffix;
+      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
+    }
+
+    function progressStepsFor(payload) {
+      const steps = [
+        { phase: "login", label: "登录验证" },
+        { phase: "queued", label: "排队等待" },
+        { phase: "dispatching", label: "等待槽位" },
+        { phase: "querying", label: payload.option === "课表" ? "查询课表" : "查询成绩" }
+      ];
+      if (payload.option === "成绩" && payload.check) {
+        steps.push({ phase: "analyzing", label: "成绩分析" });
+      }
+      if (payload.md2pdf) {
+        steps.push({ phase: "generating_pdf", label: "生成 PDF" });
+      }
+      steps.push({ phase: "done", label: "完成" });
+      return steps;
+    }
+
+    function renderJobProgress(phase, payload, jobState, position) {
+      const normalizedPhase = phase || "queued";
+      const steps = progressStepsFor(payload);
+      if (normalizedPhase === "queued" && position) {
+        steps[1].label = "第" + position + "位";
+      }
+      const currentIndex = Math.max(0, steps.findIndex(function (step) {
+        return step.phase === normalizedPhase;
+      }));
+      const failed = jobState === "failed";
+      const done = jobState === "success" || normalizedPhase === "done";
+      progressSteps.innerHTML = steps.map(function (step, index) {
+        const state = index < currentIndex || done ? "completed"
+          : index === currentIndex ? (failed ? "failed" : "active") : "pending";
+        const ariaCurrent = state === "active" ? "step" : "false";
+        const dot = state === "active"
+          ? '<span class="query-step-dot"><span class="spinner"></span></span>'
+          : '<span class="query-step-dot"></span>';
+        return [
+          '<div class="query-step ', state, '" aria-current="', ariaCurrent, '">',
+          dot,
+          '<span class="query-step-label"></span>',
+          '</div>'
+        ].join("");
+      }).join("");
+      progressSteps.querySelectorAll(".query-step-label").forEach(function (node, index) {
+        node.textContent = steps[index].label;
+      });
+      progressTrack.classList.remove("hidden");
+      progressTrack.classList.toggle("query-progress-failed", failed);
+      const longestLabel = Math.max.apply(null, steps.map(function (step) {
+        return step.label.length;
+      }));
+      const trackWidth = progressTrack.clientWidth || progressTrack.getBoundingClientRect().width;
+      const responsiveFontSize = Math.max(
+        6,
+        Math.min(11, Math.floor(
+          trackWidth / (steps.length * Math.max(5, longestLabel)) * 10
+        ) / 10)
+      );
+      progressSteps.style.setProperty("--step-font-size", responsiveFontSize + "px");
+    }
+
+    function hideJobProgress() {
+      progressTrack.classList.add("hidden");
+      progressTrack.classList.remove("query-progress-failed");
+      progressSteps.innerHTML = "";
     }
 
     function setRunId(value) {
@@ -1439,22 +1516,85 @@
       layout.classList.add("has-result");
       updateUrlParams(payload);
       const savedScrollY = window.scrollY;
-      showLoading();
+      renderJobProgress("login", payload, "running", 0);
       let rowCount = 0;
       try {
-        const resp = await fetch("/run", {
+        let resp;
+        let data;
+        const jobSubmitResp = await fetch("/run/jobs", {
           method: "POST",
           headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
           body: JSON.stringify(payload),
           signal: queryController.signal
         });
-        const text = await resp.text();
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch (err) {
-          data = text;
+        let jobSubmitText = await jobSubmitResp.text();
+        let jobSubmitData;
+        try { jobSubmitData = JSON.parse(jobSubmitText); } catch (err) { jobSubmitData = jobSubmitText; }
+        const jobFeatureUnavailable = jobSubmitResp.status === 404 ||
+          (jobSubmitResp.status === 503 &&
+            /REDIS_URL|异步查询未启用/.test(String(jobSubmitData && jobSubmitData.detail || jobSubmitData)));
+
+        if (jobSubmitResp.ok && jobSubmitData && jobSubmitData.job_id) {
+          renderJobProgress("queued", payload, "queued", jobSubmitData.position || 0);
+          let terminalJob = null;
+          while (seq === querySeq && !queryController.signal.aborted) {
+            await new Promise(function (resolve) { setTimeout(resolve, 2000); });
+            if (seq !== querySeq || queryController.signal.aborted) return;
+            const pollResp = await fetch("/run/jobs/" + encodeURIComponent(jobSubmitData.job_id), {
+              headers: authHeaders(),
+              cache: "no-store",
+              signal: queryController.signal
+            });
+            const pollText = await pollResp.text();
+            let pollData;
+            try { pollData = JSON.parse(pollText); } catch (err) { pollData = pollText; }
+            if (pollResp.status === 404) {
+              showErrorCard("任务不存在或已过期，请重新查询");
+              showToast("error", "查询任务已过期");
+              showStatus("查询失败", false);
+              renderServiceStatus();
+              return;
+            }
+            if (!pollResp.ok) {
+              throw new Error(pollData && pollData.detail || ("HTTP " + pollResp.status));
+            }
+            if (pollData.state === "queued") {
+              renderJobProgress(
+                pollData.phase || "queued", payload, pollData.state, pollData.position);
+            } else if (pollData.state === "running") {
+              renderJobProgress(pollData.phase || "querying", payload, pollData.state, 0);
+            } else {
+              terminalJob = pollData;
+              renderJobProgress(
+                terminalJob.phase || (terminalJob.result && terminalJob.result.success ? "done" : "querying"),
+                payload,
+                terminalJob.state,
+                terminalJob.position
+              );
+              break;
+            }
+          }
+          if (!terminalJob) return;
+          data = terminalJob.result || { success: false, kind: "internal_error", output: "查询任务失败" };
+          resp = new Response(JSON.stringify(data), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        } else if (jobSubmitResp.ok || jobFeatureUnavailable) {
+          hideJobProgress();
+          resp = await fetch("/run", {
+            method: "POST",
+            headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+            body: JSON.stringify(payload),
+            signal: queryController.signal
+          });
+          const text = await resp.text();
+          try { data = JSON.parse(text); } catch (err) { data = text; }
+        } else {
+          resp = jobSubmitResp;
+          data = jobSubmitData;
         }
+
         let businessFail = false;
         if (!resp.ok) {
           let message = "HTTP " + resp.status;

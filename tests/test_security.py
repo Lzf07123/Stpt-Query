@@ -96,7 +96,7 @@ def test_runtime_memory_guardrails_are_configured():
     assert "mem_limit: ${FRONTEND_MEM_LIMIT:-64m}" in compose
     assert compose.count("MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}") == 2
     nginx = open("frontend/nginx.conf", encoding="utf-8").read()
-    assert "worker_processes 1;" in nginx
+    assert "worker_processes auto;" in nginx
 
 
 def test_inline_script_hashes_are_covered_by_csp():

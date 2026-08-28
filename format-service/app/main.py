@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import math
+import re
 import secrets
 import time
 from collections import deque
@@ -22,12 +23,16 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .classifier import classify_error
+from .jobs import JobStore, QueueFullError
 from .llm import LLMClient
 from .metrics import ResourceMonitor
-from .pipeline import HTTPServiceClient, Pipeline
+from .pipeline import HTTPServiceClient, Pipeline, ServiceError
 from .querylog import JSONLFileWriter, log_query, sanitize_entry
-from .schema import QueryResult, WorkflowRequest
+from .schema import (JobSubmissionResponse, JobStatusResponse, QueryResult,
+                     SessionWorkflowRequest, WorkflowRequest)
 from .trace import LOG, new_run_id, setup_logging
+from .render import extract_session
 
 
 class Settings(BaseSettings):
@@ -42,6 +47,10 @@ class Settings(BaseSettings):
     request_timeout: float = 100.0
     concurrency_wait_timeout: float = 2.0
     global_concurrency: int = 4
+    job_workers: int = 2
+    job_pending_limit: int = 500
+    job_result_ttl_seconds: int = 900
+    job_stale_after_seconds: int = 200
     llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     llm_api_key: str = ""
     llm_model: str = "glm-4.5-flash"
@@ -50,6 +59,8 @@ class Settings(BaseSettings):
     llm_enable_thinking: bool = True
     llm_system_prompt: str = ""
     llm_timeout: float = 60.0
+    llm_concurrency: int = 8
+    pdf_concurrency: int = 2
     rate_limit: int = 30
     trust_proxy: bool = False
     redis_url: str = ""
@@ -146,11 +157,25 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         timeout=cfg.llm_timeout, enable_thinking=cfg.llm_enable_thinking,
         system_prompt=cfg.llm_system_prompt)
     service = HTTPServiceClient(cfg.service_base_url, cfg.service_api_token, cfg.service_timeout)
+    llm_slots = asyncio.Semaphore(max(1, cfg.llm_concurrency))
+    pdf_slots = asyncio.Semaphore(max(1, cfg.pdf_concurrency))
+    login_slots = asyncio.Semaphore(max(1, min(8, cfg.global_concurrency)))
     pipeline = Pipeline(service=service, llm=llm,
-                        request_timeout=cfg.request_timeout)
+                        request_timeout=cfg.request_timeout,
+                        llm_semaphore=llm_slots, pdf_semaphore=pdf_slots)
     public_health_cache: dict = {"at": 0.0, "payload": None}
 
     async def _shutdown() -> None:
+        for task in getattr(app.state, "job_worker_tasks", []):
+            task.cancel()
+        reaper = getattr(app.state, "job_reaper_task", None)
+        if reaper is not None:
+            reaper.cancel()
+        tasks = list(getattr(app.state, "job_worker_tasks", []))
+        if reaper is not None:
+            tasks.append(reaper)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         await resource_monitor.stop()
         if app.state.redis is not None:
             await app.state.redis.aclose()
@@ -201,6 +226,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         except Exception as exc:  # pragma: no cover
             raise RuntimeError("Redis 连接失败（REDIS_URL）：%s" % exc)
     app.state.redis = _redis
+    app.state.job_store = JobStore(_redis) if _redis is not None else None
 
     async def _startup() -> None:
         if app.state.file_log_writer is not None:
@@ -217,6 +243,84 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             await app.state.redis.ping()
         except Exception as exc:
             raise RuntimeError("Redis 连接失败（REDIS_URL）：%s" % exc) from exc
+
+        async def reap_stale_jobs() -> None:
+            while True:
+                try:
+                    stale_after = max(
+                        cfg.job_stale_after_seconds, cfg.request_timeout + 30)
+                    await app.state.job_store.reap_stale(
+                        stale_after, cfg.job_result_ttl_seconds)
+                except Exception as exc:
+                    LOG.warning("异步任务过期清理失败：%s", exc.__class__.__name__)
+                await asyncio.sleep(30)
+
+        async def run_one_job() -> None:
+            while True:
+                claimed = None
+                try:
+                    claimed = await app.state.job_store.claim(cfg.job_result_ttl_seconds)
+                except Exception as exc:
+                    LOG.warning("异步任务领取失败：%s", exc.__class__.__name__)
+                    await asyncio.sleep(1)
+                    continue
+                if claimed is None:
+                    await asyncio.sleep(0.2)
+                    continue
+
+                job_id, body, session, client_ip, started_at = claimed
+
+                async def report_phase(phase: str) -> None:
+                    try:
+                        await app.state.job_store.mark_phase(
+                            job_id, phase, cfg.job_result_ttl_seconds)
+                    except Exception:
+                        LOG.warning("异步 job=%s 阶段更新失败", job_id)
+
+                try:
+                    await report_phase("dispatching")
+                    async with query_slots:
+                        started_at = time.time()
+                        await report_phase("querying")
+                        if not await app.state.job_store.mark_running(
+                                job_id, started_at, cfg.job_result_ttl_seconds):
+                            continue
+                        result = await asyncio.wait_for(
+                            app.state.pipeline.run(
+                                body, session=session, progress_cb=report_phase),
+                            timeout=cfg.request_timeout)
+                except asyncio.TimeoutError:
+                    result = {
+                        "success": False, "kind": "request_error", "run_id": job_id,
+                        "output": "查询超时，请稍后重试",
+                        "meta": {"elapsed_ms": int(cfg.request_timeout * 1000)},
+                    }
+                except Exception as exc:
+                    LOG.exception("异步 job=%s 执行异常", job_id)
+                    result = {
+                        "success": False, "kind": "internal_error", "run_id": job_id,
+                        "output": "服务内部异常：%s" % exc.__class__.__name__,
+                        "meta": {"elapsed_ms": int((time.time() - started_at) * 1000)},
+                    }
+
+                try:
+                    await app.state.job_store.complete(
+                        job_id, result, cfg.job_result_ttl_seconds)
+                    await _record(bool(result.get("success")), result.get("kind", "unknown"))
+                    await _record_query_log(_query_log_entry(
+                        body, client_ip, started_at, result, result.get("run_id", "")))
+                except Exception as exc:
+                    LOG.exception("异步 job=%s 状态写入失败", job_id)
+
+        async def start_job_workers() -> None:
+            app.state.job_worker_tasks = [
+                asyncio.create_task(run_one_job(), name=f"query-job-worker-{index}")
+                for index in range(max(1, cfg.job_workers))
+            ]
+            app.state.job_reaper_task = asyncio.create_task(
+                reap_stale_jobs(), name="query-job-reaper")
+
+        app.add_event_handler("startup", start_job_workers)
 
     app.add_event_handler("startup", _startup)
 
@@ -361,6 +465,97 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             "analysis_usage": meta.get("analysis_usage", "—"),
             "response_summary": meta.get("response_summary", "—"),
         }
+
+    @app.post("/run/jobs", response_model=JobSubmissionResponse)
+    async def submit_run_job(body: WorkflowRequest, request: Request,
+                             _: None = Depends(_require_auth)) -> JobSubmissionResponse:
+        client_ip = _client_ip(request)
+        await _check_rate_limit(client_ip)
+        if app.state.redis is None or app.state.job_store is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="异步查询未启用：必须配置 REDIS_URL")
+
+        pending_count = await app.state.job_store.pending_count()
+        if pending_count >= cfg.job_pending_limit:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="当前排队人数已达上限，请稍后再试")
+
+        started = time.time()
+        try:
+            async with login_slots:
+                login_body = await app.state.pipeline.service.post("/login", {
+                    "username": body.username, "password": body.password})
+        except ServiceError as exc:
+            await _record(False, "login_error")
+            await _record_query_log(_query_log_entry(
+                body, client_ip, started,
+                {"success": False, "kind": "login_error", "meta": {}},
+                new_run_id()))
+            if exc.status_code in (401, 403):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="学号或密码错误") from exc
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="查询服务暂时不可用，请稍后再试") from exc
+
+        session = extract_session(login_body).get("session", "")
+        if not session:
+            failure = classify_error("login", body=login_body)
+            await _record(False, "login_error")
+            await _record_query_log(_query_log_entry(
+                body, client_ip, started,
+                {"success": False, "kind": "login_error", "meta": {}}, new_run_id()))
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=str(failure.get("output") or "学号或密码错误"))
+
+        internal_request = SessionWorkflowRequest(**body.model_dump())
+        try:
+            job_id, deduplicated, position = await app.state.job_store.enqueue(
+                internal_request, session, client_ip,
+                max(1, cfg.job_pending_limit), cfg.job_result_ttl_seconds)
+        except QueueFullError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="当前排队人数已达上限，请稍后再试") from exc
+        except Exception as exc:
+            LOG.warning("异步任务入队失败：%s", exc.__class__.__name__)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="排队服务暂时不可用，请稍后再试") from exc
+
+        return JobSubmissionResponse(
+            job_id=job_id,
+            deduplicated=deduplicated,
+            position=position,
+            poll_url=f"/run/jobs/{job_id}",
+        )
+
+    @app.get("/run/jobs/{job_id}", response_model=JobStatusResponse)
+    async def get_run_job(job_id: str, response: Response,
+                          _: None = Depends(_require_auth)) -> JobStatusResponse:
+        if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="任务不存在或已过期")
+        if app.state.redis is None or app.state.job_store is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="异步查询未启用：必须配置 REDIS_URL")
+        try:
+            job_status = await app.state.job_store.status(job_id)
+        except Exception as exc:
+            LOG.warning("异步任务状态查询失败：%s", exc.__class__.__name__)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="任务状态暂时不可用，请稍后再试") from exc
+        if job_status is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="任务不存在或已过期")
+        response.headers["Cache-Control"] = "no-store"
+        return job_status
 
     @app.post("/run", response_model=QueryResult)
     @app.post("/v1/workflows/run", include_in_schema=False, response_model=QueryResult)

@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import time
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Awaitable, Callable, Dict, Optional, Protocol
 
 import httpx
 
@@ -91,10 +92,16 @@ class Pipeline:
         base_url: str = "https://school.lizf.cn",
         service_token: str = "",
         request_timeout: float = 100.0,
+        llm_semaphore: Optional[asyncio.Semaphore] = None,
+        pdf_semaphore: Optional[asyncio.Semaphore] = None,
+        progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> None:
         self.service = service or HTTPServiceClient(base_url, service_token)
         self.llm = llm or LLMClient()
         self.request_timeout = request_timeout
+        self.llm_semaphore = llm_semaphore or asyncio.Semaphore(8)
+        self.pdf_semaphore = pdf_semaphore or asyncio.Semaphore(2)
+        self.progress_cb = progress_cb
 
     async def aclose(self) -> None:
         for client in (self.service, self.llm):
@@ -102,28 +109,36 @@ class Pipeline:
             if close is not None:
                 await close()
 
-    async def run(self, req: WorkflowRequest) -> Dict[str, Any]:
+    async def run(
+        self,
+        req: WorkflowRequest,
+        session: Optional[str] = None,
+        progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
         started = time.time()
         run_id = new_run_id()
 
-        # 1) 登录 → 2) 状态判断（body 是否含 session）
-        try:
-            login_body = await self._post("/login", {
-                "username": req.username, "password": req.password})
-        except ServiceError as exc:
-            LOG.warning("run=%s 登录请求失败", run_id)
-            result = classify_error("login", exc.status_code, exc.body,
-                                    error_message=str(exc))
-            result.update({"run_id": run_id,
-                           "meta": {**result.get("meta", {}), "elapsed_ms": _elapsed(started)}})
-            return result
-        session_info = extract_session(login_body)
-        if not session_info["session"]:
-            LOG.warning("run=%s 登录失败", run_id)
-            result = classify_error("login", body=login_body)
-            result.update({"run_id": run_id, "meta": {**result.get("meta", {}),
-                                                      "elapsed_ms": _elapsed(started)}})
-            return result
+        if session:
+            session_info = {"session": session}
+        else:
+            # 1) 登录 → 2) 状态判断（body 是否含 session）
+            try:
+                login_body = await self._post("/login", {
+                    "username": req.username, "password": req.password})
+            except ServiceError as exc:
+                LOG.warning("run=%s 登录请求失败", run_id)
+                result = classify_error("login", exc.status_code, exc.body,
+                                        error_message=str(exc))
+                result.update({"run_id": run_id,
+                               "meta": {**result.get("meta", {}), "elapsed_ms": _elapsed(started)}})
+                return result
+            session_info = extract_session(login_body)
+            if not session_info["session"]:
+                LOG.warning("run=%s 登录失败", run_id)
+                result = classify_error("login", body=login_body)
+                result.update({"run_id": run_id, "meta": {**result.get("meta", {}),
+                                                          "elapsed_ms": _elapsed(started)}})
+                return result
 
         # 3) 获取免密登录链接（失败降级为无链接，不阻断查询）
         jump_body: Dict[str, Any] = {}
@@ -135,9 +150,9 @@ class Pipeline:
 
         # 4) 查询项目分支
         if req.option == "成绩":
-            result = await self._run_grades(req, session_info, jump_body)
+            result = await self._run_grades(req, session_info, jump_body, progress_cb)
         elif req.option == "课表":
-            result = await self._run_schedule(req, session_info, jump_body)
+            result = await self._run_schedule(req, session_info, jump_body, progress_cb)
         else:
             result = classify_error("request", body="option=%s 非法" % req.option)
 
@@ -145,8 +160,14 @@ class Pipeline:
         result["meta"] = {**result.get("meta", {}), "elapsed_ms": _elapsed(started)}
         return result
 
-    async def _run_grades(self, req: WorkflowRequest, session_info: Dict[str, str],
-                          jump_body: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_grades(
+        self,
+        req: WorkflowRequest,
+        session_info: Dict[str, str],
+        jump_body: Dict[str, Any],
+        progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
+        await self._report_phase("querying", progress_cb)
         payload = {
             "session": session_info["session"],
             "semesters": req.semesters or "",
@@ -169,11 +190,13 @@ class Pipeline:
 
         if req.check:
             # 分析功能判断 true：预处理 → LLM 分析 → 数据组装
+            await self._report_phase("analyzing", progress_cb)
             parts = preprocess_grades(data, jump_body)
             try:
-                analysis = await self.llm.chat(
-                    GRADE_ANALYSIS_SYSTEM,
-                    grade_analysis_user(parts["table_text"], parts["stats_text"]))
+                async with self.llm_semaphore:
+                    analysis = await self.llm.chat(
+                        GRADE_ANALYSIS_SYSTEM,
+                        grade_analysis_user(parts["table_text"], parts["stats_text"]))
             except LLMError as exc:
                 LOG.warning("成绩分析 LLM 失败：%s，降级为纯成绩表", exc)
                 analysis = ""
@@ -191,12 +214,20 @@ class Pipeline:
             if usage_total is not None:
                 result["meta"]["analysis_usage"] = usage_total
         if req.md2pdf:
-            result["pdf_base64"] = await self._to_pdf_base64(strip_login_note(output))
+            await self._report_phase("generating_pdf", progress_cb)
+            async with self.pdf_semaphore:
+                result["pdf_base64"] = await self._to_pdf_base64(strip_login_note(output))
             result["kind"] = "grades_pdf"
         return result
 
-    async def _run_schedule(self, req: WorkflowRequest, session_info: Dict[str, str],
-                            jump_body: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_schedule(
+        self,
+        req: WorkflowRequest,
+        session_info: Dict[str, str],
+        jump_body: Dict[str, Any],
+        progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
+        await self._report_phase("querying", progress_cb)
         payload = {
             "session": session_info["session"],
             "weeks": req.weeks,
@@ -216,6 +247,15 @@ class Pipeline:
 
     async def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return await self.service.post(path, payload)
+
+    async def _report_phase(
+        self,
+        phase: str,
+        progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> None:
+        callback = progress_cb or self.progress_cb
+        if callback is not None:
+            await callback(phase)
 
     async def _to_pdf_base64(self, markdown: str) -> str:
         # 延迟导入：reportlab 只在真正需要 PDF 时加载
@@ -241,6 +281,5 @@ def _elapsed(started: float) -> int:
 
 async def _run_in_thread(fn):
     """阻塞调用放到线程池，避免卡住事件循环。"""
-    import asyncio
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, fn)

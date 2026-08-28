@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.llm import LLMClient
 from app.pipeline import Pipeline, ServiceError
-from app.schema import WorkflowRequest
+from app.schema import SessionWorkflowRequest, WorkflowRequest
 
 
 class FakeService:
@@ -103,3 +103,54 @@ async def test_schedule_branch():
     assert result["success"] and result["kind"] == "schedule"
     assert result["output"].startswith("[点击下载课表（Word 文件）]")
     assert "download_url" in result["meta"]["response_summary"]
+
+
+async def test_session_job_skips_password_login():
+    svc = FakeService()
+    req = SessionWorkflowRequest(
+        username="2023000001", option="成绩", password=None)
+    result = await Pipeline(service=svc, llm=FakeLLM()).run(req, session="ticket-1")
+    assert result["success"]
+    assert svc.calls == ["/jump", "/get_grades"]
+
+
+async def test_session_grade_job_reports_phase_transitions():
+    svc = FakeService()
+    phases = []
+
+    async def report_phase(phase):
+        phases.append(phase)
+
+    req = SessionWorkflowRequest(
+        username="2023000001", option="成绩", password=None, check=True)
+    result = await Pipeline(service=svc, llm=FakeLLM()).run(
+        req, session="ticket-1", progress_cb=report_phase)
+
+    assert result["success"]
+    assert phases == ["querying", "analyzing"]
+
+
+async def test_session_schedule_job_reports_query_phase():
+    svc = FakeService()
+    phases = []
+
+    async def report_phase(phase):
+        phases.append(phase)
+
+    req = SessionWorkflowRequest(
+        username="2023000001", option="课表", password=None)
+    result = await Pipeline(service=svc, llm=FakeLLM()).run(
+        req, session="ticket-1", progress_cb=report_phase)
+
+    assert result["success"]
+    assert phases == ["querying"]
+
+
+async def test_llm_and_pdf_semaphores_are_accepted():
+    import asyncio
+    pipeline = Pipeline(
+        service=FakeService(), llm=FakeLLM(),
+        llm_semaphore=asyncio.Semaphore(1),
+        pdf_semaphore=asyncio.Semaphore(1))
+    assert pipeline.llm_semaphore._value == 1
+    assert pipeline.pdf_semaphore._value == 1
