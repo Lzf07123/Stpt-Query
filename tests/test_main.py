@@ -34,6 +34,26 @@ def test_readiness_without_redis():
     assert body["redis"] == "not-configured"
 
 
+def test_file_log_path_is_isolated_per_instance(tmp_path):
+    cfg = Settings(
+        _env_file=None,
+        environment="development",
+        auto_rotate_token=False,
+        api_token="test-token",
+        service_base_url="http://127.0.0.1:9",
+        service_api_token="x",
+        llm_api_key="",
+        file_log_enabled=True,
+        file_log_path=str(tmp_path / "{instance_id}" / "queries.jsonl"),
+        instance_id="replica/one",
+    )
+
+    app = create_app(cfg)
+
+    assert app.state.file_log_writer.path == str(
+        tmp_path / "replica_one" / "queries.jsonl")
+
+
 def test_public_health_reports_coarse_dependencies():
     resp = _client().get("/health/public")
     assert resp.status_code == 200

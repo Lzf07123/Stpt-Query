@@ -47,7 +47,7 @@
 | 渲染与文档 | Markdown 渲染（1:1 移植原代码节点）· reportlab PDF（内置 CID 中文字体） |
 | LLM | OpenAI 兼容协议直连（默认智谱 `glm-4.5-flash`，可关闭深度思考并覆盖系统提示词） |
 | 前端 | Nginx 静态页面 + Tailwind CSS 4 品牌令牌（构建期 CLI 编译、运行时零第三方资源）+ 反向代理注入网关令牌 |
-| 部署 | Docker Compose 三容器 · 双层网络隔离 · 可选 Redis（多副本） |
+| 部署 | Docker Compose 三类服务 · 默认双副本编排层 · 双层网络隔离 · Redis AOF |
 | 测试与文档 | pytest 单元测试 · K8s 迁移指引 |
 
 ## 项目
@@ -63,9 +63,9 @@
 ```mermaid
 flowchart LR
     U[用户浏览器] -->|唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /run"]
-    F -->|web 网络| S["format-service（格式化后端）<br/>编排 + 渲染 + LLM 分析 + PDF"]
+    F -->|web 网络| S["format-service ×2（编排 + 渲染 + 分析 + PDF）"]
     S -->|internal 内网| G["get-infomation-service（查询代理）<br/>统一认证登录 / 教务查询 / 免密跳转"]
-    S -.可选异步队列/状态.-> R["Redis（不暴露宿主端口）"]
+    S -.队列/限流/查询日志.-> R["Redis AOF（不暴露宿主端口）"]
     S -.成绩分析.-> L["DeepSeek（OpenAI 兼容）"]
     G --> U2["学校教务系统（WebVPN/CAS）"]
 ```
@@ -106,10 +106,9 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
   信号量保护。
 - 同一学号 + 查询参数在排队/执行中自动去重；终态结果按 `JOB_RESULT_TTL_SECONDS` 保留。
 - Redis 未配置时接口返回 503；前端识别未启用后会回退旧 `POST /run`，默认三容器部署不变。
-- 编排内 Redis 由 `.env` 的 `COMPOSE_PROFILES` 控制：设为 `redis` 时启动，留空时不启动。
-  启用后同步设 `REDIS_URL=redis://redis:6379/0`、`JWXT_REDIS_URL=redis://redis:6379/1`，
-  再执行 `docker compose up -d --build`。使用外部 Redis 时保持 `COMPOSE_PROFILES=` 留空，
-  并把两个 URL 改成外部地址。Redis 仅挂 internal 网络且不映射宿主端口。
+- 编排内 Redis 由 `.env` 的 `COMPOSE_PROFILES` 控制：默认 `redis`。留空仅适合单副本；
+  使用外部 Redis 时保持 `COMPOSE_PROFILES=` 留空，并把 `REDIS_URL` 与
+  `JWXT_REDIS_URL` 改成外部地址。Redis 仅挂 internal 网络且不映射宿主端口。
 
 ## 查询日志与可观测性
 
@@ -128,11 +127,11 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | `success` / `kind` / `elapsed_ms` | 结果状态、分类与耗时 |
 | `response_summary` | 上游成功或失败响应的脱敏摘要，最多 300 字符；无摘要时为 `—` |
 
-服务启动时会从 JSONL 最新记录向前读取最多 100 条恢复到本实例历史。启用 Redis 后，
-同一 owner 通过 `gw:history-sync-lock` 补齐 `gw:v2:query-logs` 与 `gw:v2:service-status`。
-Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不会产生重复记录，`run_id`
-去重并只保留最近 100 条；同步失败只记录警告，不阻止服务启动。读取时兼容旧 `gw:*`
-List 并按 `run_id` 合并，滚动升级期间旧副本数据仍可见。
+每个副本把脱敏日志先写入 `{instance_id}` 隔离的本地 JSONL WAL，再写共享 Redis。
+Redis 暂不可用时查询继续；后台按 `HISTORY_SYNC_INTERVAL_SECONDS` 只回填本副本 WAL。
+Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生重复记录，`run_id`
+去重并只保留最近 100 条；读取时兼容旧 `gw:*` List 并按 `run_id` 合并，滚动升级期间
+旧副本数据仍可见。全局锁不参与一致性保障，回填最多扫描 20,000 行。
 
 - 日志**不包含**密码 / session / token；白名单字段之外一律丢弃（`app/querylog.py`）。
 - 文件通道只保留白名单字段，权限为 `0600`；按 `FILE_LOG_MAX_BYTES` 轮转并最多保留
@@ -141,17 +140,17 @@ List 并按 `run_id` 合并，滚动升级期间旧副本数据仍可见。
 - 业务编排数据仍不落盘；文件卷只承载查询日志（服务状态从 `event=query` 记录派生）。
   Redis 与文件互为冗余，任一失败不影响 `/run` 和另一条通道；最近一次文件错误可通过
   `/health` 观察。
-- Redis 短暂不可用时，`/query-logs` 与 `/service-status` 自动降级到本实例历史，不影响查询。
-  无 Redis 模式只有进程内有界历史；多副本之间不会共享状态，且不要让多个副本写入同一个
-  可轮转 JSONL 文件（可按实例拆分路径，或统一走 stdout 集中日志）。
+- Redis 短暂不可用时，`/run` 继续工作，日志降级写本实例 WAL，`/query-logs` 与
+  `/service-status` 降级到本实例历史。无 Redis 模式只有进程内有界历史；多副本之间
+  不会共享状态，严禁让多个副本解析到同一个可轮转 JSONL 文件。
 - `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
   `docker compose exec format-service curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/query-logs`；
   生产建议经集中日志查询，不长期依赖进程内存。
 - 公开站通过 `GET /health/public` 获取本站、查询代理和学校服务的粗粒度状态；
   接口只返回状态、延迟和检查时间，不暴露内部地址、错误详情或凭据，结果缓存 15 秒。
-- `GET /service-status` 返回最近 100 次查询的 `success/kind/time`，同一实例的所有客户端
-  共享相同历史；配置 Redis 后跨副本共享，重启后从持久 JSONL 日志恢复。响应不包含
-  学号、IP、错误详情、`run_id` 等查询日志上下文。
+- `GET /service-status` 返回最近 100 次查询的 `success/kind/time`，由同一查询日志流
+  派生；配置 Redis 后跨副本共享。响应不包含学号、IP、错误详情、`run_id` 等查询日志
+  上下文。
 
 ### 管理后台
 
@@ -233,9 +232,10 @@ cp .env.example .env      # 填写 SERVICE_API_TOKEN / LLM_API_KEY（可选）�
 docker compose up -d --build
 # 浏览器打开 http://127.0.0.1:8000
 
-# 启用编排内 Redis 和异步排队时，在 .env 设 COMPOSE_PROFILES=redis、
-# REDIS_URL=redis://redis:6379/0 和 JWXT_REDIS_URL=redis://redis:6379/1，然后：
-docker compose up -d --build
+# 默认 FORMAT_REPLICAS=2：format-service 双副本 + 内置 Redis AOF
+
+# 单副本且不需要异步队列时，可在 .env 设 FORMAT_REPLICAS=1、COMPOSE_PROFILES=、
+# REDIS_URL=、JWXT_REDIS_URL=，然后执行同一命令。
 ```
 
 > `PUBLIC_BASE_URL` 为浏览器可访问的对外入口地址，用于生成免密登录 `/jump/go` 与课表下载

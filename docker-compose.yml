@@ -68,6 +68,8 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-format:latest
     restart: unless-stopped
+    deploy:
+      replicas: ${FORMAT_REPLICAS:-2}
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -121,7 +123,9 @@ services:
       - PDF_CONCURRENCY=${PDF_CONCURRENCY:-2}
       - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
       - FILE_LOG_ENABLED=${FILE_LOG_ENABLED:-true}
-      - FILE_LOG_PATH=${FILE_LOG_PATH:-/var/log/edu-query/queries.jsonl}
+      # {instance_id} 会替换成容器唯一实例标识；严禁多副本共享同一轮转 JSONL
+      - FILE_LOG_PATH=${FILE_LOG_PATH:-/var/log/edu-query/{instance_id}/queries.jsonl}
+      - HISTORY_SYNC_INTERVAL_SECONDS=${HISTORY_SYNC_INTERVAL_SECONDS:-60}
       - FILE_LOG_MAX_BYTES=${FILE_LOG_MAX_BYTES:-52428800}
       - FILE_LOG_BACKUP_COUNT=${FILE_LOG_BACKUP_COUNT:-7}
       - TZ=${TZ:-Asia/Shanghai}
@@ -195,11 +199,18 @@ services:
       - ALL
     read_only: true
     user: "999:999"
-    command: ["redis-server", "--dir", "/data", "--save", "", "--appendonly", "no"]
+    command:
+      - redis-server
+      - --dir
+      - /data
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
     mem_limit: 128m
     pids_limit: 48
-    tmpfs:
-      - /data:size=64m,uid=999,gid=999,mode=0700
+    volumes:
+      - redis-data:/data
     networks:
       - internal
     expose:
@@ -223,4 +234,7 @@ volumes:
   # 查询日志文件通道；业务编排仍无状态，日志随具名持久卷跨容器/守护进程重启保留
   format-query-logs:
     name: edu-query-app_format-query-logs-persistent
+    driver: local
+  redis-data:
+    name: edu-query-app_redis-data-persistent
     driver: local

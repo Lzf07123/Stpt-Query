@@ -185,14 +185,14 @@ async def test_redis_records_status_and_query_logs_with_run_ids(tmp_path):
     assert body["results"][0]["success"] is False
     assert body["results"][0]["kind"] == "login_error"
     assert "run_id" not in body["results"][0]
-    assert len(redis.zsets["gw:v2:service-status"]) == 1
+    assert "gw:v2:service-status" not in redis.zsets
     assert len(redis.zsets["gw:v2:query-logs"]) == 1
-    status_event = json.loads(redis.zsets["gw:v2:service-status"][0][0])
     query_event = json.loads(redis.zsets["gw:v2:query-logs"][0][0])
-    assert status_event["run_id"] == query_event["run_id"]
+    assert query_event["success"] is False
+    assert query_event["kind"] == "login_error"
 
 
-async def test_redis_startup_backfills_empty_history_from_jsonl(tmp_path):
+async def test_redis_startup_backfills_query_logs_from_jsonl(tmp_path):
     writer = JSONLFileWriter(tmp_path / "queries.jsonl")
     for index in range(102):
         writer.write_raw({
@@ -210,10 +210,9 @@ async def test_redis_startup_backfills_empty_history_from_jsonl(tmp_path):
     local = MemoryEventHistory()
     history = RedisEventHistory(redis)
 
-    assert await _sync_history_from_file(writer, local, history, "instance-1") is True
+    assert await _sync_history_from_file(writer, local, history) is True
     assert len(local.recent("gw:v2:query-logs")) == 100
     assert len(redis.zsets["gw:v2:query-logs"]) == 100
-    assert len(redis.zsets["gw:v2:service-status"]) == 100
     newest = json.loads(redis.zsets["gw:v2:query-logs"][-1][0])
     oldest = json.loads(redis.zsets["gw:v2:query-logs"][0][0])
     assert newest["run_id"] == "run-101"
@@ -223,7 +222,7 @@ async def test_redis_startup_backfills_empty_history_from_jsonl(tmp_path):
                for transaction in redis.transactions)
 
 
-async def test_redis_backfill_replay_does_not_duplicate_records(tmp_path):
+async def test_redis_backfill_replay_does_not_duplicate_query_logs(tmp_path):
     writer = JSONLFileWriter(tmp_path / "queries.jsonl")
     _write_query_event(writer, success=True, kind="grades", run_id="run-1")
     _write_query_event(writer, success=False, kind="login_error", run_id="run-2")
@@ -232,28 +231,22 @@ async def test_redis_backfill_replay_does_not_duplicate_records(tmp_path):
     local = MemoryEventHistory()
     history = RedisEventHistory(redis)
 
-    assert await _sync_history_from_file(
-        writer, local, history, "instance-1") is True
+    assert await _sync_history_from_file(writer, local, history) is True
     query_members = list(redis.zsets["gw:v2:query-logs"])
-    status_members = list(redis.zsets["gw:v2:service-status"])
 
-    assert await _sync_history_from_file(
-        writer, local, history, "instance-1") is True
+    assert await _sync_history_from_file(writer, local, history) is True
     assert redis.zsets["gw:v2:query-logs"] == query_members
-    assert redis.zsets["gw:v2:service-status"] == status_members
     assert len(redis.zsets["gw:v2:query-logs"]) == 2
-    assert len(redis.zsets["gw:v2:service-status"]) == 2
     assert len(local.recent("gw:v2:query-logs")) == 2
 
 
-async def test_redis_history_sync_is_owner_locked():
+async def test_redis_history_sync_does_not_use_a_global_owner_lock():
     redis = FakeAsyncRedis()
-    redis.locks["gw:history-sync-lock"] = "instance-other"
     history = RedisEventHistory(redis)
     writer = JSONLFileWriter(str(Path("/dev/null")))
 
     assert await _sync_history_from_file(
-        writer, MemoryEventHistory(), history, "instance-1") is False
+        writer, MemoryEventHistory(), history) is False
     assert not redis.transactions
 
 

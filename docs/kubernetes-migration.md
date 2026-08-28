@@ -18,7 +18,7 @@
 | 异步任务队列 | `POST /run/jobs` + Redis 队列/状态/阶段；每副本 `JOB_WORKERS` 消费 | Redis 中的队列仅保存短期 session 和粗粒度阶段，不保存密码 |
 | 客户端 IP | `TRUST_PROXY=true` 后按 `X-Forwarded-For` 限流 | Ingress/Service 传递真实 IP |
 | 跨副本限流/状态历史 | format-service 用 `REDIS_URL` 共享固定窗口限流、历史与日志；查询代理用 `JWXT_REDIS_URL` 共享会话与缓存 | 接入托管 Redis（云 Redis / Operator） |
-| 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 进程内历史 + 可选 Redis（`gw:v2:query-logs`、`gw:v2:service-status`）+ 持久 JSONL 文件 + `GET /query-logs`、`GET /service-status` | 采集器消费 stdout；需要跨 Pod 留存时为 JSONL 配置 PVC，或继续使用集中日志；跨副本状态历史接入 Redis |
+| 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 每副本 WAL + 进程内历史 + Redis（`gw:v2:query-logs`）+ `GET /query-logs`、`GET /service-status` | 服务状态由查询日志派生；采集 stdout 到集中日志；需要本地留存时只给每个 Pod 挂独立 PVC |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
 ## 二、迁入 K8s 时的映射清单（三容器 → 三个 Deployment）

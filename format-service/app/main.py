@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     trust_proxy: bool = False
     redis_url: str = ""
     instance_id: str = ""
+    history_sync_interval_seconds: float = 60.0
     admin_token: str = ""
     file_log_enabled: bool = True
     file_log_path: str = "/tmp/edu-query/queries.jsonl"
@@ -103,6 +104,8 @@ def _validate_production(environment: str, auto_rotate_token: bool,
 
 # 对外跳转/下载透传白名单：免密登录桥接页与课表 Word 下载必须经公网入口可达
 PASSTHROUGH_ALLOWED = ("/jump/go", "/get_schedule/export")
+# 后台回填最多扫描的 JSONL 行数；更早日志由 stdout/集中日志平台长期保存
+MAX_HISTORY_SYNC_SCAN_LINES = 20_000
 
 
 async def _raw_get(base_url: str, token: str, path_qs: str, timeout: float):
@@ -147,11 +150,16 @@ def _service_status_payload(items: list[dict]) -> dict:
     }
 
 
-def _read_recent_file_logs(writer: JSONLFileWriter, limit: int = 100) -> list[dict]:
+def _read_recent_file_logs(writer: JSONLFileWriter, limit: int = 100,
+                           scan_limit: int = MAX_HISTORY_SYNC_SCAN_LINES) -> list[dict]:
     """读取最新到最旧的脱敏查询日志，最多保留 limit 条。"""
     entries: list[dict] = []
     seen_run_ids: set[str] = set()
+    scanned = 0
     for line in writer.iter_recent_lines():
+        scanned += 1
+        if scanned > max(0, scan_limit):
+            break
         try:
             item = sanitize_entry(json.loads(line))
         except (OSError, ValueError, TypeError):
@@ -176,51 +184,30 @@ def _seed_local_history(local_history: MemoryEventHistory,
         event_id = str(entry.get("run_id") or "")
         score = event_score(entry, time_fallback() - index) - index * 0.000001
         local_history.add("gw:v2:query-logs", entry, event_id, score)
-        status_item = _service_status_item(entry)
-        if status_item is not None:
-            status_item["run_id"] = event_id
-            local_history.add("gw:v2:service-status", status_item, event_id, score)
 
 
 async def _sync_history_from_file(writer: JSONLFileWriter,
                                   local_history: MemoryEventHistory,
                                   redis_history: Optional[RedisEventHistory],
-                                  instance_id: str) -> bool:
-    """单 owner 补齐版本化历史；ZADD NX 保证多实例重放幂等。"""
+                                  ) -> bool:
+    """恢复本实例 WAL；Redis 写入按 run_id/记录成员幂等去重。"""
     entries = await asyncio.to_thread(_read_recent_file_logs, writer)
     _seed_local_history(local_history, entries)
     if redis_history is None or not entries:
         return bool(entries)
 
-    lock_key = "gw:history-sync-lock"
-    lock_ttl_ms = 30_000
-    if not await redis_history.redis.set(
-            lock_key, instance_id, nx=True, px=lock_ttl_ms):
-        return False
-    try:
-        file_events = []
-        status_events = []
-        for index, entry in enumerate(entries):
-            event_id = str(entry.get("run_id") or "")
-            score = event_score(entry, time_fallback() - index)
-            file_events.append((entry, event_id, score))
-            status_item = _service_status_item(entry)
-            if status_item is not None:
-                status_item["run_id"] = event_id
-                status_events.append((status_item, event_id, score))
-        seeded = await redis_history.seed_newest("gw:v2:query-logs", file_events)
-        await redis_history.seed_newest("gw:v2:service-status", status_events)
-        return seeded
-    finally:
-        await redis_history.redis.eval(
-            "if redis.call('get', KEYS[1]) == ARGV[1] then "
-            "return redis.call('del', KEYS[1]) else return 0 end",
-            1, lock_key, instance_id)
+    file_events = []
+    for index, entry in enumerate(entries):
+        event_id = str(entry.get("run_id") or "")
+        score = event_score(entry, time_fallback() - index)
+        file_events.append((entry, event_id, score))
+    return await redis_history.seed_newest("gw:v2:query-logs", file_events)
 
 
 def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     cfg = cfg or Settings()
     instance_id = cfg.instance_id.strip() or socket.gethostname()
+    file_instance_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", instance_id)[:128] or "instance"
     _validate_production(cfg.environment, cfg.auto_rotate_token, cfg.api_token,
                          cfg.admin_token)
     setup_logging()
@@ -243,12 +230,17 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     async def _shutdown() -> None:
         for task in getattr(app.state, "job_worker_tasks", []):
             task.cancel()
+        history_sync = getattr(app.state, "history_sync_task", None)
+        if history_sync is not None:
+            history_sync.cancel()
         reaper = getattr(app.state, "job_reaper_task", None)
         if reaper is not None:
             reaper.cancel()
         tasks = list(getattr(app.state, "job_worker_tasks", []))
         if reaper is not None:
             tasks.append(reaper)
+        if history_sync is not None:
+            tasks.append(history_sync)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         await resource_monitor.stop()
@@ -269,16 +261,17 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     app.state.api_token = api_token
     app.state.rate_limit = max(1, cfg.rate_limit)
     app.state.trust_proxy = bool(cfg.trust_proxy)
+    file_log_path = cfg.file_log_path.replace("{instance_id}", file_instance_id)
     file_log_writer = None
-    if cfg.file_log_enabled and cfg.file_log_path.strip():
+    if cfg.file_log_enabled and file_log_path.strip():
         file_log_writer = JSONLFileWriter(
-            path=cfg.file_log_path,
+            path=file_log_path,
             max_bytes=cfg.file_log_max_bytes,
             backup_count=cfg.file_log_backup_count,
         )
     app.state.file_log_writer = file_log_writer
     resource_monitor = ResourceMonitor(
-        log_path=cfg.file_log_path,
+        log_path=file_log_path,
         interval=2.0,
         history_size=150,
     )
@@ -319,7 +312,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             try:
                 if await _sync_history_from_file(
                         app.state.file_log_writer, app.state.local_history,
-                        app.state.redis_history, app.state.instance_id):
+                        app.state.redis_history):
                     LOG.info("已从 JSONL 恢复最近 100 条查询历史")
             except Exception as exc:
                 LOG.warning("查询历史文件同步失败：%s",
@@ -330,7 +323,23 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         try:
             await app.state.redis.ping()
         except Exception as exc:
-            raise RuntimeError("Redis 连接失败（REDIS_URL）：%s" % exc) from exc
+            LOG.warning("Redis 暂不可用，查询与本地 WAL 继续工作：%s",
+                        exc.__class__.__name__)
+
+        async def sync_history_periodically() -> None:
+            while True:
+                await asyncio.sleep(max(1.0, cfg.history_sync_interval_seconds))
+                if app.state.file_log_writer is None:
+                    continue
+                try:
+                    await _sync_history_from_file(
+                        app.state.file_log_writer, app.state.local_history,
+                        app.state.redis_history)
+                except Exception as exc:
+                    LOG.warning("查询历史后台回填失败：%s", exc.__class__.__name__)
+
+        app.state.history_sync_task = asyncio.create_task(
+            sync_history_periodically(), name="history-sync")
 
         async def reap_stale_jobs() -> None:
             while True:
@@ -394,8 +403,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 try:
                     await app.state.job_store.complete(
                         job_id, result, cfg.job_result_ttl_seconds)
-                    await _record(bool(result.get("success")), result.get("kind", "unknown"),
-                                  str(result.get("run_id") or job_id))
                     await _record_query_log(_query_log_entry(
                         body, client_ip, started_at, result, result.get("run_id", "")))
                 except Exception as exc:
@@ -487,31 +494,12 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="请求过于频繁，请稍后再试")
 
-    async def _record(success: bool, kind: str, run_id: str = "") -> None:
-        item = {"success": success, "kind": kind,
-                "time": datetime.now().astimezone().isoformat(timespec="seconds"),
-                "run_id": run_id or new_run_id()}
-        score = time.time()
-        app.state.local_history.add("gw:v2:service-status", item, item["run_id"], score)
-        if app.state.redis_history is not None:
-            try:
-                await app.state.redis_history.add(
-                    "gw:v2:service-status", item, item["run_id"], score)
-            except Exception as exc:
-                LOG.warning("服务状态写入 Redis 失败：%s", exc.__class__.__name__)
-
     async def _record_query_log(entry: dict) -> None:
         """查询日志四路一致：内存、可选 Redis、可选文件和 stdout。"""
         entry = sanitize_entry(entry)
         entry["run_id"] = str(entry.get("run_id") or new_run_id())
         score = event_score(entry, time.time())
         app.state.local_history.add("gw:v2:query-logs", entry, entry["run_id"], score)
-        if app.state.redis_history is not None:
-            try:
-                await app.state.redis_history.add(
-                    "gw:v2:query-logs", entry, entry["run_id"], score)
-            except Exception as exc:
-                LOG.warning("查询日志写入 Redis 失败：%s", exc.__class__.__name__)
         if app.state.file_log_writer is not None:
             app.state.file_log_writer.last_error = ""
             try:
@@ -519,7 +507,24 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             except Exception as exc:
                 app.state.file_log_writer.last_error = exc.__class__.__name__
                 LOG.warning("查询日志文件写入失败：%s", exc.__class__.__name__)
+        if app.state.redis_history is not None:
+            try:
+                await app.state.redis_history.add(
+                    "gw:v2:query-logs", entry, entry["run_id"], score)
+            except Exception as exc:
+                LOG.warning("查询日志写入 Redis 失败：%s", exc.__class__.__name__)
         log_query(entry)
+
+    async def _recent_query_logs(limit: int = 100) -> list[dict]:
+        """读取跨副本热日志；Redis 不可用时降级本实例历史。"""
+        if app.state.redis_history is not None:
+            try:
+                return await app.state.redis_history.recent(
+                    "gw:v2:query-logs", "gw:query-logs", limit)
+            except Exception as exc:
+                LOG.warning("查询日志读取 Redis 失败，降级本实例历史：%s",
+                            exc.__class__.__name__)
+        return app.state.local_history.recent("gw:v2:query-logs", limit)
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index() -> str:
@@ -576,7 +581,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 login_body = await app.state.pipeline.service.post("/login", {
                     "username": body.username, "password": body.password})
         except ServiceError as exc:
-            await _record(False, "login_error", login_run_id)
             await _record_query_log(_query_log_entry(
                 body, client_ip, started,
                 {"success": False, "kind": "login_error", "meta": {}},
@@ -592,7 +596,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         session = extract_session(login_body).get("session", "")
         if not session:
             failure = classify_error("login", body=login_body)
-            await _record(False, "login_error", login_run_id)
             await _record_query_log(_query_log_entry(
                 body, client_ip, started,
                 {"success": False, "kind": "login_error", "meta": {}}, login_run_id))
@@ -658,7 +661,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                                        timeout=max(0.001, cfg.concurrency_wait_timeout))
             except asyncio.TimeoutError as exc:
                 busy_run_id = new_run_id()
-                await _record(False, "busy_error", busy_run_id)
                 await _record_query_log({
                     "event": "query",
                     "time": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -679,7 +681,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 except asyncio.TimeoutError as exc:
                     run_id = new_run_id()
                     LOG.warning("run=%s 请求超时", run_id)
-                    await _record(False, "request_error", run_id)
                     await _record_query_log(_query_log_entry(
                         body, client_ip, started,
                         {"success": False, "kind": "request_error", "meta": {}},
@@ -690,8 +691,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                         run_id=run_id,
                         output="查询超时，请稍后重试",
                         meta={"elapsed_ms": int(cfg.request_timeout * 1000)})
-                await _record(bool(result.get("success")), result.get("kind", "unknown"),
-                              str(result.get("run_id") or ""))
                 await _record_query_log(_query_log_entry(body, client_ip, started, result,
                                                          result.get("run_id", "")))
                 return QueryResult(**result)
@@ -702,7 +701,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         except Exception as exc:  # 兜底：未知异常也返回统一 JSON
             LOG.exception("run 执行异常")
             run_id = new_run_id()
-            await _record(False, "internal_error", run_id)
             result = {"success": False, "kind": "internal_error"}
             await _record_query_log(_query_log_entry(body, client_ip, started, result, run_id))
             return QueryResult(
@@ -799,25 +797,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     @app.get("/query-logs")
     async def query_logs_endpoint(_: None = Depends(_require_auth)) -> dict:
         """返回最近查询日志（新→旧）；不含密码/session/token。"""
-        if app.state.redis_history is not None:
-            try:
-                items = [
-                    sanitize_entry(item)
-                    for item in await app.state.redis_history.recent(
-                        "gw:v2:query-logs", "gw:query-logs")
-                ]
-            except Exception:
-                LOG.warning("查询日志读取 Redis 失败，降级本实例历史：%s",
-                            exc.__class__.__name__)
-                items = [
-                    sanitize_entry(item) for item in
-                    app.state.local_history.recent("gw:v2:query-logs")
-                ]
-        else:
-            items = [
-                sanitize_entry(item) for item in
-                app.state.local_history.recent("gw:v2:query-logs")
-            ]
+        items = [sanitize_entry(item) for item in await _recent_query_logs()]
         return {"logs": items, "total": len(items)}
 
     @app.get("/admin/api/query-logs")
@@ -872,7 +852,19 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
         writer = app.state.file_log_writer
         parse_errors = 0
-        if writer is not None:
+        if app.state.redis_history is not None:
+            source = "redis"
+            try:
+                snapshot = await app.state.redis_history.recent(
+                    "gw:v2:query-logs", "gw:query-logs",
+                    min(100, scan_limit) if scan_limit else 100)
+            except Exception as exc:
+                LOG.warning("管理端查询日志读取 Redis 失败：%s", exc.__class__.__name__)
+                snapshot = []
+            entries: list[dict] = [
+                sanitize_entry(item) for item in snapshot if matches(item)
+            ]
+        elif writer is not None:
             source = "file"
 
             def scan_file() -> tuple[list[dict], int, int]:
@@ -895,18 +887,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 return parsed, seen, parse_errors
 
             entries, scanned, parse_errors = await asyncio.to_thread(scan_file)
-        elif app.state.redis_history is not None:
-            source = "redis"
-            try:
-                snapshot = await app.state.redis_history.recent(
-                    "gw:v2:query-logs", "gw:query-logs")
-            except Exception:
-                LOG.warning("管理端查询日志读取 Redis 失败：%s", exc.__class__.__name__)
-                snapshot = []
-            entries: list[dict] = [
-                sanitize_entry(item) for item in snapshot
-                if matches(item)
-            ]
         else:
             source = "memory"
             snapshot = app.state.local_history.recent("gw:v2:query-logs")
@@ -948,7 +928,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
         window_seconds = 300
         cutoff = time.time() - window_seconds
-        recent_logs = app.state.local_history.recent("gw:v2:query-logs")
+        recent_logs = await _recent_query_logs()
         recent_entries = []
         for item in recent_logs:
             try:
@@ -1029,17 +1009,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     @app.get("/service-status")
     async def service_status(_: None = Depends(_require_auth)) -> dict:
-        """返回最近服务状态；Redis 模式跨副本共享，无 Redis 模式为本实例历史。"""
-        if app.state.redis_history is not None:
-            try:
-                raw_items = await app.state.redis_history.recent(
-                    "gw:v2:service-status", "gw:service-status")
-            except Exception:
-                LOG.warning("服务状态读取 Redis 失败，降级本实例历史：%s",
-                            exc.__class__.__name__)
-                raw_items = app.state.local_history.recent("gw:v2:service-status")
-        else:
-            raw_items = app.state.local_history.recent("gw:v2:service-status")
+        """返回最近服务状态；由跨副本查询日志派生，避免双写状态漂移。"""
+        raw_items = await _recent_query_logs()
         items = [view for view in map(_service_status_item, raw_items)
                  if view is not None]
         return _service_status_payload(items)
