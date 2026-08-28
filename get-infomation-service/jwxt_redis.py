@@ -11,9 +11,13 @@ import secrets
 import threading
 import time
 from contextlib import contextmanager
+from functools import wraps
 
 import redis
 
+from jwxt_state import (
+    KeyedLocks, RateLimiter, SessionStore, ShortCodeStore, TTLCache,
+)
 from jwxt_core import (
     LOG, UPSTREAM_SEM_TIMEOUT, LockTimeoutError, UpstreamBusyError,
 )
@@ -26,7 +30,8 @@ class RedisBackend:
     """Redis 连接与统一 key 前缀。"""
 
     def __init__(self, url, prefix=_DEFAULT_PREFIX,
-                 connect_timeout=3.0, socket_timeout=3.0):
+                 connect_timeout=3.0, socket_timeout=3.0,
+                 failure_cooldown=5.0):
         self.prefix = (prefix or _DEFAULT_PREFIX).strip().rstrip(":")
         self.client = redis.Redis.from_url(
             url,
@@ -34,11 +39,18 @@ class RedisBackend:
             socket_connect_timeout=connect_timeout,
             socket_timeout=socket_timeout,
         )
+        self._availability_lock = threading.Lock()
+        self._available = True
+        self._probing = False
+        self._degraded = False
+        self._last_failure_at = 0.0
+        self._failure_cooldown = max(1.0, float(failure_cooldown))
+        self._init_availability()
         try:
             self.client.ping()
+            self.record_success()
         except redis.RedisError as e:
-            raise RuntimeError(
-                "Redis 连接失败（JWXT_REDIS_URL）：%s" % e) from e
+            self.record_failure(e)
 
     @classmethod
     def from_client(cls, client, prefix=_DEFAULT_PREFIX):
@@ -46,10 +58,314 @@ class RedisBackend:
         obj = cls.__new__(cls)
         obj.prefix = (prefix or _DEFAULT_PREFIX).strip().rstrip(":")
         obj.client = client
+        obj._failure_cooldown = 5.0
+        obj._init_availability()
         return obj
+
+    def _init_availability(self):
+        self._availability_lock = threading.Lock()
+        self._available = True
+        self._probing = False
+        self._degraded = False
+        self._last_failure_at = 0.0
 
     def key(self, name):
         return "%s:%s" % (self.prefix, name)
+
+    @property
+    def degraded(self):
+        with self._availability_lock:
+            return self._degraded
+
+    def attempt_allowed(self):
+        """熔断打开时只放行单个恢复探测请求，其余请求直接走内存降级。"""
+        with self._availability_lock:
+            if self._available:
+                return True
+            if time.monotonic() - self._last_failure_at < self._failure_cooldown:
+                return False
+            if self._probing:
+                return False
+            self._probing = True
+            return True
+
+    def record_success(self):
+        with self._availability_lock:
+            recovered = self._degraded
+            self._available = True
+            self._probing = False
+            self._degraded = False
+        if recovered:
+            LOG.info("Redis 已恢复，退出内存降级模式")
+
+    def record_failure(self, error):
+        with self._availability_lock:
+            first = not self._degraded
+            self._available = False
+            self._probing = False
+            self._degraded = True
+            self._last_failure_at = time.monotonic()
+        if first:
+            LOG.warning("Redis 不可用，已降级为本副本内存状态: %s", error)
+
+    def abandon_attempt(self):
+        with self._availability_lock:
+            self._probing = False
+
+    def probe(self):
+        try:
+            self.client.ping()
+        except redis.RedisError as e:
+            self.record_failure(e)
+            return False
+        self.record_success()
+        return True
+
+    def status_info(self, now=None):
+        now = now or time.time()
+        with self._availability_lock:
+            return {"ok": not self._degraded, "at": int(now),
+                    "mode": "redis", "degraded": self._degraded}
+
+
+def _resilient(operation):
+    """让 Redis 操作在连接故障时调用同名内存降级实现。"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if not self.backend.attempt_allowed():
+                return getattr(self.fallback, operation)(*args, **kwargs)
+            try:
+                result = func(self, *args, **kwargs)
+            except redis.RedisError as exc:
+                self.backend.record_failure(exc)
+                return getattr(self.fallback, operation)(*args, **kwargs)
+            except Exception:
+                self.backend.abandon_attempt()
+                raise
+            self.backend.record_success()
+            return result
+        return wrapper
+    return decorator
+
+
+class ResilientRedisSessionStore:
+    """Redis 会话存储，故障时降级为本副本内存会话。"""
+
+    def __init__(self, backend, ttl, max_sessions, primary=None, fallback=None):
+        self.backend = backend
+        self.primary = primary or RedisSessionStore(backend, ttl, max_sessions)
+        self.fallback = fallback or SessionStore(ttl, max_sessions)
+
+    @_resilient("create")
+    def create(self, username, cookies, portal, warm_evt=None, pwd_hash=None):
+        return self.primary.create(username, cookies, portal,
+                                   warm_evt=warm_evt, pwd_hash=pwd_hash)
+
+    @_resilient("find_reusable")
+    def find_reusable(self, username, pwd_hash, max_age):
+        return self.primary.find_reusable(username, pwd_hash, max_age)
+
+    @_resilient("refresh")
+    def refresh(self, sid, cookies, portal):
+        return self.primary.refresh(sid, cookies, portal)
+
+    @_resilient("touch")
+    def touch(self, sid):
+        return self.primary.touch(sid)
+
+    @_resilient("get")
+    def get(self, sid):
+        return self.primary.get(sid)
+
+    @_resilient("sweep")
+    def sweep(self, now=None):
+        return self.primary.sweep(now)
+
+    @_resilient("status")
+    def status(self, sid):
+        return self.primary.status(sid)
+
+    @_resilient("invalidate")
+    def invalidate(self, sid):
+        return self.primary.invalidate(sid)
+
+    @_resilient("count")
+    def count(self):
+        return self.primary.count()
+
+    @_resilient("sessions")
+    def sessions(self):
+        return self.primary.sessions()
+
+
+class ResilientRedisTTLCache:
+    """Redis TTL 缓存，故障时降级为本副本进程内缓存。"""
+
+    def __init__(self, backend, ttl=0, max_items=2000,
+                 primary=None, fallback=None):
+        self.backend = backend
+        self.primary = primary or RedisTTLCache(backend, ttl, max_items)
+        self.fallback = fallback or TTLCache(ttl, max_items)
+
+    @_resilient("get")
+    def get(self, key):
+        return self.primary.get(key)
+
+    @_resilient("get_payload")
+    def get_payload(self, key):
+        return self.primary.get_payload(key)
+
+    @_resilient("delete")
+    def delete(self, key):
+        return self.primary.delete(key)
+
+    @_resilient("set")
+    def set(self, key, value, ttl=None, payload=None):
+        return self.primary.set(key, value, ttl=ttl, payload=payload)
+
+    @_resilient("sweep")
+    def sweep(self, now=None):
+        return self.primary.sweep(now)
+
+
+class ResilientRedisShortCodeStore:
+    """Redis 短码存储，故障时降级为本副本进程内短码。"""
+
+    def __init__(self, backend, ttl=60, max_codes=10000,
+                 primary=None, fallback=None):
+        self.backend = backend
+        self.primary = primary or RedisShortCodeStore(
+            backend, ttl, max_codes)
+        self.fallback = fallback or ShortCodeStore(ttl, max_codes)
+
+    @_resilient("mint")
+    def mint(self, sid):
+        return self.primary.mint(sid)
+
+    @_resilient("resolve")
+    def resolve(self, code, consume=True):
+        return self.primary.resolve(code, consume=consume)
+
+    @_resilient("sweep")
+    def sweep(self, now=None):
+        return self.primary.sweep(now)
+
+
+RedisResilientJumpCodeStore = ResilientRedisShortCodeStore
+
+
+class ResilientRedisRateLimiter:
+    """Redis 限流器，故障时降级为本副本限流。"""
+
+    def __init__(self, backend, limit_per_min=0, primary=None, fallback=None):
+        self.backend = backend
+        self.primary = primary or RedisRateLimiter(backend, limit_per_min)
+        self.fallback = fallback or RateLimiter(limit_per_min)
+
+    @_resilient("allow")
+    def allow(self, key):
+        return self.primary.allow(key)
+
+    @_resilient("sweep")
+    def sweep(self, now=None):
+        return self.primary.sweep(now)
+
+
+class ResilientRedisKeyedLocks:
+    """Redis 锁，获取失败时降级为本副本互斥锁。"""
+
+    def __init__(self, backend, lease_ms=30000, primary=None, fallback=None):
+        self.backend = backend
+        self.primary = primary or RedisKeyedLocks(backend, lease_ms)
+        self.fallback = fallback or KeyedLocks()
+
+    @contextmanager
+    def lock(self, key, timeout=None):
+        if not self.backend.attempt_allowed():
+            with self.fallback.lock(key, timeout=timeout):
+                yield
+            return
+        manager = self.primary.lock(key, timeout=timeout)
+        try:
+            manager.__enter__()
+        except redis.RedisError as exc:
+            self.backend.record_failure(exc)
+            with self.fallback.lock(key, timeout=timeout):
+                yield
+            return
+        except Exception:
+            self.backend.abandon_attempt()
+            raise
+        self.backend.record_success()
+        try:
+            yield
+        finally:
+            try:
+                manager.__exit__(None, None, None)
+            except redis.RedisError as exc:
+                self.backend.record_failure(exc)
+
+
+class LocalSemaphore:
+    """Redis 信号量的本副本降级实现。"""
+
+    def __init__(self, limit):
+        self._semaphore = threading.BoundedSemaphore(max(1, int(limit)))
+
+    def acquire(self, timeout=None):
+        if timeout is None:
+            return self._semaphore.acquire()
+        return self._semaphore.acquire(timeout=max(0.0, float(timeout)))
+
+    def release(self):
+        self._semaphore.release()
+
+
+class ResilientRedisSemaphore:
+    """Redis 上游信号量，故障时降级为本副本并发上限。"""
+
+    def __init__(self, backend, limit, timeout=UPSTREAM_SEM_TIMEOUT,
+                 lease=30.0, primary=None, fallback=None):
+        self.backend = backend
+        self.primary = primary or RedisSemaphore(
+            backend, limit, timeout=timeout, lease=lease)
+        self.fallback = fallback or LocalSemaphore(limit)
+        self._fallback_holds = 0
+        self._holds_lock = threading.Lock()
+
+    def acquire(self, timeout=None):
+        if not self.backend.attempt_allowed():
+            if self.fallback.acquire(timeout=timeout):
+                with self._holds_lock:
+                    self._fallback_holds += 1
+                return True
+            return False
+        try:
+            result = self.primary.acquire(timeout=timeout)
+        except redis.RedisError as exc:
+            self.backend.record_failure(exc)
+            if self.fallback.acquire(timeout=timeout):
+                with self._holds_lock:
+                    self._fallback_holds += 1
+                return True
+            return False
+        except Exception:
+            self.backend.abandon_attempt()
+            raise
+        self.backend.record_success()
+        return result
+
+    def release(self):
+        with self._holds_lock:
+            if self._fallback_holds > 0:
+                self._fallback_holds -= 1
+                self.fallback.release()
+                return
+        try:
+            self.primary.release()
+        except redis.RedisError as exc:
+            self.backend.record_failure(exc)
 
 
 def _b(value):

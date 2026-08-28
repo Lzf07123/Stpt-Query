@@ -5,6 +5,7 @@ import asyncio
 import base64
 import hashlib
 import re
+import redis
 from fastapi.testclient import TestClient
 
 from app.main import Settings, create_app
@@ -50,27 +51,25 @@ async def test_global_concurrency_rejects_when_no_slot_is_free():
         assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
 
 
-def test_redis_rate_limiter_is_shared_and_fails_closed():
+def test_redis_rate_limiter_degrades_to_local_memory():
     class FakeAsyncRedis:
-        def __init__(self):
-            self.counts = {}
-
         async def incr(self, key):
-            self.counts[key] = self.counts.get(key, 0) + 1
-            return self.counts[key]
+            raise redis.ConnectionError("redis down")
 
         async def expire(self, key, seconds):
-            assert seconds == 60
+            raise redis.ConnectionError("redis down")
 
-    redis = FakeAsyncRedis()
+    fake_redis = FakeAsyncRedis()
     app = create_app(_cfg(rate_limit=2))
-    app.state.redis = redis
+    app.state.redis = fake_redis
     client = TestClient(app)
 
     assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
     assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
+    states = {item["key"]: item["status"]
+              for item in app.state.dependency_health.snapshot()}
+    assert states["redis"] == "degraded"
     assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 429
-    assert next(iter(redis.counts.values())) == 3
 
 
 def test_edge_hides_sensitive_query_strings_and_sets_csp():

@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Protocol
 import httpx
 
 from .classifier import classify_error, classify_empty_result, summarize_response
+from .dependencies import DependencyHealth
 from .llm import LLMClient, LLMError
 from .prompts import GRADE_ANALYSIS_SYSTEM, grade_analysis_user
 from .render import (assemble, extract_session, format_grades, format_schedule,
@@ -52,6 +53,22 @@ class HTTPServiceClient:
 
     async def aclose(self) -> None:
         await self.client.aclose()
+
+    async def get(self, path: str) -> Dict[str, Any]:
+        headers = {"Accept": "application/json"}
+        if self.api_token:
+            headers["Authorization"] = "Bearer %s" % self.api_token
+        try:
+            resp = await self.client.get(self.base_url + path, headers=headers)
+        except httpx.HTTPError as exc:
+            raise ServiceError(0, None, "上游服务连接失败：%s" % exc.__class__.__name__) from exc
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {"raw": resp.text}
+        if resp.status_code >= 400:
+            raise ServiceError(resp.status_code, data, "上游服务 HTTP %s" % resp.status_code)
+        return data if isinstance(data, dict) else {"body": data}
 
     async def post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         headers = {"Content-Type": "application/json"}
@@ -95,6 +112,7 @@ class Pipeline:
         llm_semaphore: Optional[asyncio.Semaphore] = None,
         pdf_semaphore: Optional[asyncio.Semaphore] = None,
         progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
+        dependency_health: Optional[DependencyHealth] = None,
     ) -> None:
         self.service = service or HTTPServiceClient(base_url, service_token)
         self.llm = llm or LLMClient()
@@ -102,6 +120,7 @@ class Pipeline:
         self.llm_semaphore = llm_semaphore or asyncio.Semaphore(8)
         self.pdf_semaphore = pdf_semaphore or asyncio.Semaphore(2)
         self.progress_cb = progress_cb
+        self.dependency_health = dependency_health
 
     async def aclose(self) -> None:
         for client in (self.service, self.llm):
@@ -127,6 +146,7 @@ class Pipeline:
                     "username": req.username, "password": req.password})
             except ServiceError as exc:
                 LOG.warning("run=%s 登录请求失败", run_id)
+                self._record_service_error(exc)
                 result = classify_error("login", exc.status_code, exc.body,
                                         error_message=str(exc))
                 result.update({"run_id": run_id,
@@ -147,6 +167,9 @@ class Pipeline:
             jump_body = await self._post("/jump", {"session": session_info["session"], "json": "1"})
         except ServiceError:
             LOG.warning("run=%s 获取免密链接失败，降级处理", run_id)
+            self._record_dependency(
+                "query_proxy", "degraded",
+                "免密链接获取失败，查询继续但返回内容不含跳转链接")
 
         # 4) 查询项目分支
         if req.option == "成绩":
@@ -177,6 +200,7 @@ class Pipeline:
         try:
             data = await self._post("/get_grades", payload)
         except ServiceError as exc:
+            self._record_service_error(exc)
             return classify_error("grades", exc.status_code, exc.body,
                                   error_message=str(exc))
 
@@ -197,9 +221,13 @@ class Pipeline:
                     analysis = await self.llm.chat(
                         GRADE_ANALYSIS_SYSTEM,
                         grade_analysis_user(parts["table_text"], parts["stats_text"]))
+                self._record_dependency(
+                    "llm", "ok", "成绩分析 LLM 最近一次调用成功")
             except LLMError as exc:
                 LOG.warning("成绩分析 LLM 失败：%s，降级为纯成绩表", exc)
                 analysis = ""
+                self._record_dependency(
+                    "llm", "degraded", "成绩分析 LLM 不可用，已降级为纯成绩表")
             output = assemble(parts["prefix_text"], analysis)
         else:
             output = format_grades(data, jump_body)
@@ -237,6 +265,7 @@ class Pipeline:
         try:
             data = await self._post("/get_schedule", payload)
         except ServiceError as exc:
+            self._record_service_error(exc)
             return classify_error("schedule", exc.status_code, exc.body,
                                   error_message=str(exc))
 
@@ -247,6 +276,18 @@ class Pipeline:
 
     async def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return await self.service.post(path, payload)
+
+    def _record_dependency(self, key: str, state: str, message: str) -> None:
+        if self.dependency_health is not None:
+            self.dependency_health.record(key, state, message)
+
+    def _record_service_error(self, exc: ServiceError) -> None:
+        if exc.status_code == 0:
+            self._record_dependency(
+                "query_proxy", "error", "查询代理不可达，查询无法继续")
+        elif exc.status_code >= 500:
+            self._record_dependency(
+                "query_proxy", "degraded", "查询代理上游异常，已返回分类错误")
 
     async def _report_phase(
         self,

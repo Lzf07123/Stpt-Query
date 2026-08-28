@@ -1532,7 +1532,8 @@
         try { jobSubmitData = JSON.parse(jobSubmitText); } catch (err) { jobSubmitData = jobSubmitText; }
         const jobFeatureUnavailable = jobSubmitResp.status === 404 ||
           (jobSubmitResp.status === 503 &&
-            /REDIS_URL|异步查询未启用/.test(String(jobSubmitData && jobSubmitData.detail || jobSubmitData)));
+            /REDIS_URL|异步查询未启用|排队服务暂时不可用/.test(
+              String(jobSubmitData && jobSubmitData.detail || jobSubmitData)));
 
         if (jobSubmitResp.ok && jobSubmitData && jobSubmitData.job_id) {
           renderJobProgress("queued", payload, "queued", jobSubmitData.position || 0);

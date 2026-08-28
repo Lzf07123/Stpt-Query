@@ -1397,30 +1397,33 @@ class Runtime:
         if redis_url:
             _redis_mod = _redis_module()
             self._redis_backend = _redis_mod.RedisBackend(redis_url)
-            LOG.info("Redis 共享状态已启用：会话/缓存/限流/短码/锁/上游信号量使用 Redis")
-            self.sessions = _redis_mod.RedisSessionStore(
+            self.sessions = _redis_mod.ResilientRedisSessionStore(
                 self._redis_backend, SESSION_TTL, max_sessions=MAX_SESSIONS)
-            self.rate_limiter = _redis_mod.RedisRateLimiter(
+            self.rate_limiter = _redis_mod.ResilientRedisRateLimiter(
                 self._redis_backend, cfg.rate_limit)
-            self.login_limiter = _redis_mod.RedisRateLimiter(
+            self.login_limiter = _redis_mod.ResilientRedisRateLimiter(
                 self._redis_backend, cfg.login_rate_limit)
-            self.login_locks = _redis_mod.RedisKeyedLocks(self._redis_backend)
-            self.grades_cache = _redis_mod.RedisTTLCache(
+            self.login_locks = _redis_mod.ResilientRedisKeyedLocks(
+                self._redis_backend)
+            self.grades_cache = _redis_mod.ResilientRedisTTLCache(
                 self._redis_backend, cfg.grades_cache_ttl,
                 max_items=cfg.grades_cache_max_items)
-            self.schedule_cache = _redis_mod.RedisTTLCache(
+            self.schedule_cache = _redis_mod.ResilientRedisTTLCache(
                 self._redis_backend, cfg.schedule_cache_ttl,
                 max_items=cfg.schedule_cache_max_items)
-            self.jump_cache = _redis_mod.RedisTTLCache(
+            self.jump_cache = _redis_mod.ResilientRedisTTLCache(
                 self._redis_backend, cfg.jump_cache_ttl,
                 max_items=cfg.jump_cache_max_items)
-            self.jump_codes = _redis_mod.RedisJumpCodeStore(
+            self.jump_codes = _redis_mod.RedisResilientJumpCodeStore(
                 self._redis_backend, JUMP_CODE_TTL)
-            self.export_codes = _redis_mod.RedisShortCodeStore(
+            self.export_codes = _redis_mod.ResilientRedisShortCodeStore(
                 self._redis_backend, ttl=max(30, JUMP_CODE_TTL))
-            _core_mod.UPSTREAM_SEM = _redis_mod.RedisSemaphore(
+            _core_mod.UPSTREAM_SEM = _redis_mod.ResilientRedisSemaphore(
                 self._redis_backend, _core_mod.UPSTREAM_GLOBAL,
                 timeout=cfg.upstream_sem_timeout)
+            LOG.info("Redis 共享状态已启用：会话/缓存/限流/短码/锁/上游信号量使用 Redis")
+            with self.state.lock:
+                self.state.redis = self._redis_backend.status_info()
         else:
             self.sessions = SessionStore(SESSION_TTL, max_sessions=MAX_SESSIONS)
             self.rate_limiter = RateLimiter(cfg.rate_limit)

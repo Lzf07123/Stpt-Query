@@ -18,6 +18,7 @@
 | 异步任务队列 | `POST /run/jobs` + Redis 队列/状态/阶段；每副本 `JOB_WORKERS` 消费 | Redis 中的队列仅保存短期 session 和粗粒度阶段，不保存密码 |
 | 客户端 IP | `TRUST_PROXY=true` 后按 `X-Forwarded-For` 限流 | Ingress/Service 传递真实 IP |
 | 跨副本限流/状态历史 | format-service 用 `REDIS_URL` 共享固定窗口限流、历史与日志；查询代理用 `JWXT_REDIS_URL` 共享会话与缓存 | 接入托管 Redis（云 Redis / Operator） |
+| 外部依赖降级 | Redis 故障时切本地限流/历史/会话；LLM 故障返回纯表；查询代理故障返回分类错误；后台展示降级提示 | 可避免单个外部依赖导致入口整体不可用 |
 | 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 每副本 WAL + 进程内历史 + Redis（`gw:v2:query-logs`）+ `GET /query-logs`、`GET /service-status` | 服务状态由查询日志派生；采集 stdout 到集中日志；需要本地留存时只给每个 Pod 挂独立 PVC |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
@@ -34,7 +35,8 @@
 | healthcheck | livenessProbe `/health/live`、readinessProbe `/health/ready` |
 
 > 无状态要求：`format-service` 与 `frontend` 可任意扩容；`get-infomation-service`
-> 单实例即可，多副本时为其配置 `JWXT_REDIS_URL` 共享状态。
+> 单实例即可，多副本时为其配置 `JWXT_REDIS_URL` 共享状态。Redis 故障时查询代理会
+> 降级为本副本内存状态，健康状态变为 `degraded`，但容器不应退出。
 
 ## 三、迁入前需要补充的事项（届时再做）
 

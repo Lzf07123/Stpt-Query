@@ -25,6 +25,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .classifier import classify_error
+from .dependencies import DependencyHealth
 from .history import MemoryEventHistory, RedisEventHistory, event_score, time_fallback
 from .jobs import JobStore, QueueFullError
 from .llm import LLMClient
@@ -150,6 +151,23 @@ def _service_status_payload(items: list[dict]) -> dict:
     }
 
 
+def _dependency_public_state(payload: dict) -> tuple[str, str, str]:
+    proxy = payload.get("proxy") if isinstance(payload, dict) else None
+    school = payload.get("school") if isinstance(payload, dict) else None
+    redis_info = proxy.get("redis") if isinstance(proxy, dict) else None
+    proxy_status = str((proxy or {}).get("status") or "unknown")
+    school_status = str((school or {}).get("status") or "unknown")
+    redis_state = "unknown"
+    if isinstance(redis_info, dict):
+        if redis_info.get("ok") is True:
+            redis_state = "ok"
+        elif redis_info.get("degraded") is True:
+            redis_state = "degraded"
+        elif redis_info.get("ok") is False:
+            redis_state = "error"
+    return proxy_status, school_status, redis_state
+
+
 def _read_recent_file_logs(writer: JSONLFileWriter, limit: int = 100,
                            scan_limit: int = MAX_HISTORY_SYNC_SCAN_LINES) -> list[dict]:
     """读取最新到最旧的脱敏查询日志，最多保留 limit 条。"""
@@ -213,6 +231,14 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     setup_logging()
     is_production = cfg.environment.strip().lower() in ("production", "prod")
     api_token = _resolve_api_token(cfg)
+    dependency_health = DependencyHealth(initial={
+        "redis": "not-configured" if not cfg.redis_url.strip() else "unknown",
+        "query_proxy": "unknown",
+        "query_proxy_redis": "unknown",
+        "school_service": "unknown",
+        "llm": "not-configured" if not cfg.llm_api_key.strip() else "unknown",
+        "file_log": "disabled" if not (cfg.file_log_enabled and cfg.file_log_path.strip()) else "unknown",
+    })
     llm = LLMClient(
         base_url=cfg.llm_base_url, api_key=cfg.llm_api_key, model=cfg.llm_model,
         temperature=cfg.llm_temperature, max_tokens=cfg.llm_max_tokens,
@@ -224,7 +250,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     login_slots = asyncio.Semaphore(max(1, min(8, cfg.global_concurrency)))
     pipeline = Pipeline(service=service, llm=llm,
                         request_timeout=cfg.request_timeout,
-                        llm_semaphore=llm_slots, pdf_semaphore=pdf_slots)
+                        llm_semaphore=llm_slots, pdf_semaphore=pdf_slots,
+                        dependency_health=dependency_health)
     public_health_cache: dict = {"at": 0.0, "payload": None}
 
     async def _shutdown() -> None:
@@ -276,6 +303,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         history_size=150,
     )
     app.state.resource_monitor = resource_monitor
+    app.state.dependency_health = dependency_health
     query_slots = asyncio.Semaphore(max(1, cfg.global_concurrency))
     app.state.query_slots = query_slots
 
@@ -459,6 +487,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         now = time.time()
         limit = app.state.rate_limit
         limited = False
+        redis_unavailable = False
         if app.state.redis is None:
             with rate_lock:
                 if len(rate_hits) > 4096:
@@ -477,17 +506,35 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             digest = hashlib.sha256(ip.encode("utf-8")).hexdigest()
             key = f"gw:rate:{digest}"
             try:
-                count = int(await app.state.redis.incr(key))
+                count = int(await asyncio.wait_for(
+                    app.state.redis.incr(key), timeout=1.5))
                 if count == 1:
-                    await app.state.redis.expire(key, 60)
+                    await asyncio.wait_for(
+                        app.state.redis.expire(key, 60), timeout=1.5)
                 limited = count > limit
             except Exception as exc:
-                log_query({"event": "rate_limited", "client_ip": ip,
-                           "message": "rate limit backend unavailable"})
                 LOG.warning("限流后端不可用：%s", exc.__class__.__name__)
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="服务繁忙，请稍后再试") from exc
+                app.state.dependency_health.record(
+                    "redis", "degraded",
+                    "Redis 不可用，查询继续；限流、历史与异步任务降级")
+                redis_unavailable = True
+
+        if redis_unavailable:
+            with rate_lock:
+                if len(rate_hits) > 4096:
+                    pruned = {}
+                    for key, stamps in rate_hits.items():
+                        recent = [t for t in stamps if now - t < 60]
+                        if recent:
+                            pruned[key] = recent
+                    rate_hits = pruned
+                hits = [t for t in rate_hits.get(ip, []) if now - t < 60]
+                limited = len(hits) >= limit
+                if not limited:
+                    hits.append(now)
+                    rate_hits[ip] = hits
+        elif app.state.redis is not None:
+            app.state.dependency_health.record("redis", "ok")
         if limited:
             log_query({"event": "rate_limited", "client_ip": ip,
                        "message": "rate limit exceeded"})
@@ -509,9 +556,15 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 LOG.warning("查询日志文件写入失败：%s", exc.__class__.__name__)
         if app.state.redis_history is not None:
             try:
-                await app.state.redis_history.add(
-                    "gw:v2:query-logs", entry, entry["run_id"], score)
+                await asyncio.wait_for(
+                    app.state.redis_history.add(
+                        "gw:v2:query-logs", entry, entry["run_id"], score),
+                    timeout=1.5)
+                app.state.dependency_health.record("redis", "ok")
             except Exception as exc:
+                app.state.dependency_health.record(
+                    "redis", "degraded",
+                    "Redis 不可用，查询继续；限流、历史与异步任务降级")
                 LOG.warning("查询日志写入 Redis 失败：%s", exc.__class__.__name__)
         log_query(entry)
 
@@ -519,9 +572,14 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         """读取跨副本热日志；Redis 不可用时降级本实例历史。"""
         if app.state.redis_history is not None:
             try:
-                return await app.state.redis_history.recent(
-                    "gw:v2:query-logs", "gw:query-logs", limit)
+                return await asyncio.wait_for(
+                    app.state.redis_history.recent(
+                        "gw:v2:query-logs", "gw:query-logs", limit),
+                    timeout=1.5)
             except Exception as exc:
+                app.state.dependency_health.record(
+                    "redis", "degraded",
+                    "Redis 不可用，查询继续；限流、历史与异步任务降级")
                 LOG.warning("查询日志读取 Redis 失败，降级本实例历史：%s",
                             exc.__class__.__name__)
         return app.state.local_history.recent("gw:v2:query-logs", limit)
@@ -715,7 +773,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     @app.get("/health/ready")
     async def health_ready() -> dict:
-        """K8s readinessProbe：配置就绪且可选 Redis 可用时 ready。"""
+        """K8s readinessProbe：可选依赖降级时保持 ready，避免查询中断。"""
         checks = {
             "config": "ok",
             "redis": "not-configured",
@@ -726,9 +784,12 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             try:
                 await app.state.redis.ping()
                 checks["redis"] = "ok"
+                app.state.dependency_health.record("redis", "ok")
             except Exception:
-                checks["redis"] = "error"
-                ready = False
+                checks["redis"] = "degraded"
+                app.state.dependency_health.record(
+                    "redis", "degraded",
+                    "Redis 不可用，查询继续；限流、历史与异步任务降级")
         return {"status": "ready" if ready else "not-ready", **checks}
 
     @app.get("/health")
@@ -742,9 +803,13 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             try:
                 await app.state.redis.ping()
                 redis_status = "ok"
+                app.state.dependency_health.record("redis", "ok")
             except Exception:
-                redis_status = "error"
-        return {"status": "degraded" if redis_status == "error" or file_log_status == "error" else "ok",
+                redis_status = "degraded"
+                app.state.dependency_health.record(
+                    "redis", "degraded",
+                    "Redis 不可用，查询继续；限流、历史与异步任务降级")
+        return {"status": "degraded" if redis_status in ("error", "degraded") or file_log_status == "error" else "ok",
                 "auth_mode": "fixed-token" if cfg.api_token else "auto-token",
                 "redis": redis_status,
                 "file_log": file_log_status}
@@ -758,10 +823,11 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
         started = time.perf_counter()
         proxy_status, school_status = "down", "unknown"
+        proxy_redis_state = "unknown"
         proxy_latency: int | None = None
         school_latency: int | None = None
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
                     cfg.service_base_url.rstrip("/") + "/health",
                     headers={"Authorization": "Bearer " + cfg.service_api_token}
@@ -771,6 +837,14 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             if response.status_code == 200:
                 upstream = response.json()
                 proxy_status = "up" if upstream.get("status") == "ok" else "degraded"
+                upstream_redis = upstream.get("redis")
+                if isinstance(upstream_redis, dict):
+                    if upstream_redis.get("ok") is True:
+                        proxy_redis_state = "ok"
+                    elif upstream_redis.get("degraded") is True:
+                        proxy_redis_state = "degraded"
+                    elif upstream_redis.get("ok") is False:
+                        proxy_redis_state = "error"
                 school = upstream.get("school", {})
                 school_latency = school.get("latency_ms")
                 if school.get("ok") is True:
@@ -781,13 +855,34 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                     school_status = "unknown"
             else:
                 proxy_status = "degraded"
+        except httpx.TimeoutException:
+            proxy_latency = int((time.perf_counter() - started) * 1000)
+            proxy_status = "degraded"
         except Exception:
             proxy_latency = int((time.perf_counter() - started) * 1000)
+            proxy_status = "down"
+
+        query_proxy_state = {
+            "up": "ok", "degraded": "degraded"}.get(proxy_status, "error")
+        app.state.dependency_health.record(
+            "query_proxy", query_proxy_state)
+        app.state.dependency_health.record(
+            "query_proxy_redis", proxy_redis_state)
+        school_state = {
+            "up": "ok", "down": "error", "degraded": "degraded",
+        }.get(school_status, "unknown")
+        app.state.dependency_health.record("school_service", school_state)
 
         payload = {
             "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "site": _public_dependency("up"),
-            "proxy": _public_dependency(proxy_status, proxy_latency),
+            "proxy": {
+                **_public_dependency(proxy_status, proxy_latency),
+                "redis": {
+                    "ok": proxy_redis_state in ("ok", "degraded"),
+                    "degraded": proxy_redis_state in ("degraded", "error"),
+                },
+            },
             "school": _public_dependency(school_status, school_latency),
         }
         public_health_cache["at"] = now
@@ -855,9 +950,11 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         if app.state.redis_history is not None:
             source = "redis"
             try:
-                snapshot = await app.state.redis_history.recent(
-                    "gw:v2:query-logs", "gw:query-logs",
-                    min(100, scan_limit) if scan_limit else 100)
+                snapshot = await asyncio.wait_for(
+                    app.state.redis_history.recent(
+                        "gw:v2:query-logs", "gw:query-logs",
+                        min(100, scan_limit) if scan_limit else 100),
+                    timeout=1.5)
             except Exception as exc:
                 LOG.warning("管理端查询日志读取 Redis 失败：%s", exc.__class__.__name__)
                 snapshot = []
@@ -946,17 +1043,47 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         analysis_count = sum(1 for item in recent_entries if item.get("analysis"))
         p95 = elapsed_values[math.ceil(len(elapsed_values) * 0.95) - 1] if elapsed_values else None
 
-        redis_status = "not-configured"
-        if app.state.redis is not None:
-            try:
-                await asyncio.wait_for(app.state.redis.ping(), timeout=1.5)
-                redis_status = "ok"
-            except Exception:
-                redis_status = "error"
         file_status = (
             "disabled" if app.state.file_log_writer is None
             else app.state.file_log_writer.status
         )
+        if app.state.redis is not None:
+            try:
+                await asyncio.wait_for(app.state.redis.ping(), timeout=1.5)
+                app.state.dependency_health.record("redis", "ok")
+            except Exception:
+                app.state.dependency_health.record(
+                    "redis", "degraded",
+                    "Redis 不可用，查询继续；限流、历史与异步任务降级")
+
+        public_payload = await public_health()
+        public_proxy = public_payload.get("proxy", {})
+        proxy_status_value = str(public_proxy.get("status") or "unknown")
+        query_proxy_status = {
+            "up": "ok", "degraded": "degraded",
+        }.get(proxy_status_value, "error")
+        public_proxy_redis = public_proxy.get("redis", {})
+        query_proxy_redis = "unknown"
+        if isinstance(public_proxy_redis, dict):
+            if public_proxy_redis.get("ok") is True:
+                query_proxy_redis = "ok"
+            elif public_proxy_redis.get("degraded") is True:
+                query_proxy_redis = "degraded"
+            elif public_proxy_redis.get("ok") is False:
+                query_proxy_redis = "error"
+        public_school = public_payload.get("school", {})
+        school_status_value = str(public_school.get("status") or "unknown")
+        school_status = {
+            "up": "ok", "degraded": "degraded", "down": "error",
+        }.get(school_status_value, "unknown")
+        app.state.dependency_health.record("query_proxy", query_proxy_status)
+        app.state.dependency_health.record("query_proxy_redis", query_proxy_redis)
+        app.state.dependency_health.record("school_service", school_status)
+
+        dependencies = app.state.dependency_health.snapshot(
+            file_log_state=file_status)
+        degradations = [item for item in dependencies
+                        if item["level"] in ("warning", "danger")]
         return {
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "latest": history[-1] if history else None,
@@ -973,11 +1100,17 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 "analysis_token_total": token_total,
             },
             "services": {
-                "redis": redis_status,
+                "redis": next(item["status"] for item in dependencies if item["key"] == "redis"),
                 "file_log": file_status,
+                "query_proxy": next(item["status"] for item in dependencies if item["key"] == "query_proxy"),
+                "query_proxy_redis": next(item["status"] for item in dependencies if item["key"] == "query_proxy_redis"),
+                "school_service": next(item["status"] for item in dependencies if item["key"] == "school_service"),
+                "llm": next(item["status"] for item in dependencies if item["key"] == "llm"),
                 "global_concurrency": cfg.global_concurrency,
                 "rate_limit_per_minute": cfg.rate_limit,
             },
+            "dependencies": dependencies,
+            "degradations": degradations,
         }
 
     async def _passthrough(request: Request, path: str) -> Response:

@@ -105,7 +105,8 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
   并继续受 `GLOBAL_CONCURRENCY`、`LLM_CONCURRENCY`、`PDF_CONCURRENCY` 和查询代理上游
   信号量保护。
 - 同一学号 + 查询参数在排队/执行中自动去重；终态结果按 `JOB_RESULT_TTL_SECONDS` 保留。
-- Redis 未配置时接口返回 503；前端识别未启用后会回退旧 `POST /run`，默认三容器部署不变。
+- Redis 未配置或运行中不可用时，异步受理返回 503；前端识别后会回退旧 `POST /run`，
+  默认三容器部署不变。
 - 编排内 Redis 由 `.env` 的 `COMPOSE_PROFILES` 控制：默认 `redis`。留空仅适合单副本；
   使用外部 Redis 时保持 `COMPOSE_PROFILES=` 留空，并把 `REDIS_URL` 与
   `JWXT_REDIS_URL` 改成外部地址。Redis 仅挂 internal 网络且不映射宿主端口。
@@ -141,8 +142,8 @@ Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生�
   Redis 与文件互为冗余，任一失败不影响 `/run` 和另一条通道；最近一次文件错误可通过
   `/health` 观察。
 - Redis 短暂不可用时，`/run` 继续工作，日志降级写本实例 WAL，`/query-logs` 与
-  `/service-status` 降级到本实例历史。无 Redis 模式只有进程内有界历史；多副本之间
-  不会共享状态，严禁让多个副本解析到同一个可轮转 JSONL 文件。
+  `/service-status` 降级到本实例历史，限流降级为本副本固定窗口。无 Redis 模式只有
+  进程内有界历史；多副本之间不会共享状态，严禁让多个副本解析到同一个可轮转 JSONL 文件。
 - `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
   `docker compose exec format-service curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/query-logs`；
   生产建议经集中日志查询，不长期依赖进程内存。
@@ -166,7 +167,9 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   宿主机 CPU/内存/负载/磁盘 I/O/网络、日志文件存储增长和应用近 5 分钟负载；
   编排内存按 format-service、查询代理、前端入口三个 cgroup 聚合，宿主 cgroup
   不可读时按进程 RSS 估算并在界面标注；
-  并发与限流配置；后台 UI 每 5 秒刷新并绘制近三分钟 CPU 趋势（每 2 秒采样一次）。
+  并发与限流配置；同时返回 `dependencies` 与 `degradations`，对编排 Redis、查询代理、
+  查询代理 Redis、学校服务和 LLM 展示状态与降级说明。后台 UI 每 5 秒刷新并绘制近三分钟
+  CPU 趋势（每 2 秒采样一次）。
 - 管理端是单实例运维视图：读取当前副本文件和本地进程指标；Redis 仅在无文件通道时作
   历史降级源。生产多副本应继续把 stdout 交给集中平台聚合分析。
 - nginx 使用不含 query string 的隐私访问日志；携带个人票号的 `/jump/go` 与 `/get_schedule/export`
@@ -178,7 +181,9 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 
 - `format-service` 对 `/run` 设置全局并发槽位（默认 4）和等待超时；满载返回 HTTP 503。
 - 单次编排有总预算（默认 100 秒），避免学校上游或 LLM 故障长期占用连接。
-- `REDIS_URL` 配置后使用固定窗口共享限流；Redis 不可用时 `/run` 失败关闭，防止限流旁路。
+- `REDIS_URL` 配置后使用固定窗口共享限流；Redis 不可用时降级为本副本限流，优先保持查询可用。
+- 查询代理的 `JWXT_REDIS_URL` 采用熔断降级：Redis 启动或运行中不可用时切到本副本内存
+  会话/缓存/限流/短码，恢复后自动切回 Redis；期间 `/health` 标记 `degraded`。
 - 异步任务使用 Redis 排队和去重；`JOB_PENDING_LIMIT` 限制全局排队，worker 使用查询、LLM
   和 PDF 独立槽位，避免 500 个任务同时穿透到学校、模型或 CPU。
 - 前端 Nginx 使用多 worker 与 4096 连接，静态响应压缩/短缓存；`/run` 与任务轮询响应不缓存。

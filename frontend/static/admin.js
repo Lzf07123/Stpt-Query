@@ -12,6 +12,7 @@
     tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), logsPanel: $("logsPanel"),
     metricsPanel: $("metricsPanel"), filter: $("logFilter"), exportBtn: $("exportBtn"),
     filterToggle: $("filterToggle"),
+    dependencyNotices: $("dependencyNotices"),
     autoLogs: $("autoLogs"), autoMetrics: $("autoMetrics"),
     body: $("logsBody"), prev: $("prevPage"), next: $("nextPage"), pageInfo: $("pageInfo"),
     detailPanel: $("logDetailPanel"), detailBack: $("detailBack"), detailCopy: $("detailCopy"),
@@ -173,6 +174,29 @@
     setValue(elements.storageState, storage.available ? "可写入" : "不可用");
     var labels = { ok: "文件通道正常", disabled: "文件通道未启用", error: "文件通道异常" };
     elements.storageSource.textContent = labels[fileStatus] || "状态未知";
+  }
+
+  function renderDependencyNotices(payload) {
+    if (!elements.dependencyNotices) return;
+    var dependencies = payload && payload.dependencies || [];
+    var notices = dependencies.filter(function (item) {
+      return item.status !== "ok";
+    });
+    if (!notices.length) {
+      elements.dependencyNotices.classList.add("hidden");
+      elements.dependencyNotices.innerHTML = "";
+      return;
+    }
+    elements.dependencyNotices.innerHTML = notices.map(function (item) {
+      var state = escapeHtml(item.status || "unknown");
+      var level = escapeHtml(item.level || "info");
+      return '<div class="dependency-notice dependency-' + level + '">' +
+        '<strong>' + escapeHtml(item.display || "外部依赖") + '</strong>' +
+        '<span class="badge badge-' + (level === "warning" ? "warning" : level === "danger" ? "danger" : "muted") + '">' +
+        escapeHtml({ ok: "正常", degraded: "降级", error: "异常", "not-configured": "未配置", unknown: "检测中" }[state] || state) +
+        '</span><span>' + escapeHtml(item.message || "状态未知") + '</span></div>';
+    }).join("");
+    elements.dependencyNotices.classList.remove("hidden");
   }
 
   function renderHost(latest) {
@@ -726,6 +750,10 @@
     renderApplication({});
     renderHost({});
     renderStorage({}, {});
+    if (elements.dependencyNotices) {
+      elements.dependencyNotices.classList.add("hidden");
+      elements.dependencyNotices.innerHTML = "";
+    }
     elements.services.innerHTML = "";
     drawCpu([]);
   }
@@ -771,6 +799,7 @@
       renderOrchestration(latest);
       renderHost(latest);
       renderStorage(latest, payload.services || {});
+      renderDependencyNotices(payload);
     } catch (error) {
       renderServices(null);
       clearMetrics("采样失败");
@@ -789,12 +818,22 @@
 
   function renderServices(payload) {
     var services = payload && payload.services ? payload.services : {};
-    var serviceLabels = { redis: "Redis", file_log: "文件日志", global_concurrency: "并发上限", rate_limit_per_minute: "每分钟限流" };
+    var serviceLabels = {
+      redis: "编排 Redis", file_log: "文件日志", query_proxy: "查询代理",
+      query_proxy_redis: "查询代理 Redis", school_service: "学校服务",
+      llm: "成绩分析 LLM", global_concurrency: "并发上限",
+      rate_limit_per_minute: "每分钟限流"
+    };
     elements.services.innerHTML = Object.keys(serviceLabels).map(function (key) {
       var value = services[key];
-      var statusClass = value === "ok" ? "success" : value === "error" ? "danger" : "muted";
-      var display = key === "redis" || key === "file_log"
-        ? '<span class="badge badge-' + statusClass + '">' + escapeHtml({ ok: "正常", error: "异常", disabled: "未启用", "not-configured": "未配置" }[value] || value) + "</span>"
+      var statusClass = value === "ok" ? "success" : value === "error" ? "danger" :
+        value === "degraded" ? "warning" : "muted";
+      var display = ["redis", "file_log", "query_proxy", "query_proxy_redis",
+        "school_service", "llm"].indexOf(key) >= 0
+        ? '<span class="badge badge-' + statusClass + '">' + escapeHtml({
+            ok: "正常", degraded: "降级", error: "异常", disabled: "未启用",
+            "not-configured": "未配置", unknown: "检测中"
+          }[value] || value) + "</span>"
         : escapeHtml(value);
       return "<div><dt>" + serviceLabels[key] + "</dt><dd>" + display + "</dd></div>";
     }).join("");

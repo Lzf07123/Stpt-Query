@@ -717,13 +717,9 @@ def _health_probe_loop(state, interval, stop_event=None, redis_backend=None):
         net = probe_school()
         net["at"] = int(time.time())
         if redis_backend is not None:
-            try:
-                redis_backend.client.ping()
-                redis_ok = True
-            except Exception:
-                redis_ok = False
+            redis_ok = redis_backend.probe()
             with state.lock:
-                state.redis = {"ok": redis_ok, "at": int(time.time())}
+                state.redis = redis_backend.status_info()
         with state.lock:
             state.net = net
         if stop_event is not None and stop_event.wait(max(2, int(interval))):
@@ -756,13 +752,8 @@ def health_payload(state, server, now=None):
     backend = getattr(server, "_redis_backend", None)
     if backend is not None:
         if cached_redis is None:
-            # 首次健康请求同步探测一次，之后由后台线程持续刷新
-            try:
-                backend.client.ping()
-                redis_ok = True
-            except Exception:
-                redis_ok = False
-            cached_redis = {"ok": redis_ok, "at": int(now)}
+            redis_ok = backend.probe()
+            cached_redis = backend.status_info(now)
             with state.lock:
                 state.redis = cached_redis
         redis_info = dict(cached_redis)
