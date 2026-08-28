@@ -25,7 +25,7 @@ def _cfg(**kwargs):
         "rate_limit": 100,
     }
     options.update(kwargs)
-    return Settings(**options)
+    return Settings(**options, _env_file=None)
 
 
 async def test_global_concurrency_rejects_when_no_slot_is_free():

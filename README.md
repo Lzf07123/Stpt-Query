@@ -114,7 +114,7 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 ## 查询日志与可观测性
 
 `format-service` 为每次查询输出**结构化 JSON 单行日志**（stdout），并保留最近 100 条到
-内存环形缓冲。配置 `REDIS_URL` 时写入 `gw:query-logs`；启用 `FILE_LOG_ENABLED` 后
+进程内历史。配置 `REDIS_URL` 时写入 `gw:v2:query-logs`；启用 `FILE_LOG_ENABLED` 后
 同时以 JSONL 追加到 `FILE_LOG_PATH`，供文件与 Redis 双写留存。日志字段：
 
 | 字段 | 说明 |
@@ -128,6 +128,11 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | `success` / `kind` / `elapsed_ms` | 结果状态、分类与耗时 |
 | `response_summary` | 上游成功或失败响应的脱敏摘要，最多 300 字符；无摘要时为 `—` |
 
+服务启动时会从 JSONL 最新记录向前读取最多 100 条恢复到本实例历史。启用 Redis 后，
+同一 owner 通过 `gw:history-sync-lock` 补齐 `gw:v2:query-logs` 与 `gw:v2:service-status`。
+Redis 写入使用 Sorted Set 单事务，`run_id` 去重并只保留最近 100 条；同步失败只记录警告，
+不阻止服务启动。读取时兼容旧 `gw:*` List 并按 `run_id` 合并，滚动升级期间旧副本数据仍可见。
+
 - 日志**不包含**密码 / session / token；白名单字段之外一律丢弃（`app/querylog.py`）。
 - 文件通道只保留白名单字段，权限为 `0600`；按 `FILE_LOG_MAX_BYTES` 轮转并最多保留
   `FILE_LOG_BACKUP_COUNT` 个备份。Compose 默认挂载具名持久卷，容器与 Docker daemon
@@ -135,6 +140,9 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 - 业务编排数据仍不落盘；文件卷只承载查询日志（服务状态从 `event=query` 记录派生）。
   Redis 与文件互为冗余，任一失败不影响 `/run` 和另一条通道；最近一次文件错误可通过
   `/health` 观察。
+- Redis 短暂不可用时，`/query-logs` 与 `/service-status` 自动降级到本实例历史，不影响查询。
+  无 Redis 模式只有进程内有界历史；多副本之间不会共享状态，且不要让多个副本写入同一个
+  可轮转 JSONL 文件（可按实例拆分路径，或统一走 stdout 集中日志）。
 - `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
   `docker compose exec format-service curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/query-logs`；
   生产建议经集中日志查询，不长期依赖进程内存。
@@ -142,7 +150,7 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
   接口只返回状态、延迟和检查时间，不暴露内部地址、错误详情或凭据，结果缓存 15 秒。
 - `GET /service-status` 返回最近 100 次查询的 `success/kind/time`，同一实例的所有客户端
   共享相同历史；配置 Redis 后跨副本共享，重启后从持久 JSONL 日志恢复。响应不包含
-  学号、IP、错误详情等查询日志上下文。
+  学号、IP、错误详情、`run_id` 等查询日志上下文。
 
 ### 管理后台
 

@@ -112,6 +112,7 @@ services:
       # 唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
       - TRUST_PROXY=${TRUST_PROXY:-true}
       - REDIS_URL=${REDIS_URL:-}
+      - INSTANCE_ID=${INSTANCE_ID:-}
       - JOB_WORKERS=${JOB_WORKERS:-2}
       - JOB_PENDING_LIMIT=${JOB_PENDING_LIMIT:-500}
       - JOB_RESULT_TTL_SECONDS=${JOB_RESULT_TTL_SECONDS:-900}

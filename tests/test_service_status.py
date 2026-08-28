@@ -1,10 +1,13 @@
-"""服务状态持久化与跨客户端共享契约。"""
+"""服务状态持久化与多实例共享契约。"""
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
-from app.main import Settings, create_app
+from app.history import MemoryEventHistory, RedisEventHistory
+from app.main import Settings, create_app, _sync_history_from_file
 from app.querylog import JSONLFileWriter
 
 
@@ -23,15 +26,16 @@ def _cfg(tmp_path, **kwargs) -> Settings:
         "file_log_path": str(tmp_path / "queries.jsonl"),
     }
     options.update(kwargs)
-    return Settings(**options)
+    return Settings(**options, _env_file=None)
 
 
 def _write_query_event(writer: JSONLFileWriter, *, success: bool, kind: str,
-                       username: str = "2023000001") -> None:
+                       username: str = "2023000001",
+                       run_id: str = "run-1") -> None:
     writer.write_raw({
         "event": "query",
         "time": "2026-08-28T10:00:00+08:00",
-        "run_id": "run-1",
+        "run_id": run_id,
         "client_ip": "192.168.1.2",
         "username": username,
         "option": "成绩",
@@ -44,7 +48,8 @@ def test_service_status_restores_persistent_query_events_without_log_fields(tmp_
     cfg = _cfg(tmp_path)
     writer = JSONLFileWriter(cfg.file_log_path)
     _write_query_event(writer, success=False, kind="login_error")
-    _write_query_event(writer, success=True, kind="grades", username="2023000002")
+    _write_query_event(writer, success=True, kind="grades", username="2023000002",
+                       run_id="run-2")
 
     with TestClient(create_app(cfg)) as client:
         response = client.get("/service-status", headers=HEADERS)
@@ -62,7 +67,7 @@ def test_service_status_restores_persistent_query_events_without_log_fields(tmp_
     assert "192.168.1.2" not in response.text
 
 
-def test_service_status_restores_shared_file_after_restart(tmp_path):
+def test_service_status_restores_local_file_after_restart(tmp_path):
     cfg = _cfg(tmp_path)
     writer = JSONLFileWriter(cfg.file_log_path)
     _write_query_event(writer, success=True, kind="grades")
@@ -77,61 +82,97 @@ def test_service_status_restores_shared_file_after_restart(tmp_path):
     assert body["results"][0]["kind"] == "grades"
 
 
-def test_redis_service_status_is_shared_before_file_and_memory(tmp_path):
-    class FakeAsyncRedis:
-        def __init__(self):
-            self.values: dict[str, list[str]] = {}
+class FakePipeline:
+    def __init__(self, redis):
+        self.redis = redis
+        self.operations = []
 
-        async def incr(self, key: str) -> int:
-            return 1
+    def zadd(self, key, values, nx=False):
+        self.operations.append(("zadd", key, values, nx))
 
-        async def lpush(self, key: str, value: str) -> int:
-            self.values.setdefault(key, []).insert(0, value)
-            return len(self.values[key])
+    def zremrangebyrank(self, key, start, stop):
+        self.operations.append(("zremrangebyrank", key, start, stop))
 
-        async def ltrim(self, key: str, start: int, stop: int) -> bool:
-            self.values[key] = self.values[key][start:stop + 1]
-            return True
+    async def execute(self):
+        self.redis.transactions.append(list(self.operations))
+        for operation, *args in self.operations:
+            if operation == "zadd":
+                key, values, nx = args
+                members = self.redis.zsets.setdefault(key, [])
+                for member, score in values.items():
+                    if nx and any(item[0] == member for item in members):
+                        continue
+                    members[:] = [(item_member, item_score)
+                                  for item_member, item_score in members
+                                  if item_member != member]
+                    members.append((member, score))
+            else:
+                key, start, stop = args
+                self.redis.zsets[key].sort(key=lambda item: (item[1], item[0]))
+                del self.redis.zsets[key][start:stop + 1]
+        return True
 
-        async def expire(self, key: str, seconds: int) -> bool:
-            assert seconds == 60
-            return True
 
-        async def ping(self) -> bool:
-            return True
+class FakeAsyncRedis:
+    def __init__(self):
+        self.zsets: dict[str, list[tuple[str, float]]] = {}
+        self.lists: dict[str, list[str]] = {}
+        self.locks = {}
+        self.transactions = []
 
-        async def lrange(self, key: str, start: int, stop: int) -> list[str]:
-            return self.values.get(key, [])[start:stop + 1]
+    async def incr(self, key):
+        self.lists[key] = self.lists.get(key, [])
+        count = len(self.lists[key]) + 1
+        self.lists[key].append(str(count))
+        return count
 
-        def pipeline(self, transaction=True):
-            assert transaction is True
-            return self._FakePipeline(self)
+    async def expire(self, key, seconds):
+        assert seconds == 60
+        return True
 
-        class _FakePipeline:
-            def __init__(self, redis):
-                self.redis = redis
-                self.operations = []
+    async def ping(self):
+        return True
 
-            def lpush(self, key, value):
-                self.operations.append(("lpush", key, value))
+    async def set(self, key, value, nx=False, px=None):
+        if nx and key in self.locks:
+            return False
+        self.locks[key] = value
+        return True
 
-            def ltrim(self, key, start, stop):
-                self.operations.append(("ltrim", key, start, stop))
+    async def get(self, key):
+        return self.locks.get(key)
 
-            async def execute(self):
-                for operation, *args in self.operations:
-                    if operation == "lpush":
-                        key, value = args
-                        self.redis.values.setdefault(key, []).insert(0, value)
-                    else:
-                        key, start, stop = args
-                        self.redis.values[key] = self.redis.values[key][start:stop + 1]
-                return True
+    async def eval(self, script, numkeys, key, *args):
+        if self.locks.get(key) == args[0]:
+            del self.locks[key]
+        return 1
 
-    cfg = _cfg(tmp_path, file_log_enabled=False)
-    app = create_app(cfg)
+    async def lrange(self, key, start, stop):
+        return self.lists.get(key, [])[start:stop + 1]
+
+    async def zrange(self, key, start, stop, desc=False, withscores=False):
+        rows = sorted(self.zsets.get(key, []), key=lambda item: (item[1], item[0]))
+        if desc:
+            rows = list(reversed(rows))
+        rows = rows[start:stop + 1 if stop >= 0 else None]
+        if withscores:
+            return rows
+        return [member for member, _ in rows]
+
+    def pipeline(self, transaction=True):
+        assert transaction is True
+        return FakePipeline(self)
+
+    async def aclose(self):
+        return None
+
+
+async def test_redis_records_status_and_query_logs_with_run_ids(tmp_path):
     redis = FakeAsyncRedis()
+    cfg = _cfg(tmp_path, file_log_enabled=False, redis_url="redis://redis:6379/0")
+    app = create_app(cfg)
     app.state.redis = redis
+    app.state.redis_history = RedisEventHistory(redis)
     client = TestClient(app)
 
     assert client.post(
@@ -143,74 +184,98 @@ def test_redis_service_status_is_shared_before_file_and_memory(tmp_path):
     assert body["total"] == 1
     assert body["results"][0]["success"] is False
     assert body["results"][0]["kind"] == "login_error"
-    assert json.loads(redis.values["gw:service-status"][0])["success"] is False
+    assert "run_id" not in body["results"][0]
+    assert len(redis.zsets["gw:v2:service-status"]) == 1
+    assert len(redis.zsets["gw:v2:query-logs"]) == 1
+    status_event = json.loads(redis.zsets["gw:v2:service-status"][0][0])
+    query_event = json.loads(redis.zsets["gw:v2:query-logs"][0][0])
+    assert status_event["run_id"] == query_event["run_id"]
 
 
-async def test_redis_service_status_and_query_logs_commit_isolated_transactions(tmp_path):
-    class FakePipeline:
-        def __init__(self, redis):
-            self.redis = redis
-            self.operations = []
+async def test_redis_startup_backfills_empty_history_from_jsonl(tmp_path):
+    writer = JSONLFileWriter(tmp_path / "queries.jsonl")
+    for index in range(102):
+        writer.write_raw({
+            "event": "query",
+            "time": f"2026-08-28T10:{index // 60:02d}:{index % 60:02d}+08:00",
+            "run_id": f"run-{index:03d}",
+            "username": f"2023000{index:03d}",
+            "password": "secret",
+            "option": "成绩",
+            "success": True,
+            "kind": "grades",
+        })
 
-        def lpush(self, key, value):
-            self.operations.append(("lpush", key, value))
+    redis = FakeAsyncRedis()
+    local = MemoryEventHistory()
+    history = RedisEventHistory(redis)
 
-        def ltrim(self, key, start, stop):
-            self.operations.append(("ltrim", key, start, stop))
+    assert await _sync_history_from_file(writer, local, history, "instance-1") is True
+    assert len(local.recent("gw:v2:query-logs")) == 100
+    assert len(redis.zsets["gw:v2:query-logs"]) == 100
+    assert len(redis.zsets["gw:v2:service-status"]) == 100
+    newest = json.loads(redis.zsets["gw:v2:query-logs"][-1][0])
+    oldest = json.loads(redis.zsets["gw:v2:query-logs"][0][0])
+    assert newest["run_id"] == "run-101"
+    assert oldest["run_id"] == "run-002"
+    assert "password" not in newest
+    assert all(len({operation[1] for operation in transaction}) == 1
+               for transaction in redis.transactions)
 
-        async def execute(self):
-            self.redis.transactions.append([
-                (operation, key) for operation, key, *_ in self.operations
-            ])
-            for operation, *args in self.operations:
-                if operation == "lpush":
-                    key, value = args
-                    self.redis.values.setdefault(key, []).insert(0, value)
-                else:
-                    key, start, stop = args
-                    self.redis.values[key] = self.redis.values[key][start:stop + 1]
-            return True
 
-    class FakeAsyncRedis:
+async def test_redis_history_sync_is_owner_locked():
+    redis = FakeAsyncRedis()
+    redis.locks["gw:history-sync-lock"] = "instance-other"
+    history = RedisEventHistory(redis)
+    writer = JSONLFileWriter(str(Path("/dev/null")))
+
+    assert await _sync_history_from_file(
+        writer, MemoryEventHistory(), history, "instance-1") is False
+    assert not redis.transactions
+
+
+async def test_redis_history_merges_versioned_and_legacy_records():
+    versioned = json.dumps({
+        "event": "query", "run_id": "run-a", "success": True, "kind": "grades",
+        "time": "2026-08-28T10:02:00+08:00", "_record_id": "a",
+    }, separators=(",", ":"))
+    legacy_a = json.dumps({
+        "event": "query", "run_id": "run-a", "success": False, "kind": "login_error",
+        "time": "2026-08-28T10:00:00+08:00",
+    }, separators=(",", ":"))
+    legacy_b = json.dumps({
+        "event": "query", "run_id": "run-b", "success": True, "kind": "grades",
+        "time": "2026-08-28T10:01:00+08:00",
+    }, separators=(",", ":"))
+
+    class LegacyRedis:
         def __init__(self):
-            self.values = {}
-            self.transactions = []
+            self.zsets = {"gw:v2:query-logs": [(versioned, 1787882520.0)]}
+            self.lists = {"gw:query-logs": [legacy_a, legacy_b]}
 
-        async def incr(self, key):
-            return 1
-
-        async def expire(self, key, seconds):
-            assert seconds == 60
-
-        async def ping(self):
-            return True
+        async def zrange(self, *args, **kwargs):
+            rows = self.zsets["gw:v2:query-logs"]
+            return rows if kwargs.get("withscores") else [row[0] for row in rows]
 
         async def lrange(self, key, start, stop):
-            return self.values.get(key, [])[start:stop + 1]
+            rows = self.lists[key]
+            if stop < 0:
+                return rows[start:] if start >= 0 else rows[:stop]
+            return rows[start:stop + 1]
 
-        def pipeline(self, transaction=True):
-            assert transaction is True
-            return FakePipeline(self)
+    items = await RedisEventHistory(LegacyRedis()).recent(
+        "gw:v2:query-logs", "gw:query-logs")
 
-    cfg = _cfg(tmp_path, file_log_enabled=False)
-    app = create_app(cfg)
-    redis = FakeAsyncRedis()
-    app.state.redis = redis
-    client = TestClient(app)
+    assert [item["run_id"] for item in items] == ["run-a", "run-b"]
+    assert items[0]["success"] is True
+    assert "_record_id" not in items[0]
+    assert "_history_member" not in items[1]
 
-    assert client.post(
-        "/run", headers=HEADERS,
-        json={"username": "2023000001", "password": "pw", "option": "成绩"},
-    ).status_code == 200
 
-    assert [sorted(operation for operation, _ in transaction)
-            for transaction in redis.transactions] == [
-        ["lpush", "ltrim"], ["lpush", "ltrim"]
-    ]
-    assert all(len({key for _, key in transaction}) == 1
-               for transaction in redis.transactions)
-    assert {key for transaction in redis.transactions for _, key in transaction} == {
-        "gw:service-status", "gw:query-logs"
-    }
-    assert redis.values["gw:service-status"]
-    assert redis.values["gw:query-logs"]
+def test_memory_history_is_bounded_and_deduplicated():
+    history = MemoryEventHistory(limit=2)
+    for index in range(4):
+        history.add("status", {"success": True, "kind": str(index)}, str(index), index)
+    history.add("status", {"success": True, "kind": "updated"}, "3", 99)
+
+    assert [item["kind"] for item in history.recent("status")] == ["updated", "2"]

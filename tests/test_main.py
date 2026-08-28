@@ -9,6 +9,7 @@ from app.main import Settings, create_app
 
 def _client() -> TestClient:
     cfg = Settings(
+        _env_file=None,
         environment="development",
         auto_rotate_token=False,
         api_token="test-token",
@@ -161,26 +162,28 @@ def test_passthrough_rejects_unlisted_path():
 
 def test_production_rejects_default_weak_token():
     with pytest.raises(RuntimeError, match="API_TOKEN"):
-        create_app(Settings(environment="production", auto_rotate_token=False,
-                            api_token="change-me"))
+        create_app(Settings(_env_file=None, environment="production",
+                            auto_rotate_token=False, api_token="change-me"))
 
 
 def test_production_rejects_short_token():
     with pytest.raises(RuntimeError, match="API_TOKEN"):
-        create_app(Settings(environment="production", auto_rotate_token=False,
-                            api_token="short-token"))
+        create_app(Settings(_env_file=None, environment="production",
+                            auto_rotate_token=False, api_token="short-token"))
 
 
 def test_production_rejects_weak_admin_token():
     with pytest.raises(RuntimeError, match="ADMIN_TOKEN"):
         create_app(Settings(
+            _env_file=None,
             environment="production", auto_rotate_token=False,
             api_token="a" * 24, admin_token="admin-token"))
 
 
 def test_production_accepts_strong_fixed_tokens():
     strong = "a" * 24
-    cfg = Settings(environment="production", auto_rotate_token=False, api_token=strong,
+    cfg = Settings(_env_file=None,
+                   environment="production", auto_rotate_token=False, api_token=strong,
                    admin_token="b" * 24,
                    service_base_url="http://127.0.0.1:9", service_api_token="x")
     app = create_app(cfg)
@@ -189,6 +192,7 @@ def test_production_accepts_strong_fixed_tokens():
 
 def test_rate_limit_returns_429_by_client_ip():
     cfg = Settings(
+        _env_file=None,
         environment="development",
         auto_rotate_token=False,
         api_token="test-token",
@@ -279,6 +283,7 @@ async def test_async_worker_links_pipeline_phases_to_job_status():
             return {"success": True, "kind": "grades", "run_id": "run-1"}
 
     cfg = Settings(
+        _env_file=None,
         environment="development",
         auto_rotate_token=False,
         api_token="test-token",

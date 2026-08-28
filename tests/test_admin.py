@@ -23,7 +23,7 @@ def _settings(tmp_path, **kwargs):
         "file_log_path": str(tmp_path / "queries.jsonl"),
     }
     options.update(kwargs)
-    return Settings(**options)
+    return Settings(**options, _env_file=None)
 
 
 def test_admin_endpoints_require_independent_admin_token(tmp_path):
