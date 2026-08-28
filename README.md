@@ -130,8 +130,9 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 
 服务启动时会从 JSONL 最新记录向前读取最多 100 条恢复到本实例历史。启用 Redis 后，
 同一 owner 通过 `gw:history-sync-lock` 补齐 `gw:v2:query-logs` 与 `gw:v2:service-status`。
-Redis 写入使用 Sorted Set 单事务，`run_id` 去重并只保留最近 100 条；同步失败只记录警告，
-不阻止服务启动。读取时兼容旧 `gw:*` List 并按 `run_id` 合并，滚动升级期间旧副本数据仍可见。
+Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不会产生重复记录，`run_id`
+去重并只保留最近 100 条；同步失败只记录警告，不阻止服务启动。读取时兼容旧 `gw:*`
+List 并按 `run_id` 合并，滚动升级期间旧副本数据仍可见。
 
 - 日志**不包含**密码 / session / token；白名单字段之外一律丢弃（`app/querylog.py`）。
 - 文件通道只保留白名单字段，权限为 `0600`；按 `FILE_LOG_MAX_BYTES` 轮转并最多保留
