@@ -13,7 +13,7 @@ import re
 import secrets
 import socket
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import datetime
 from threading import Lock
 from typing import Any, Optional
@@ -105,6 +105,8 @@ def _validate_production(environment: str, auto_rotate_token: bool,
 
 # 对外跳转/下载透传白名单：免密登录桥接页与课表 Word 下载必须经公网入口可达
 PASSTHROUGH_ALLOWED = ("/jump/go", "/get_schedule/export")
+# 内存限流桶的硬上限：超出后按 LRU 淘汰最久未使用的来源 key，防止高基数来源撑爆内存
+MAX_RATE_KEYS = 4096
 # 后台回填最多扫描的 JSONL 行数；更早日志由 stdout/集中日志平台长期保存
 MAX_HISTORY_SYNC_SCAN_LINES = 20_000
 
@@ -448,8 +450,25 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     app.add_event_handler("startup", _startup)
 
-    rate_hits: dict = {}
+    rate_hits = OrderedDict()
     rate_lock = Lock()
+
+    def _memory_rate_allow(ip: str, now: float, limit: int) -> bool:
+        """内存限流：每 key 最多 limit 个 60 秒时间戳；桶数量有硬上限并按 LRU 淘汰。"""
+        with rate_lock:
+            hits = rate_hits.get(ip)
+            if hits is not None:
+                rate_hits.move_to_end(ip)
+                hits = [t for t in hits if now - t < 60]
+            else:
+                hits = []
+            limited = len(hits) >= limit
+            if not limited:
+                hits.append(now)
+                rate_hits[ip] = hits
+                if len(rate_hits) > MAX_RATE_KEYS:
+                    rate_hits.popitem(last=False)
+            return limited
 
     bearer = HTTPBearer(auto_error=False)
 
@@ -483,25 +502,12 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         return request.client.host if request.client else "unknown"
 
     async def _check_rate_limit(ip: str) -> None:
-        nonlocal rate_hits
         now = time.time()
         limit = app.state.rate_limit
         limited = False
         redis_unavailable = False
         if app.state.redis is None:
-            with rate_lock:
-                if len(rate_hits) > 4096:
-                    pruned = {}
-                    for key, stamps in rate_hits.items():
-                        recent = [t for t in stamps if now - t < 60]
-                        if recent:
-                            pruned[key] = recent
-                    rate_hits = pruned
-                hits = [t for t in rate_hits.get(ip, []) if now - t < 60]
-                limited = len(hits) >= limit
-                if not limited:
-                    hits.append(now)
-                    rate_hits[ip] = hits
+            limited = _memory_rate_allow(ip, now, limit)
         else:
             digest = hashlib.sha256(ip.encode("utf-8")).hexdigest()
             key = f"gw:rate:{digest}"
@@ -520,19 +526,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 redis_unavailable = True
 
         if redis_unavailable:
-            with rate_lock:
-                if len(rate_hits) > 4096:
-                    pruned = {}
-                    for key, stamps in rate_hits.items():
-                        recent = [t for t in stamps if now - t < 60]
-                        if recent:
-                            pruned[key] = recent
-                    rate_hits = pruned
-                hits = [t for t in rate_hits.get(ip, []) if now - t < 60]
-                limited = len(hits) >= limit
-                if not limited:
-                    hits.append(now)
-                    rate_hits[ip] = hits
+            limited = _memory_rate_allow(ip, now, limit)
         elif app.state.redis is not None:
             app.state.dependency_health.record("redis", "ok")
         if limited:
