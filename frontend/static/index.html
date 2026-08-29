@@ -1695,15 +1695,24 @@
         let businessFail = false;
         if (!resp.ok) {
           markJobProgressFailed(payload);
-          let message = "HTTP " + resp.status;
-          if (data && data.detail) {
-            if (typeof data.detail === "string") message = data.detail;
-            else if (Array.isArray(data.detail) && data.detail[0] && data.detail[0].msg) {
-              message = data.detail[0].msg;
+          const detail = data && typeof data.detail === "object" ? data.detail : null;
+          const detailMeta = detail && detail.meta ? detail.meta : null;
+          if (detailMeta && detailMeta.lock_until) {
+            showLockCard(detailMeta.lock_until);
+            showToast("error", "学校账号临时锁定");
+          } else {
+            let message = "HTTP " + resp.status;
+            if (data && data.detail) {
+              if (typeof data.detail === "string") message = data.detail;
+              else if (detail && typeof detail.output === "string" && detail.output) {
+                message = detail.output;
+              } else if (Array.isArray(data.detail) && data.detail[0] && data.detail[0].msg) {
+                message = data.detail[0].msg;
+              }
             }
+            showErrorCard(message);
+            showToast("error", "查询失败");
           }
-          showErrorCard(message);
-          showToast("error", "查询失败");
         } else {
           const meta = data && typeof data === "object"
             ? (data._meta || data.meta || null) : null;

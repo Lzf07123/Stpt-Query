@@ -4,7 +4,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.jobs import JobStore
 from app.main import Settings, create_app
+from app.pipeline import ServiceError
 
 
 def _client() -> TestClient:
@@ -236,6 +238,109 @@ def test_async_jobs_require_redis():
         json={"username": "2023000001", "password": "pw", "option": "成绩"})
     assert resp.status_code == 503
     assert "REDIS_URL" in resp.json()["detail"]
+
+
+class _FakeAsyncRedis:
+    def __init__(self):
+        self.counters = {}
+
+    async def incr(self, key):
+        self.counters[key] = self.counters.get(key, 0) + 1
+        return self.counters[key]
+
+    async def expire(self, key, seconds):
+        return True
+
+    async def zcard(self, key):
+        return 0
+
+    async def aclose(self):
+        return None
+
+
+class _FailingLoginService:
+    def __init__(self, exc):
+        self.exc = exc
+
+    async def post(self, path, payload):
+        raise self.exc
+
+
+def _async_jobs_client_with_login_failure(exc):
+    cfg = Settings(
+        _env_file=None,
+        environment="development",
+        auto_rotate_token=False,
+        api_token="test-token",
+        service_base_url="http://127.0.0.1:9",
+        service_api_token="x",
+        llm_api_key="",
+    )
+    app = create_app(cfg)
+    fake_redis = _FakeAsyncRedis()
+    app.state.redis = fake_redis
+    app.state.job_store = JobStore(fake_redis)
+    app.state.redis_history = None
+    app.state.pipeline.service = _FailingLoginService(exc)
+    return TestClient(app)
+
+
+def test_async_login_failure_preserves_school_lock_time():
+    exc = ServiceError(
+        401,
+        {"data": {"code": "USERLOCK", "data": "2026-08-29 13:22:35"}},
+        "上游服务 HTTP 401",
+    )
+    client = _async_jobs_client_with_login_failure(exc)
+    resp = client.post(
+        "/run/jobs",
+        headers={"Authorization": "Bearer test-token"},
+        json={"username": "2023000001", "password": "pw", "option": "成绩"})
+
+    assert resp.status_code == 401
+    detail = resp.json()["detail"]
+    assert detail["kind"] == "login_error"
+    assert detail["run_id"]
+    assert detail["meta"]["lock_until"] == "2026-08-29 13:22:35"
+    assert "学校风控或账号临时锁定" in detail["output"]
+
+
+def test_async_login_success_without_session_stays_structured():
+    class _NoSessionLoginService:
+        async def post(self, path, payload):
+            if path != "/login":
+                return {}
+            return {
+                "success": False,
+                "data": {"code": "USERLOCK", "data": "2026-08-29 13:22:35"},
+            }
+
+    cfg = Settings(
+        _env_file=None,
+        environment="development",
+        auto_rotate_token=False,
+        api_token="test-token",
+        service_base_url="http://127.0.0.1:9",
+        service_api_token="x",
+        llm_api_key="",
+    )
+    app = create_app(cfg)
+    fake_redis = _FakeAsyncRedis()
+    app.state.redis = fake_redis
+    app.state.job_store = JobStore(fake_redis)
+    app.state.redis_history = None
+    app.state.pipeline.service = _NoSessionLoginService()
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/run/jobs",
+            headers={"Authorization": "Bearer test-token"},
+            json={"username": "2023000001", "password": "pw", "option": "成绩"})
+
+    assert resp.status_code == 401
+    detail = resp.json()["detail"]
+    assert detail["kind"] == "login_error"
+    assert detail["meta"]["lock_until"] == "2026-08-29 13:22:35"
 
 
 async def test_async_worker_links_pipeline_phases_to_job_status():

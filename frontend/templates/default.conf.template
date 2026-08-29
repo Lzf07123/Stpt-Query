@@ -19,7 +19,7 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-CuiBh61aS0QMjNZpnt4If4kDCSmsx4XSZ/OE4EOCZe8=' 'sha256-wtG0hdWaQXovAXqabB5gG9Tz0zWueVirgcFbygaUc/0=' 'sha256-y8JRKoR5pl+X52aZ3ZYKWOSTroVbem8eD1908CUt0to=' 'sha256-02D6j/2xwFGSRuiPQE0ds5E0RDIzyj0RNFoC3fIlphA=' 'sha256-oyN7W3sHXAYibPUKOXDhIilZHMcgVC60XNm/gO6XTBU='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-CuiBh61aS0QMjNZpnt4If4kDCSmsx4XSZ/OE4EOCZe8=' 'sha256-U+Jykv4Yb/90S4jxaQzHLRfdiEz8sRdWDZA91NUKJZE=' 'sha256-y8JRKoR5pl+X52aZ3ZYKWOSTroVbem8eD1908CUt0to=' 'sha256-02D6j/2xwFGSRuiPQE0ds5E0RDIzyj0RNFoC3fIlphA=' 'sha256-oyN7W3sHXAYibPUKOXDhIilZHMcgVC60XNm/gO6XTBU='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
 
     root /usr/share/nginx/html;
     index index.html;
