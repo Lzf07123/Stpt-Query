@@ -267,7 +267,7 @@ pytest
 # 或容器内：
 docker build -t format-service:test format-service
 docker run --rm -v "$PWD":/app -w /app format-service:test \
-  sh -c "pip install -q pytest pytest-asyncio && python -m pytest -q"
+  sh -c "pip install -q pytest pytest-asyncio requests redis && python -m pytest -q"
 
 # 前端令牌构建（Tailwind CSS 4 同栈，产物自托管）
 cd frontend && npm install && npm run build

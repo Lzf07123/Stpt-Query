@@ -545,6 +545,10 @@ class RedisSessionStore:
             for sid in dead:
                 pipe2.zrem(self._index_key(), sid)
             pipe2.execute()
+            # Redis 键自然过期时同步清理本进程预热事件，避免本地字典随登录次数无界增长
+            with self._local_lock:
+                for sid in dead:
+                    self._warm_events.pop(_b(sid), None)
         return len(dead)
 
     def status(self, sid):

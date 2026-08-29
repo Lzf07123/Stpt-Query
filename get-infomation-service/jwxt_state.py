@@ -5,6 +5,7 @@ import json
 import secrets
 import threading
 import time
+from collections import OrderedDict
 from contextlib import contextmanager
 from urllib.parse import quote
 
@@ -261,13 +262,19 @@ class RateLimiter:
 
     相比固定窗口，令牌桶在分钟边界不会“瞬间清零重来”，可平滑突发流量；
     idle 一段时间后仍允许最多 limit 次突发，适合本服务的调用场景。
+
+    桶数量有硬上限（MAX_BUCKETS）：达到上限时按 LRU 淘汰最久未使用的 key，
+    避免大量不同来源 key 让进程内存无界增长；淘汰是 O(1)，不会退化为全表重建。
     """
 
-    def __init__(self, limit_per_min=0):
+    MAX_BUCKETS = 10000
+
+    def __init__(self, limit_per_min=0, max_buckets=MAX_BUCKETS):
         self.limit = max(0, int(limit_per_min))
         self.rate = (self.limit / 60.0) if self.limit else 0.0
+        self.max_buckets = max(1, int(max_buckets))
         self.lock = threading.Lock()
-        self.buckets = {}
+        self.buckets = OrderedDict()
 
     def allow(self, key):
         if not self.limit:
@@ -278,21 +285,23 @@ class RateLimiter:
             if b is None:
                 b = [float(self.limit), now]
                 self.buckets[key] = b
-                self._prune(now)
+                if len(self.buckets) > self.max_buckets:
+                    self.buckets.popitem(last=False)
             else:
                 tokens, last = b
                 tokens = min(float(self.limit), tokens + (now - last) * self.rate)
                 b[0] = tokens
                 b[1] = now
+                self.buckets.move_to_end(key)
             if b[0] >= 1.0:
                 b[0] -= 1.0
                 return True
             return False
 
     def _prune(self, now):
-        if len(self.buckets) > 10000:
-            self.buckets = {k: v for k, v in self.buckets.items()
-                            if v[1] >= now - 120}
+        """兼容旧调用：仅做一次轻量清理，不再对全表做 O(n) 重建。"""
+        if len(self.buckets) > self.max_buckets:
+            self.sweep(now)
 
     def sweep(self, now=None):
         """清理超过 2 分钟未活动的 key（由后台 sweeper 周期调用）。"""
@@ -668,6 +677,8 @@ def probe_school(timeout=4):
         except Exception as e:
             return {"ok": False, "latency_ms": int((time.time() - t0) * 1000),
                     "error": "%s: %s" % (type(e).__name__, e)}
+        finally:
+            s.close()
     except Exception as e:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000),
                 "error": "%s: %s" % (type(e).__name__, e)}
