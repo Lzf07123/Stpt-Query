@@ -253,6 +253,10 @@ docker compose up -d --build
 > 前端令牌样式已预编译提交（`frontend/static/style.css`），普通部署无需 npm；修改
 > 样式后重新构建：`cd frontend && npm install && npm run build`。
 
+> 修改 `frontend/static/index.html` 内联脚本后，必须同步更新
+> `frontend/templates/default.conf.template` 中 `script-src` 对应内联脚本的 SHA-256
+> 哈希，否则 CSP 会拦截脚本导致查询页无法使用。
+
 > 品牌文案（标题 / slogan / 页脚作者与 GitHub 链接）可由环境变量 `BRAND_NAME`、
 > `BRAND_SLOGAN`、`BRAND_DESCRIPTION`、`BRAND_AUTHOR`、`BRAND_GITHUB` 覆盖；留空即使用
 > `frontend/static/brand.js` 的内置默认值，`BRAND_GITHUB=none` 隐藏页脚 GitHub 链接。

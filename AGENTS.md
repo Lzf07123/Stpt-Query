@@ -65,6 +65,9 @@ docker run --rm -v "$PWD":/app -w /app format-service:test \
 
 # 2b. 前端令牌构建（改动 frontend/src/ 或 brand.js 后必须重编译）
 cd frontend && npm install && npm run build && cd ..
+# 改动 frontend/static/index.html 内联脚本后，必须同步更新
+# frontend/templates/default.conf.template 中 script-src 对应内联脚本的
+# SHA-256 哈希（否则 CSP 拦截脚本，查询页无法使用）。
 
 # 3. 三容器端到端冒烟（需 Docker daemon）
 API_TOKEN=smoke-token AUTO_ROTATE_TOKEN=false docker compose up -d --build
