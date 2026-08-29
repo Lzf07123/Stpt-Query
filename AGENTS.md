@@ -58,7 +58,7 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 # 1. 编排配置合法
 docker compose config --quiet
 
-# 2. 单元测试（91 个用例，全部通过）
+# 2. 单元测试（93 个用例，全部通过）
 docker build -q -t format-service:test format-service
 docker run --rm -v "$PWD":/app -w /app format-service:test \
   sh -c "pip install -q pytest pytest-asyncio requests redis && python -m pytest -q"

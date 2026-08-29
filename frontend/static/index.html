@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=56">
+  <link rel="stylesheet" href="/style.css?v=57">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
 </head>
@@ -400,6 +400,7 @@
 
     function displaySavedRecord(rec) {
       if (!rec) return;
+      clearLockTimer();
       clearTimeout(resultTimer);
       skeleton.hidden = true;
       skeleton.setAttribute("aria-hidden", "true");
@@ -854,7 +855,7 @@
         time = " (" + (mins < 1 ? "刚刚" : mins + " 分钟前") + ")";
       }
       offlineBar.innerHTML = '<span class="status-dot status-invalid" aria-hidden="true"></span>当前离线，显示的是上次同步的数据' + time +
-        ' <button type="button" class="btn btn-ghost" onclick="document.getElementById(\'queryForm\').requestSubmit()">手动刷新</button>';
+        ' <button type="button" class="btn btn-ghost js-retry-query">手动刷新</button>';
       offlineBar.classList.remove("hidden");
     }
 
@@ -873,7 +874,14 @@
     const CLOUD_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>';
 
 
-    function showStateCard(icon, title, desc, withRetry, kind) {
+    let lockTimer = 0;
+    function clearLockTimer() {
+      clearInterval(lockTimer);
+      lockTimer = 0;
+    }
+
+    function showStateCard(icon, title, desc, withRetry, kind, extraHtml) {
+      clearLockTimer();
       clearTimeout(resultTimer);
       setRunId("");
       skeleton.hidden = true;
@@ -888,7 +896,8 @@
         '<div class="empty-state-art" aria-hidden="true">' + icon + "</div>" +
         '<p class="empty-state-text">' + escapeHtml(title) + "</p>" +
         (desc ? '<p class="empty-state-text">' + escapeHtml(desc) + "</p>" : "") +
-        (withRetry ? '<button type="button" class="empty-state-action btn btn-primary" onclick="document.getElementById(\'queryForm\').requestSubmit()">重试</button>' : "") +
+        (extraHtml || "") +
+        (withRetry ? '<button type="button" class="empty-state-action btn btn-primary js-retry-query">重试</button>' : "") +
         "</div>";
       resultCard.classList.remove("fade-in");
       resultCard.classList.add("fade-in");
@@ -901,6 +910,58 @@
 
     function showEmptyState() {
       showStateCard(INBOX_SVG, "没有找到相关记录", "请尝试更换学期或查询项目", false);
+    }
+
+    function formatLockCountdown(remainingMs) {
+      const totalSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const two = function (value) { return value < 10 ? "0" + value : String(value); };
+      if (days > 0) return days + " 天 " + two(hours) + ":" + two(minutes) + ":" + two(seconds);
+      return two(hours) + ":" + two(minutes) + ":" + two(seconds);
+    }
+
+    function showLockCard(lockUntil) {
+      const displayTime = escapeHtml(String(lockUntil || ""));
+      const desc = "学校端限制解除前不要重试，避免继续延长锁定。";
+      showStateCard(
+        ALERT_SVG,
+        "学校账号临时锁定",
+        desc,
+        true,
+        "error",
+        '<p class="empty-state-meta" aria-live="polite"><span data-lock-countdown>预计解除时间：' + displayTime + "</span></p>"
+      );
+      const countdown = resultHtml.querySelector("[data-lock-countdown]");
+      const retry = resultHtml.querySelector(".js-retry-query");
+      if (!countdown || !retry) return;
+      const target = new Date(String(lockUntil || "").replace(" ", "T"));
+      if (Number.isNaN(target.getTime())) {
+        countdown.textContent = "预计解除时间：" + displayTime;
+        retry.textContent = "重试查询";
+        retry.disabled = false;
+        return;
+      }
+      const renderCountdown = function () {
+        const remaining = target.getTime() - Date.now();
+        if (remaining > 0) {
+          countdown.textContent = "预计解除时间：" + displayTime +
+            " · 剩余 " + formatLockCountdown(remaining);
+          retry.textContent = "解除后可重试";
+          retry.disabled = true;
+          return;
+        }
+        countdown.textContent = "预计解除时间：" + displayTime + " · 已到，可重试";
+        retry.textContent = "重试查询";
+        retry.disabled = false;
+        clearLockTimer();
+      };
+      renderCountdown();
+      if (target.getTime() > Date.now()) {
+        lockTimer = window.setInterval(renderCountdown, 1000);
+      }
     }
 
     function looksEmptyMarkdown(text) {
@@ -1416,6 +1477,7 @@
     let resultTimer = 0;
     let runIdCopyTimer = 0;
     function showResult(statusCode, body) {
+      clearLockTimer();
       clearTimeout(resultTimer);
       setRunId(body && typeof body === "object" ? body.run_id : "");
       skeleton.hidden = true;
@@ -1539,6 +1601,7 @@
       setButtonLoading(true);
       hideOfflineBar();
       hidePdfAction();
+      clearLockTimer();
       clearTimeout(resultTimer);
       skeleton.hidden = false;
       skeleton.setAttribute("aria-hidden", "false");
@@ -1661,7 +1724,9 @@
           if (businessFail) {
             markJobProgressFailed(payload);
             hidePdfAction();
-            if (markdown !== null) {
+            if (meta && meta.lock_until) {
+              showLockCard(meta.lock_until);
+            } else if (markdown !== null) {
               // 展示后端确定性分类的友好报告（无密码/session/token）
               showResult(resp.status, data);
             } else {
@@ -1799,6 +1864,16 @@
       span.style.top = event.clientY - rect.top - size / 2 + "px";
       btn.appendChild(span);
       setTimeout(function () { span.remove(); }, 600);
+    });
+
+    document.addEventListener("click", function (event) {
+      const retry = event.target.closest ? event.target.closest(".js-retry-query") : null;
+      if (!retry || retry.disabled) return;
+      event.preventDefault();
+      const form = document.getElementById("queryForm");
+      if (!form) return;
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
     });
 
     pruneExpiredHistory();

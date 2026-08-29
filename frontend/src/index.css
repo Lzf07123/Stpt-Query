@@ -2422,9 +2422,25 @@ html { scroll-behavior: smooth; }
 }
 .empty-state-text:nth-of-type(1) { animation-delay: 90ms; }
 .empty-state-text:nth-of-type(2) { animation-delay: 170ms; }
+.empty-state-meta {
+  max-width: 360px;
+  margin: -2px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--eduquery-border);
+  border-radius: 14px;
+  background: var(--eduquery-surface-2);
+  color: var(--eduquery-muted);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+  animation: empty-text-in 360ms var(--eduquery-ease-out) 210ms both;
+}
 .empty-state-action {
   font-weight: 600;
   animation: empty-text-in 360ms var(--eduquery-ease-out) 250ms both;
+}
+.empty-state-action:disabled {
+  cursor: not-allowed;
 }
 
 /* 错误空状态：危险色图标 + 抖动/扩散环/呼吸光环 + 一次柔和红光扫过 */
