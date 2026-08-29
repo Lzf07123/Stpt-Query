@@ -680,6 +680,9 @@
       statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
     }
 
+    let progressStepStates = [];
+    let currentJobPhase = null;
+
     function progressStepsFor(payload) {
       const steps = [
         { phase: "login", label: "登录验证" },
@@ -708,25 +711,46 @@
       }));
       const failed = jobState === "failed";
       const done = jobState === "success" || normalizedPhase === "done";
-      progressSteps.innerHTML = steps.map(function (step, index) {
-        const state = index < currentIndex || done ? "completed"
-          : index === currentIndex ? (failed ? "failed" : "active") : "pending";
-        const ariaCurrent = state === "active" ? "step" : "false";
-        const dot = state === "active"
-          ? '<span class="query-step-dot"><span class="spinner"></span></span>'
-          : '<span class="query-step-dot"></span>';
-        return [
-          '<div class="query-step ', state, '" aria-current="', ariaCurrent, '">',
-          dot,
-          '<span class="query-step-label"></span>',
-          '</div>'
-        ].join("");
-      }).join("");
-      progressSteps.querySelectorAll(".query-step-label").forEach(function (node, index) {
-        node.textContent = steps[index].label;
+      const wasHidden = progressTrack.classList.contains("hidden");
+      const states = steps.map(function (step, index) {
+        if (index < currentIndex || done) return "completed";
+        return index === currentIndex ? (failed ? "failed" : "active") : "pending";
       });
+      const entering = states.map(function (state, index) {
+        return wasHidden || !progressStepStates[index] || progressStepStates[index] !== state;
+      });
+      const labelsChanged = steps.some(function (step, index) {
+        const node = progressSteps.children[index];
+        const label = node && node.querySelector(".query-step-label");
+        return !label || label.textContent !== step.label;
+      });
+      const needRebuild = wasHidden || states.length !== progressStepStates.length ||
+        entering.some(Boolean) || labelsChanged;
+      if (needRebuild) {
+        progressSteps.innerHTML = steps.map(function (step, index) {
+          const state = states[index];
+          const enterClass = entering[index] ? " query-step-enter" : "";
+          const ariaCurrent = state === "active" ? "step" : "false";
+          const dot = state === "active"
+            ? '<span class="query-step-dot"><span class="spinner"></span></span>'
+            : '<span class="query-step-dot"></span>';
+          return [
+            '<div class="query-step ', state, enterClass, '" aria-current="', ariaCurrent, '"',
+            ' style="--step-index:', wasHidden ? index : 0, '">',
+            dot,
+            '<span class="query-step-label"></span>',
+            '</div>'
+          ].join("");
+        }).join("");
+        progressSteps.querySelectorAll(".query-step-label").forEach(function (node, index) {
+          node.textContent = steps[index].label;
+        });
+      }
       progressTrack.classList.remove("hidden");
       progressTrack.classList.toggle("query-progress-failed", failed);
+      progressTrack.classList.toggle("query-progress-done", done && !failed);
+      currentJobPhase = normalizedPhase;
+      progressStepStates = states;
       const longestLabel = Math.max.apply(null, steps.map(function (step) {
         return step.label.length;
       }));
@@ -742,8 +766,15 @@
 
     function hideJobProgress() {
       progressTrack.classList.add("hidden");
-      progressTrack.classList.remove("query-progress-failed");
+      progressTrack.classList.remove("query-progress-failed", "query-progress-done");
       progressSteps.innerHTML = "";
+      progressStepStates = [];
+      currentJobPhase = null;
+    }
+
+    function markJobProgressFailed(payload) {
+      if (progressTrack.classList.contains("hidden")) return;
+      renderJobProgress(currentJobPhase || "querying", payload, "failed", 0);
     }
 
     function setRunId(value) {
@@ -842,7 +873,7 @@
     const CLOUD_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>';
 
 
-    function showStateCard(icon, title, desc, withRetry) {
+    function showStateCard(icon, title, desc, withRetry, kind) {
       clearTimeout(resultTimer);
       setRunId("");
       skeleton.hidden = true;
@@ -851,8 +882,9 @@
       resultHtml.classList.remove("hidden");
       resultCard.classList.remove("hidden");
       layout.classList.add("has-result");
+      const variantClass = kind === "error" ? " empty-state--error" : "";
       resultHtml.innerHTML =
-        '<div class="empty-state">' +
+        '<div class="empty-state' + variantClass + '">' +
         '<div class="empty-state-art" aria-hidden="true">' + icon + "</div>" +
         '<p class="empty-state-text">' + escapeHtml(title) + "</p>" +
         (desc ? '<p class="empty-state-text">' + escapeHtml(desc) + "</p>" : "") +
@@ -863,7 +895,7 @@
     }
 
     function showErrorCard(message) {
-      showStateCard(ALERT_SVG, "数据加载失败", message, true);
+      showStateCard(ALERT_SVG, "数据加载失败", message, true, "error");
       showStatus("查询失败", false);
     }
 
@@ -1550,6 +1582,7 @@
             let pollData;
             try { pollData = JSON.parse(pollText); } catch (err) { pollData = pollText; }
             if (pollResp.status === 404) {
+              markJobProgressFailed(payload);
               showErrorCard("任务不存在或已过期，请重新查询");
               showToast("error", "查询任务已过期");
               showStatus("查询失败", false);
@@ -1598,6 +1631,7 @@
 
         let businessFail = false;
         if (!resp.ok) {
+          markJobProgressFailed(payload);
           let message = "HTTP " + resp.status;
           if (data && data.detail) {
             if (typeof data.detail === "string") message = data.detail;
@@ -1625,6 +1659,7 @@
             (meta && meta.kind === "no_data") ||
             (markdown !== null && (/尚未发布|暂无|没有找到|未查询到|无课/.test(markdown) || looksEmptyMarkdown(markdown)));
           if (businessFail) {
+            markJobProgressFailed(payload);
             hidePdfAction();
             if (markdown !== null) {
               // 展示后端确定性分类的友好报告（无密码/session/token）
@@ -1675,6 +1710,7 @@
         );
       } catch (err) {
         if (err && err.name === "AbortError") return;
+        markJobProgressFailed(payload);
         const cached = pruneExpiredHistory().find(function (r) {
           return r.username === payload.username &&
             r.option === payload.option &&
