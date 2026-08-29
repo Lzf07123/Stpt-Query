@@ -891,16 +891,31 @@
       resultCard.classList.remove("hidden");
       layout.classList.add("has-result");
       const variantClass = kind === "error" ? " empty-state--error" : "";
+      const description = desc ? renderStateDescription(desc) : "";
       resultHtml.innerHTML =
         '<div class="empty-state' + variantClass + '">' +
         '<div class="empty-state-art" aria-hidden="true">' + icon + "</div>" +
         '<p class="empty-state-text">' + escapeHtml(title) + "</p>" +
-        (desc ? '<p class="empty-state-text">' + escapeHtml(desc) + "</p>" : "") +
+        description +
         (extraHtml || "") +
         (withRetry ? '<button type="button" class="empty-state-action btn btn-primary js-retry-query">重试</button>' : "") +
         "</div>";
       resultCard.classList.remove("fade-in");
       resultCard.classList.add("fade-in");
+    }
+
+    function containsMarkdownSyntax(text) {
+      return /(^|\n)[ \t]*(?:[-*][ \t]|\d+\.[ \t]|#{1,6}[ \t]|>[ \t])/.test(text) ||
+        /\*\*[^*\n]+\*\*/.test(text) ||
+        /\[[^\]\n]+\]\([^)\n]+\)/.test(text) ||
+        /`[^`\n]+`/.test(text);
+    }
+
+    function renderStateDescription(text) {
+      if (!containsMarkdownSyntax(text)) {
+        return '<p class="empty-state-text">' + escapeHtml(text) + "</p>";
+      }
+      return '<div class="empty-state-detail">' + renderMarkdown(text) + "</div>";
     }
 
     function showErrorCard(message) {
@@ -1227,6 +1242,33 @@
       const html = [];
       let i = 0;
 
+      function renderList(startIndex, listType) {
+        const topLevelRe = listType === "ol" ? /^\d+\.\s+/ : /^[-*]\s+/;
+        const nestedRe = /^[ \t]+(?:[-*]|\d+\.)\s+/;
+        let cursor = startIndex;
+        const items = [];
+
+        while (cursor < lines.length && topLevelRe.test(lines[cursor].trim())) {
+          let content = lines[cursor].trim().replace(topLevelRe, "");
+          cursor++;
+          const children = [];
+          while (cursor < lines.length && nestedRe.test(lines[cursor])) {
+            children.push(lines[cursor].trim().replace(/^(?:[-*]|\d+\.)\s+/, ""));
+            cursor++;
+          }
+          items.push("<li>" + renderInline(content) +
+            (children.length
+              ? "<ul>" + children.map(function (item) { return "<li>" + renderInline(item) + "</li>"; }).join("") + "</ul>"
+              : "") +
+            "</li>");
+        }
+
+        return {
+          html: "<" + listType + ">" + items.join("") + "</" + listType + ">",
+          next: cursor
+        };
+      }
+
       while (i < lines.length) {
         const line = lines[i];
         const trimmed = line.trim();
@@ -1332,31 +1374,10 @@
           continue;
         }
 
-        const ulMatch = trimmed.match(/^[-*]\s+(.*)$/);
-        if (ulMatch) {
-          const items = [ulMatch[1]];
-          i++;
-          while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-            items.push(lines[i].trim().replace(/^[-*]\s+/, ""));
-            i++;
-          }
-          html.push("<ul>" + items.map(function (item) {
-            return "<li>" + renderInline(item) + "</li>";
-          }).join("") + "</ul>");
-          continue;
-        }
-
-        const olMatch = trimmed.match(/^\d+\.\s+(.*)$/);
-        if (olMatch) {
-          const items = [olMatch[1]];
-          i++;
-          while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-            items.push(lines[i].trim().replace(/^\d+\.\s+/, ""));
-            i++;
-          }
-          html.push("<ol>" + items.map(function (item) {
-            return "<li>" + renderInline(item) + "</li>";
-          }).join("") + "</ol>");
+        if (/^[-*]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+          const list = renderList(i, /^\d+\.\s+/.test(trimmed) ? "ol" : "ul");
+          html.push(list.html);
+          i = list.next;
           continue;
         }
 
