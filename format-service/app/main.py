@@ -610,6 +610,14 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             "response_summary": meta.get("response_summary", "—"),
         }
 
+    def _login_failure_result(exc: ServiceError, run_id: str = "") -> dict:
+        """登录失败时保留学校侧风控信号，避免异步入口丢失结构化分类。"""
+        result = classify_error("login", exc.status_code, exc.body,
+                                error_message=str(exc))
+        if run_id:
+            result["run_id"] = run_id
+        return result
+
     @app.post("/run/jobs", response_model=JobSubmissionResponse)
     async def submit_run_job(body: WorkflowRequest, request: Request,
                              _: None = Depends(_require_auth)) -> JobSubmissionResponse:
@@ -633,27 +641,27 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 login_body = await app.state.pipeline.service.post("/login", {
                     "username": body.username, "password": body.password})
         except ServiceError as exc:
+            failure = _login_failure_result(exc, login_run_id)
             await _record_query_log(_query_log_entry(
                 body, client_ip, started,
-                {"success": False, "kind": "login_error", "meta": {}},
-                login_run_id))
+                failure, failure.get("run_id", "")))
             if exc.status_code in (401, 403):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="学号或密码错误") from exc
+                    detail=failure) from exc
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="查询服务暂时不可用，请稍后再试") from exc
+                detail=failure) from exc
 
         session = extract_session(login_body).get("session", "")
         if not session:
             failure = classify_error("login", body=login_body)
+            failure["run_id"] = login_run_id
             await _record_query_log(_query_log_entry(
-                body, client_ip, started,
-                {"success": False, "kind": "login_error", "meta": {}}, login_run_id))
+                body, client_ip, started, failure, failure.get("run_id", "")))
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(failure.get("output") or "学号或密码错误"))
+                detail=failure)
 
         internal_request = SessionWorkflowRequest(**body.model_dump())
         try:
