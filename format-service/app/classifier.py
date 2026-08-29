@@ -98,6 +98,11 @@ _SENSITIVE_QUERY = re.compile(
 )
 _BEARER_VALUE = re.compile(r"(?i)(bearer\s+)[a-z0-9._~+/=-]{8,}")
 _MAX_RESPONSE_SUMMARY = 300
+_LOCK_TIME = re.compile(
+    r"(?:USERLOCK|账号(?:已被?)?锁定|密码错误次数过多)"
+    r"[\s\S]{0,200}?(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)",
+    re.IGNORECASE,
+)
 
 
 def _redact_value(value: Any) -> Any:
@@ -142,6 +147,14 @@ def summarize_response(body: Any) -> str:
     return "响应：%s" % (compact or "（无）")
 
 
+def _extract_lock_time(text: str) -> str:
+    """从学校端风控响应中提取可安全展示的绝对解除时间。"""
+    match = _LOCK_TIME.search(text)
+    if not match:
+        return ""
+    return match.group(1).replace("T", " ")
+
+
 def classify_error(
     kind: str,
     status_code: Optional[int] = None,
@@ -169,11 +182,18 @@ def classify_error(
         user_actions = ["稍后重试"]
         admin_actions = ["记录现场信息（状态码、响应体、时间）并通知管理员"]
 
+    lock_until = _extract_lock_time(text) if category == "学校风控或账号临时锁定" else ""
+    if lock_until and user_actions:
+        user_actions = [
+            "学校端预计解除时间为 %s；在此之前不要重试，避免延长限制" % lock_until,
+            *user_actions[1:],
+        ]
+
     evidence = _evidence(text, status_code)
     response_summary = _response_source(status_code, body, error_message, error_type)
     # 后台日志是管理界面；统一使用中文术语，避免敏感关键字原样进入存储与响应。
     response_summary = re.sub(r"(?i)token", "令牌", response_summary)
-    return {
+    result = {
         "success": False,
         "kind": "%s_error" % kind,
         "output": _format_report(kind, category, evidence, user_actions, admin_actions),
@@ -185,6 +205,9 @@ def classify_error(
             "response_summary": response_summary,
         },
     }
+    if lock_until:
+        result["meta"]["lock_until"] = lock_until
+    return result
 
 
 def classify_empty_result(kind: str, body: Any) -> bool:

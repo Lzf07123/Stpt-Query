@@ -21,8 +21,15 @@ def test_user_lock_reports_wait_guidance_and_unlock_time():
     )
     r = classify_error("login", 401, body)
     assert r["meta"]["category"] == "学校风控或账号临时锁定"
-    assert "等待解除时间" in r["output"]
-    assert "2026-08-29 11:44:20" in r["output"]
+    assert r["meta"]["lock_until"] == "2026-08-29 11:44:20"
+    assert "预计解除时间为 2026-08-29 11:44:20" in r["output"]
+    assert "在此之前不要重试" in r["output"]
+
+
+def test_school_lock_without_time_does_not_expose_empty_unlock_field():
+    r = classify_error("login", 401, '{"data":{"code":"USERLOCK"}}')
+    assert r["meta"]["category"] == "学校风控或账号临时锁定"
+    assert "lock_until" not in r["meta"]
 
 
 def test_token_required():
