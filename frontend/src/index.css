@@ -590,6 +590,7 @@
 
   /* 个人查询阶段进度：只展示粗粒度业务步骤，不暴露内部链路 */
   .query-progress {
+    position: relative;
     width: 100%;
     max-width: 100%;
     box-sizing: border-box;
@@ -603,6 +604,8 @@
       var(--eduquery-glass-bg);
     box-shadow: inset 0 1px 0 var(--eduquery-glass-highlight);
     overflow: hidden;
+    transition: border-color var(--eduquery-motion-base) var(--eduquery-ease-out),
+      box-shadow var(--eduquery-motion-base) var(--eduquery-ease-out);
   }
   .query-progress[hidden] { display: none; }
   .query-progress-track {
@@ -637,9 +640,18 @@
     height: 1px;
     background: var(--eduquery-border);
   }
-  .query-step.completed:not(:first-child)::before,
   .query-step.active:not(:first-child)::before {
     background: color-mix(in srgb, var(--eduquery-primary) 42%, transparent);
+  }
+  .query-step.completed:not(:first-child)::before {
+    background-image: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--eduquery-success) 16%, transparent),
+      color-mix(in srgb, var(--eduquery-success) 58%, transparent),
+      color-mix(in srgb, var(--eduquery-success) 16%, transparent)
+    );
+    background-size: 220% 100%;
+    animation: connector-flow 2.6s linear infinite;
   }
   .query-step.failed:not(:first-child)::before {
     background: color-mix(in srgb, var(--eduquery-destructive) 42%, transparent);
@@ -651,6 +663,7 @@
     text-overflow: ellipsis;
   }
   .query-step-dot {
+    position: relative;
     display: grid;
     place-items: center;
     width: 18px;
@@ -702,6 +715,88 @@
     content: "!";
     font-size: 11px;
     font-weight: 800;
+  }
+
+  /* 步骤入场：首次渲染按索引错峰，后续仅状态变化的步骤重播 */
+  .query-step-enter {
+    animation: step-enter 300ms var(--eduquery-ease-out) both;
+    animation-delay: calc(var(--step-index, 0) * 70ms);
+  }
+  .query-step-enter.completed .query-step-dot::before {
+    animation: step-check-pop 360ms var(--eduquery-ease-spring) both;
+  }
+
+  /* 当前步骤呼吸光环：transform/opacity 驱动，不触发重排 */
+  .query-step.active .query-step-dot::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border: 1px solid color-mix(in srgb, var(--eduquery-primary) 58%, transparent);
+    border-radius: 999px;
+    pointer-events: none;
+    animation: step-active-halo 1.9s var(--eduquery-ease-out) infinite;
+  }
+
+  /* 失败步骤：一次性抖动 + 扩散错误环 */
+  .query-step.failed .query-step-dot::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border: 1px solid color-mix(in srgb, var(--eduquery-destructive) 72%, transparent);
+    border-radius: 999px;
+    pointer-events: none;
+    opacity: 0;
+  }
+  .query-step-enter.failed .query-step-dot {
+    animation: step-fail-shake 460ms var(--eduquery-ease-out) both;
+  }
+  .query-step-enter.failed .query-step-dot::after {
+    animation: step-fail-ring 720ms var(--eduquery-ease-out) 140ms both;
+  }
+
+  /* 整条进度轨：失败红光扫过 / 完成绿光扫过，步骤层保持在上方 */
+  .query-progress::after {
+    content: "";
+    position: absolute;
+    inset: 0 12% 0 12%;
+    pointer-events: none;
+    opacity: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.42),
+      transparent
+    );
+  }
+  .query-progress-failed {
+    border-color: color-mix(in srgb, var(--eduquery-destructive) 42%, transparent);
+    box-shadow:
+      inset 0 1px 0 var(--eduquery-glass-highlight),
+      0 0 0 1px color-mix(in srgb, var(--eduquery-destructive) 8%, transparent);
+  }
+  .query-progress-failed::after {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--eduquery-destructive) 24%, transparent),
+      transparent
+    );
+    animation: query-error-sweep 1.5s var(--eduquery-ease-out) both;
+  }
+  .query-progress-done:not(.query-progress-failed) {
+    border-color: color-mix(in srgb, var(--eduquery-success) 40%, transparent);
+    box-shadow:
+      inset 0 1px 0 var(--eduquery-glass-highlight),
+      0 0 0 1px color-mix(in srgb, var(--eduquery-success) 7%, transparent);
+  }
+  .query-progress-done:not(.query-progress-failed)::after {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--eduquery-success) 22%, transparent),
+      transparent
+    );
+    animation: query-done-sweep 1.6s var(--eduquery-ease-out) both;
   }
 
   /* ========== Toast 弹窗通知（z-80 必须高于 Modal 遮罩 z-70） ========== */
@@ -1511,6 +1606,107 @@
       transform: scale(1);
     }
   }
+  @keyframes step-enter {
+    from {
+      opacity: 0;
+      transform: translateY(7px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes step-check-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.45);
+    }
+    62% {
+      opacity: 1;
+      transform: scale(1.18);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes step-active-halo {
+    0% {
+      opacity: 0.6;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.45);
+    }
+  }
+  @keyframes step-fail-shake {
+    0%, 100% {
+      transform: translateX(0);
+    }
+    20% {
+      transform: translateX(-3px);
+    }
+    40% {
+      transform: translateX(3px);
+    }
+    60% {
+      transform: translateX(-2px);
+    }
+    80% {
+      transform: translateX(2px);
+    }
+  }
+  @keyframes step-fail-ring {
+    0% {
+      opacity: 0.7;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.95);
+    }
+  }
+  @keyframes connector-flow {
+    from {
+      background-position: 0% 0;
+    }
+    to {
+      background-position: -220% 0;
+    }
+  }
+  @keyframes query-error-sweep {
+    0% {
+      opacity: 0;
+      transform: translateX(-130%) skewX(-18deg);
+    }
+    14% {
+      opacity: 1;
+    }
+    56% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+      transform: translateX(230%) skewX(-18deg);
+    }
+  }
+  @keyframes query-done-sweep {
+    0% {
+      opacity: 0;
+      transform: translateX(-130%) skewX(-18deg);
+    }
+    14% {
+      opacity: 0.9;
+    }
+    56% {
+      opacity: 0.9;
+    }
+    100% {
+      opacity: 0;
+      transform: translateX(230%) skewX(-18deg);
+    }
+  }
   @keyframes modal-backdrop-in {
     from {
       opacity: 0;
@@ -2187,6 +2383,8 @@ html { scroll-behavior: smooth; }
 
 /* ---------- 空状态（SVG 小图 + 引导文案） ---------- */
 .empty-state {
+  position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2201,8 +2399,10 @@ html { scroll-behavior: smooth; }
   backdrop-filter: blur(var(--eduquery-glass-blur)) saturate(var(--eduquery-glass-saturate));
   box-shadow: inset 0 1px 0 var(--eduquery-glass-highlight);
   text-align: center;
+  animation: empty-state-in 380ms var(--eduquery-ease-out) both;
 }
 .empty-state-art {
+  position: relative;
   display: grid;
   place-items: center;
   width: 84px;
@@ -2211,10 +2411,150 @@ html { scroll-behavior: smooth; }
   background: var(--eduquery-primary-soft);
   color: var(--eduquery-primary);
   box-shadow: inset 0 1px 0 var(--eduquery-glass-highlight);
+  animation: empty-art-pop 540ms var(--eduquery-ease-spring) both;
 }
 .empty-state-art svg { width: 42px; height: 42px; }
-.empty-state-text { max-width: 360px; margin: 0; color: var(--eduquery-muted); }
-.empty-state-action { font-weight: 600; }
+.empty-state-text {
+  max-width: 360px;
+  margin: 0;
+  color: var(--eduquery-muted);
+  animation: empty-text-in 360ms var(--eduquery-ease-out) both;
+}
+.empty-state-text:nth-of-type(1) { animation-delay: 90ms; }
+.empty-state-text:nth-of-type(2) { animation-delay: 170ms; }
+.empty-state-action {
+  font-weight: 600;
+  animation: empty-text-in 360ms var(--eduquery-ease-out) 250ms both;
+}
+
+/* 错误空状态：危险色图标 + 抖动/扩散环/呼吸光环 + 一次柔和红光扫过 */
+.empty-state--error {
+  border-color: color-mix(in srgb, var(--eduquery-destructive) 32%, transparent);
+}
+.empty-state--error .empty-state-art {
+  background: var(--eduquery-destructive-soft);
+  color: var(--eduquery-destructive);
+  animation:
+    empty-art-pop 540ms var(--eduquery-ease-spring) both,
+    empty-error-shake 560ms var(--eduquery-ease-out) 420ms both;
+}
+.empty-state--error .empty-state-art::before {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--eduquery-destructive) 15%, transparent),
+    transparent 72%
+  );
+  pointer-events: none;
+  animation: empty-error-halo 2.8s ease-in-out 900ms infinite;
+}
+.empty-state--error .empty-state-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--eduquery-destructive) 52%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: empty-error-ring 900ms var(--eduquery-ease-out) 200ms both;
+}
+.empty-state--error::before {
+  content: "";
+  position: absolute;
+  top: -28%;
+  bottom: -28%;
+  left: -22%;
+  width: 32%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--eduquery-destructive) 13%, transparent),
+    transparent
+  );
+  pointer-events: none;
+  transform: translateX(-140%) skewX(-14deg);
+  animation: empty-error-sweep 1.5s var(--eduquery-ease-out) 160ms both;
+}
+
+@keyframes empty-state-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes empty-art-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.62) translateY(6px);
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.07) translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes empty-text-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes empty-error-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
+}
+@keyframes empty-error-ring {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+@keyframes empty-error-halo {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.06);
+  }
+}
+@keyframes empty-error-sweep {
+  0% {
+    opacity: 0;
+    transform: translateX(-140%) skewX(-14deg);
+  }
+  14% {
+    opacity: 1;
+  }
+  58% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(460%) skewX(-14deg);
+  }
+}
 
 /* ---------- 响应式 / 打印 / 降级动效 ---------- */
 @media (max-width: 1024px) {
