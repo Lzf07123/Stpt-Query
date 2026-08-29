@@ -94,7 +94,7 @@ async def test_login_failure_returns_friendly_report():
     result = await Pipeline(service=BadLogin(), llm=FakeLLM()).run(_req())
     assert not result["success"]
     assert result["kind"] == "login_error"
-    assert "凭据被拒绝" in result["output"]
+    assert "账号或密码错误" in result["output"]
 
 
 async def test_schedule_branch():

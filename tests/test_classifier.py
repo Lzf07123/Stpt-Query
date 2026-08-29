@@ -4,14 +4,15 @@ from __future__ import annotations
 from app.classifier import classify_empty_result, classify_error
 
 
-def test_school_risk_codes_are_not_retried_as_normal_password_error():
+def test_pass_error_is_a_credential_failure_not_school_lock():
     pass_error_body = (
         '{"meta":{"success":true,"statusCode":200,"message":"ok"},'
         '"data":{"code":"PASSERROR","data":"5,4"}}'
     )
     r = classify_error("login", 401, pass_error_body)
-    assert r["meta"]["category"] == "学校风控或账号临时锁定"
-    assert "不要连续重试" in r["output"]
+    assert r["meta"]["category"] == "账号或密码错误"
+    assert "官网登录验证" in r["output"]
+    assert "lock_until" not in r["meta"]
 
 
 def test_user_lock_reports_wait_guidance_and_unlock_time():
@@ -40,7 +41,7 @@ def test_token_required():
 
 def test_credentials_rejected():
     r = classify_error("login", 200, '{"success": false, "error": "login verify failed"}')
-    assert r["meta"]["category"] == "凭据被拒绝"
+    assert r["meta"]["category"] == "账号或密码错误"
     assert "官网登录验证" in r["output"]
 
 
