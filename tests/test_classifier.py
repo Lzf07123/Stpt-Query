@@ -4,10 +4,32 @@ from __future__ import annotations
 from app.classifier import classify_empty_result, classify_error
 
 
-def test_pass_error_401_is_credentials_not_token():
-    body = '{"success": false, "error": "教务系统登录失败：CAS 登录票据获取失败: PASSERROR"}'
+def test_school_risk_codes_are_not_retried_as_normal_password_error():
+    pass_error_body = (
+        '{"meta":{"success":true,"statusCode":200,"message":"ok"},'
+        '"data":{"code":"PASSERROR","data":"5,4"}}'
+    )
+    r = classify_error("login", 401, pass_error_body)
+    assert r["meta"]["category"] == "学校风控或账号临时锁定"
+    assert "不要连续重试" in r["output"]
+
+
+def test_user_lock_reports_wait_guidance_and_unlock_time():
+    body = (
+        '{"meta":{"success":true,"statusCode":200,"message":"ok"},'
+        '"data":{"code":"USERLOCK","data":"2026-08-29 11:44:20"}}'
+    )
     r = classify_error("login", 401, body)
-    assert r["meta"]["category"] == "凭据被拒绝"
+    assert r["meta"]["category"] == "学校风控或账号临时锁定"
+    assert r["meta"]["lock_until"] == "2026-08-29 11:44:20"
+    assert "预计解除时间为 2026-08-29 11:44:20" in r["output"]
+    assert "在此之前不要重试" in r["output"]
+
+
+def test_school_lock_without_time_does_not_expose_empty_unlock_field():
+    r = classify_error("login", 401, '{"data":{"code":"USERLOCK"}}')
+    assert r["meta"]["category"] == "学校风控或账号临时锁定"
+    assert "lock_until" not in r["meta"]
 
 
 def test_token_required():

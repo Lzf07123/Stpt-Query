@@ -24,9 +24,25 @@ _RULES: Tuple[Tuple[str, str, List[str], List[str]], ...] = (
         ["核对服务路径/地址配置是否变更"],
     ),
     (
+        # 必须先于「凭据被拒绝」：PASSERROR/USERLOCK 属学校端风控信号，
+        # 引导用户停止重试，避免密码错误次数继续累积或延长账号锁定。
+        "学校风控或账号临时锁定",
+        r"USERLOCK|PASSERROR|账号已被锁定|账号被锁定|密码错误次数过多|触发风控|风控",
+        [
+            "不要连续重试，避免学校端继续延长限制；确认学号无误后，先在学校官网/教务系统登录验证",
+            "若学校端提示锁定，等待解除时间后再试；若官网也无法登录，按学校流程重置密码",
+            "若学校官网可正常登录，请稍后降低频率重试本站查询",
+        ],
+        [
+            "核对学校 CAS 响应中的风控/锁定信号、状态码与发生时间",
+            "检查公开查询站来源 IP 是否触发学校风控；必要时降频、限流或暂停查询",
+            "确认没有自动化重试继续使用同一账号触发锁定",
+        ],
+    ),
+    (
         # 必须先于「服务访问令牌错误」：学校端拒绝密码时上游也可能返回 401
         "凭据被拒绝",
-        r"login verify failed|登录验证失败|账号或密码错误|账号不存在|账号被锁定|PASSERROR|教务系统登录失败",
+        r"login verify failed|登录验证失败|账号或密码错误|账号不存在|教务系统登录失败",
         ["核对学号与密码、确认密码是否近期修改；先在官网登录验证，官网也失败则重置密码"],
         ["如官网可登录但服务失败，记录现场信息通知管理员"],
     ),
@@ -82,6 +98,11 @@ _SENSITIVE_QUERY = re.compile(
 )
 _BEARER_VALUE = re.compile(r"(?i)(bearer\s+)[a-z0-9._~+/=-]{8,}")
 _MAX_RESPONSE_SUMMARY = 300
+_LOCK_TIME = re.compile(
+    r"(?:USERLOCK|账号(?:已被?)?锁定|密码错误次数过多)"
+    r"[\s\S]{0,200}?(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)",
+    re.IGNORECASE,
+)
 
 
 def _redact_value(value: Any) -> Any:
@@ -126,6 +147,14 @@ def summarize_response(body: Any) -> str:
     return "响应：%s" % (compact or "（无）")
 
 
+def _extract_lock_time(text: str) -> str:
+    """从学校端风控响应中提取可安全展示的绝对解除时间。"""
+    match = _LOCK_TIME.search(text)
+    if not match:
+        return ""
+    return match.group(1).replace("T", " ")
+
+
 def classify_error(
     kind: str,
     status_code: Optional[int] = None,
@@ -153,11 +182,18 @@ def classify_error(
         user_actions = ["稍后重试"]
         admin_actions = ["记录现场信息（状态码、响应体、时间）并通知管理员"]
 
+    lock_until = _extract_lock_time(text) if category == "学校风控或账号临时锁定" else ""
+    if lock_until and user_actions:
+        user_actions = [
+            "学校端预计解除时间为 %s；在此之前不要重试，避免延长限制" % lock_until,
+            *user_actions[1:],
+        ]
+
     evidence = _evidence(text, status_code)
     response_summary = _response_source(status_code, body, error_message, error_type)
     # 后台日志是管理界面；统一使用中文术语，避免敏感关键字原样进入存储与响应。
     response_summary = re.sub(r"(?i)token", "令牌", response_summary)
-    return {
+    result = {
         "success": False,
         "kind": "%s_error" % kind,
         "output": _format_report(kind, category, evidence, user_actions, admin_actions),
@@ -169,6 +205,9 @@ def classify_error(
             "response_summary": response_summary,
         },
     }
+    if lock_until:
+        result["meta"]["lock_until"] = lock_until
+    return result
 
 
 def classify_empty_result(kind: str, body: Any) -> bool:
