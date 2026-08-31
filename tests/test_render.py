@@ -45,7 +45,7 @@ def test_preprocess_and_assemble():
 def test_format_schedule_puts_download_url_first():
     data = {"success": True, "output": "| 节次 | 周一 |", "download_url": "https://x/dl?t=1"}
     out = format_schedule(data, "")
-    assert out.startswith("[点击下载课表（Word 文件）](https://x/dl?t=1)")
+    assert out.startswith("[点击下载课表（PDF 文件）](https://x/dl?t=1)")
     assert "请勿外传" in out
 
 

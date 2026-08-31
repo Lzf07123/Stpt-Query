@@ -90,7 +90,7 @@ def test_query_log_file_uses_persistent_named_volume():
 
 def test_runtime_memory_guardrails_are_configured():
     compose = open("docker-compose.yml", encoding="utf-8").read()
-    assert "mem_limit: ${JWXT_MEM_LIMIT:-256m}" in compose
+    assert "mem_limit: ${JWXT_MEM_LIMIT:-512m}" in compose
     assert "mem_limit: ${FORMAT_MEM_LIMIT:-256m}" in compose
     assert "mem_limit: ${FRONTEND_MEM_LIMIT:-64m}" in compose
     assert compose.count("MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}") == 2

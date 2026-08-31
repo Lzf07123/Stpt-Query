@@ -49,6 +49,7 @@ from jwxt_state import (
     _probe_session, _warm_background, _jump_target, _fetch_tgt, mint_st,
     probe_school, deep_check, _health_probe_loop, health_payload, _metrics_text,
 )
+from rtf_pdf import PdfConversionError, rtf_to_pdf
 
 _REDIS_MODULE = None
 _REDIS_IMPORT_LOCK = threading.Lock()
@@ -251,7 +252,7 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
         self.wfile.write(data)
         self._finish("bytes=%d" % len(data))
 
-    def _reply_file(self, data, filename, ctype="application/msword"):
+    def _reply_file(self, data, filename, ctype="application/pdf"):
         self._status = 200
         self.send_response(200)
         self.send_header("Content-Type", ctype)
@@ -259,7 +260,7 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
         self.send_header("Cache-Control", "no-store")
         # 中文文件名用 RFC 5987 编码，避免非 ASCII 响应头导致下载端解析失败
         self.send_header("Content-Disposition",
-                         "attachment; filename=\"schedule.doc\"; filename*=UTF-8''%s" % quote(filename))
+                         "attachment; filename=\"schedule.pdf\"; filename*=UTF-8''%s" % quote(filename))
         for k, v in self._cors_headers():
             self.send_header(k, v)
         self.send_header("X-Trace-Id", getattr(self, "trace_id", "-"))
@@ -380,11 +381,12 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                     self._reply_login_error(e)
                     return
                 sem2, data = with_session_j(self.server.sessions, session, run)
+            pdf_data = rtf_to_pdf(data)
             with self.server.state.lock:
                 self.server.state.last_real = {"at": int(time.time()),
                                                "endpoint": "/get_schedule/export",
-                                               "ok": True, "count": len(data)}
-            self._reply_file(data, "学生课表_%s.doc" % sem2)
+                                               "ok": True, "count": len(pdf_data)}
+            self._reply_file(pdf_data, "学生课表_%s.pdf" % sem2)
             if code:
                 # 导出成功后再一次性消费，避免瞬时失败烧掉可重试的链接
                 self.server.export_codes.resolve(code, consume=True)
@@ -412,6 +414,12 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                 LOG.warning("课表导出上游失败 endpoint=/get_schedule/export error=%s", e)
                 self._reply(502, {"success": False,
                                   "error": "学校课表导出暂不可用，请稍后重试",
+                                  "output": "", "count": 0, "rows": []})
+                return
+            if isinstance(e, PdfConversionError):
+                LOG.warning("课表 PDF 转换失败 endpoint=/get_schedule/export error=%s", e)
+                self._reply(502, {"success": False,
+                                  "error": "课表 PDF 转换暂不可用，请稍后重试",
                                   "output": "", "count": 0, "rows": []})
                 return
             if isinstance(e, SchoolError):
@@ -1001,7 +1009,7 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                               "schedule": "POST /get_schedule 见 /get_schedule 说明",
                               "include_details": "可选布尔, 默认 true; 仅需展示可设 false 省略课程明细表（省 LLM 输出 token）",
                               "session": "可选: POST /login 获取的短随机 session ID（默认内存保存，重启失效；配置 JWXT_REDIS_URL 后由 Redis TTL 管理），携带 session 即可查询，无需重复传密码",
-                              "schedule_export": "GET /get_schedule/export?code=..&semester=..&weeks=.. 下载课表 Word 文件（code 为 /get_schedule 返回的短时下载码，不携带 session）",
+                              "schedule_export": "GET /get_schedule/export?code=..&semester=..&weeks=.. 下载课表 PDF 文件（code 为 /get_schedule 返回的短时下载码，不携带 session）",
                               "jump": "GET|POST /jump?session=..&page=..&redirect=..&json=..&verify=..&warm=.. 复用登录会话免认证直达教务系统：默认直接返回 login_url（纯文本）；json=1 返回结构化 JSON（url/login_url/app_url/warm_url/note）；redirect=1 直接 302 到 login_url（warm=1 时 302 到 warm_url），verify=1 附带目标页可达性检查；GET /jump/go?code=..&app=..&plain=..&json=.. 为浏览器点击中转（无需 Bearer，只接受 /jump 签发的短时跳转码）：默认返回桥接页，加载即自动打开不可见弹窗静默完成「预热+门户登录 → 主窗口进教务系统」，弹窗被拦时回退按钮，plain=1 直接 302 门户回调，app=1 直接 302 教务 SSO，json=1 返回 {login_url, app_url, warm_url} 两张实时票据",
                               "trace": "每次响应头 X-Trace-Id 携带本次请求追溯 ID；服务端日志按该 ID 检索完整调用链",
                               "health_isolation": "单端口：/health 请求绕过业务线程池，业务线程被慢上游占满时健康探针仍即时响应",
@@ -1875,7 +1883,7 @@ OPENAPI_DOCS = {
                 _ExportBody,
                 example={"session": "<SESSION>", "semester": "2025-2026-2",
                          "weeks": "1-8,10,13-18", "odd_or_double": 1},
-                description="下载课表 Word 文件（attachment）。",
+                description="下载课表 PDF 文件（attachment）。",
             ),
         },
     },

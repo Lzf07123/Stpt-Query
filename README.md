@@ -207,6 +207,7 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 ```bash
 # .env 中配置（示例）
 IMAGE_REGISTRY=docker.m.daocloud.io          # 基础镜像加速站
+APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian  # Debian apt 镜像
 PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple  # PyPI 镜像
 ```
 
