@@ -7,6 +7,15 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# 国内环境可设 APT_MIRROR 加速 LibreOffice 与 CJK 字体下载
+ARG APT_MIRROR=http://deb.debian.org/debian
+RUN if [ "${APT_MIRROR}" != "http://deb.debian.org/debian" ]; then \
+        sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libreoffice-writer fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 # 国内环境可设 PIP_INDEX_URL 指向 PyPI 镜像加速构建期下载
 ARG PIP_INDEX_URL=https://pypi.org/simple
@@ -17,7 +26,7 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser \
     && touch /var/log/jwxt/jwxt-service.log \
     && chown -R appuser:appuser /app /var/log/jwxt
 
-COPY --chown=appuser:appuser main.py jwxt_core.py jwxt_state.py jwxt_http.py jwxt_redis.py .
+COPY --chown=appuser:appuser main.py jwxt_core.py jwxt_state.py jwxt_http.py jwxt_redis.py rtf_pdf.py .
 
 ENV JWXT_HOST=0.0.0.0 \
     JWXT_PORT=8766

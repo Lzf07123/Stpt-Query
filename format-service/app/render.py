@@ -290,7 +290,7 @@ def format_schedule(http_response: Any, jump_body: Any) -> str:
 
     lines: List[str] = []
     if download_url:
-        lines.append("[点击下载课表（Word 文件）](%s)" % download_url)
+        lines.append("[点击下载课表（PDF 文件）](%s)" % download_url)
     note = _login_note(jump_body)
     if note:
         lines.append(note)

@@ -101,7 +101,7 @@ async def test_schedule_branch():
     svc = FakeService()
     result = await Pipeline(service=svc, llm=FakeLLM()).run(_req(option="课表"))
     assert result["success"] and result["kind"] == "schedule"
-    assert result["output"].startswith("[点击下载课表（Word 文件）]")
+    assert result["output"].startswith("[点击下载课表（PDF 文件）]")
     assert "download_url" in result["meta"]["response_summary"]
 
 

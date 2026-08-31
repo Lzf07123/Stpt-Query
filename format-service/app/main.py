@@ -103,7 +103,7 @@ def _validate_production(environment: str, auto_rotate_token: bool,
                 "生产环境必须配置独立的强 ADMIN_TOKEN（禁止默认值 change-admin-me，建议至少 16 字符）")
 
 
-# 对外跳转/下载透传白名单：免密登录桥接页与课表 Word 下载必须经公网入口可达
+# 对外跳转/下载透传白名单：免密登录桥接页与课表 PDF 下载必须经公网入口可达
 PASSTHROUGH_ALLOWED = ("/jump/go", "/get_schedule/export")
 # 内存限流桶的硬上限：超出后按 LRU 淘汰最久未使用的来源 key，防止高基数来源撑爆内存
 MAX_RATE_KEYS = 4096
@@ -1139,7 +1139,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     @app.get("/get_schedule/export", include_in_schema=False)
     async def schedule_export_passthrough(request: Request) -> Response:
-        """课表 Word 下载：/get_schedule/export?code=.. 原样透传。"""
+        """课表 PDF 下载：/get_schedule/export?code=.. 原样透传。"""
         return await _passthrough(request, "/get_schedule/export")
 
     @app.get("/service-status")

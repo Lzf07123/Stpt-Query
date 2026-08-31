@@ -6,6 +6,7 @@ services:
       context: ./get-infomation-service
       args:
         BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
+        APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org/debian}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}jwxt-service:latest
     restart: unless-stopped
@@ -14,10 +15,10 @@ services:
     cap_drop:
       - ALL
     read_only: true
-    mem_limit: ${JWXT_MEM_LIMIT:-256m}
-    pids_limit: 64
+    mem_limit: ${JWXT_MEM_LIMIT:-512m}
+    pids_limit: 128
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      - /tmp:size=128m,mode=1777
       - /var/log/jwxt:size=16m,uid=10001,gid=10001
     networks:
       - internal
@@ -48,6 +49,9 @@ services:
       - JWXT_GRADES_CACHE_MAX_ITEMS=${JWXT_GRADES_CACHE_MAX_ITEMS:-1000}
       - JWXT_SCHEDULE_CACHE_MAX_ITEMS=${JWXT_SCHEDULE_CACHE_MAX_ITEMS:-1000}
       - JWXT_JUMP_CACHE_MAX_ITEMS=${JWXT_JUMP_CACHE_MAX_ITEMS:-1000}
+      - JWXT_PDF_TIMEOUT=${JWXT_PDF_TIMEOUT:-30}
+      - JWXT_PDF_CONCURRENCY=${JWXT_PDF_CONCURRENCY:-1}
+      - JWXT_PDF_MAX_INPUT_MB=${JWXT_PDF_MAX_INPUT_MB:-5}
       - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
       - JWXT_TRUST_PROXY=0
       - JWXT_LOG_FILE=
