@@ -178,6 +178,21 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 - Compose 默认启用内存/PID 护栏：Python 服务 `256m / 64 PIDs`，Nginx `64m / 32 PIDs`，
   并设置 `MALLOC_ARENA_MAX=2`；内存模式查询代理默认最多 1000 个会话与每类 1000 条缓存。
 
+### 课表导出提速
+
+课表查询成功后，查询代理会用原请求参数在后台预热同一份 PDF（默认开启，可用
+`JWXT_SCHEDULE_PDF_PREWARM=0` 关闭）。用户点击下载时优先命中内存或 Redis 短 TTL
+缓存；未命中时同账号、学期、周次和单双周参数会合并为一次学校导出与 LibreOffice 转换。
+
+- PDF 缓存只保存成功结果，键包含 owner、学期、规范化周次和单双周，不包含 session、密码
+  或一次性下载码；默认 TTL 为 `JWXT_SCHEDULE_PDF_CACHE_TTL`（300 秒）。
+- 内存模式默认最多缓存 `JWXT_SCHEDULE_PDF_CACHE_MAX_ITEMS`（8 份），避免大文件挤占内存；
+  Redis 模式沿用 Redis TTL，并由 Redis 内存策略统一约束。
+- 一次性下载码语义不变：先校验、成功响应后才消费；瞬时转换或上游失败不会烧掉下载码。
+- LibreOffice 使用按 `JWXT_PDF_CONCURRENCY` 容量隔离并复用的 profile 池，成功归还、失败或
+  超时销毁重建。导出完成日志与 `/get_schedule/export` 最近状态记录学校导出、转换等待、
+  转换执行、缓存命中和输出字节数，不记录学号或会话值。
+
 ## 可靠性与过载保护
 
 - `format-service` 对 `/run` 设置全局并发槽位（默认 4）和等待超时；满载返回 HTTP 503。

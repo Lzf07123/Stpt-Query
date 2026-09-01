@@ -11,7 +11,7 @@ import os
 import secrets
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import List, Optional, Union
 from urllib.parse import quote, unquote, urlencode, urlparse
 
@@ -38,7 +38,8 @@ from jwxt_core import (
     _cache_write_allowed, _clone_j, _cors_allow, _deep_executor, _env, _internal_error_body,
     _is_auth_failure, _is_transient_error, _mask_body, _md_cell, _norm_num,
     _norm_semesters_key, _odd_or_double_error, _parse_weeks, _pwd_hash,
-    _run_upstream, _sanitize_url, _schedule_cache_key, _schedule_export_suffix,
+    _run_upstream, _sanitize_url, _schedule_cache_key,
+    _schedule_export_suffix, _schedule_pdf_cache_key,
     _take, _to_bool, _to_int, _trace_local, _trusted_proxy_ok, _weeks_param_error,
     dump_cookies, dump_session_cookies, dump_portal, load_cookies,
     _DaemonPool, _upstream_executor, setup_logging, set_trace_id, trace_id,
@@ -50,7 +51,9 @@ from jwxt_state import (
     _probe_session, _warm_background, _jump_target, _fetch_tgt, mint_st,
     probe_school, deep_check, _health_probe_loop, health_payload, _metrics_text,
 )
-from rtf_pdf import PdfConversionError, rtf_to_pdf
+from rtf_pdf import PDF_TIMEOUT, PdfConversionError, rtf_to_pdf_detailed
+
+SCHEDULE_PDF_LOCK_TIMEOUT = max(5, PDF_TIMEOUT + 45)
 
 _REDIS_MODULE = None
 _REDIS_IMPORT_LOCK = threading.Lock()
@@ -352,14 +355,10 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                 return
             session = sid
 
-        def run(j):
-            sem2 = (semester or "").strip() or j.current()
-            r = j.export_schedule(sem2, weeks, odd)
-            return sem2, r.content
-
         try:
             if session:
-                sem2, data = with_session_j(self.server.sessions, session, run)
+                pdf_data, sem2, metrics = self._schedule_pdf_cached(
+                    session, semester, weeks, odd)
             else:
                 if not u or not pw:
                     self._reply(400, {"success": False,
@@ -381,16 +380,30 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                 except Exception as e:
                     self._reply_login_error(e)
                     return
-                sem2, data = with_session_j(self.server.sessions, session, run)
-            pdf_data = rtf_to_pdf(data)
+                pdf_data, sem2, metrics = self._schedule_pdf_cached(
+                    session, semester, weeks, odd)
+            metrics["output_bytes"] = len(pdf_data)
             with self.server.state.lock:
                 self.server.state.last_real = {"at": int(time.time()),
                                                "endpoint": "/get_schedule/export",
-                                               "ok": True, "count": len(pdf_data)}
+                                               "ok": True, "count": len(pdf_data),
+                                               **metrics}
+            LOG.info(
+                "课表导出完成 school_export_ms=%s pdf_wait_ms=%s "
+                "pdf_convert_ms=%s pdf_cache_hit=%s output_bytes=%s",
+                metrics.get("school_export_ms", 0), metrics.get("pdf_wait_ms", 0),
+                metrics.get("pdf_convert_ms", 0), metrics.get("pdf_cache_hit", False),
+                metrics.get("output_bytes", 0))
             self._reply_file(pdf_data, "学生课表_%s.pdf" % sem2)
             if code:
                 # 导出成功后再一次性消费，避免瞬时失败烧掉可重试的链接
                 self.server.export_codes.resolve(code, consume=True)
+        except LockTimeoutError:
+            LOG.warning("课表 PDF 导出锁等待超时 endpoint=/get_schedule/export")
+            self._reply(503, {"success": False,
+                              "error": "课表导出处理繁忙，请稍后重试",
+                              "output": "", "count": 0, "rows": []})
+            return
         except Exception as e:
             if isinstance(e, TokenError):
                 LOG.warning("课表导出令牌无效: %s", e)
@@ -432,6 +445,77 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                 return
             LOG.exception("课表导出失败 endpoint=/get_schedule/export")
             self._reply(500, _internal_error_body())
+
+    def _schedule_pdf_cached(self, session, semester, weeks, odd):
+        """取一份课表 PDF：命中缓存直接返回，未命中用按参数锁合并导出。"""
+        rec = self.server.sessions.get(session)
+        if rec is None:
+            raise TokenError("session 已失效，请重新登录")
+        owner = (rec.get("username") or "").strip()
+        if not owner:
+            raise TokenError("session 缺少课表所有者，请重新登录")
+
+        cache = getattr(self.server, "schedule_pdf_cache", None)
+        ck = _schedule_pdf_cache_key(owner, semester, weeks, odd) if cache else None
+        if cache and ck:
+            hit = cache.get(ck)
+            payload = cache.get_payload(ck)
+            if hit is not None and payload is not None:
+                self.server.sessions.touch(session)
+                metrics = {
+                    "school_export_ms": 0,
+                    "lock_wait_ms": 0,
+                    "pdf_wait_ms": 0,
+                    "pdf_convert_ms": 0,
+                    "pdf_cache_hit": True,
+                }
+                return payload, hit.get("semester") or semester, metrics
+
+        lock_key = hashlib.sha256(str(ck or "").encode("utf-8")).hexdigest() if ck else None
+        lock_cm = (self.server.schedule_pdf_locks.lock(
+            lock_key, timeout=SCHEDULE_PDF_LOCK_TIMEOUT)
+            if lock_key else nullcontext())
+        metrics = {
+            "school_export_ms": 0,
+            "lock_wait_ms": 0,
+            "pdf_wait_ms": 0,
+            "pdf_convert_ms": 0,
+            "pdf_cache_hit": False,
+        }
+        lock_started = time.perf_counter()
+        with lock_cm:
+            metrics["lock_wait_ms"] = max(
+                0, int((time.perf_counter() - lock_started) * 1000))
+            if cache and ck:
+                hit = cache.get(ck)
+                payload = cache.get_payload(ck)
+                if hit is not None and payload is not None:
+                    self.server.sessions.touch(session)
+                    metrics["pdf_cache_hit"] = True
+                    return payload, hit.get("semester") or semester, metrics
+
+            def run(j):
+                sem2 = (semester or "").strip() or j.current()
+                r = j.export_schedule(sem2, weeks, odd)
+                return sem2, r.content
+
+            export_started = time.perf_counter()
+            sem2, data = with_session_j(self.server.sessions, session, run)
+            metrics["school_export_ms"] = max(
+                0, int((time.perf_counter() - export_started) * 1000))
+            pdf_data, pdf_metrics = rtf_to_pdf_detailed(data)
+            metrics["pdf_wait_ms"] = pdf_metrics.get("pdf_wait_ms", 0)
+            metrics["pdf_convert_ms"] = pdf_metrics.get("pdf_convert_ms", 0)
+            if cache and ck:
+                cache.set(ck, {"semester": sem2}, payload=pdf_data)
+            return pdf_data, sem2, metrics
+
+    def _prewarm_schedule_pdf(self, session, semester, weeks, odd):
+        """查询成功后在后台生成 PDF 缓存；失败只记录，不影响查询响应。"""
+        try:
+            self._schedule_pdf_cached(session, semester, weeks, odd)
+        except Exception as e:
+            LOG.warning("课表 PDF 预热未成功 endpoint=/get_schedule error=%s", e)
 
     def _jump_run(self, j, page, verify):
         url = _jump_target(j.stu, page, getattr(j, "stu_frag", None))
@@ -1217,6 +1301,13 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                             suffix = _schedule_export_suffix(b, code, resp.get("semester", ""))
                             base = public_url(self.headers)
                             resp["download_url"] = base + suffix if base else suffix
+                            if getattr(self.server, "schedule_pdf_prewarm", False):
+                                try:
+                                    _background_executor().submit(
+                                        self._prewarm_schedule_pdf, hit_sid,
+                                        resp.get("semester", ""), weeks_raw, odd_raw)
+                                except PoolFullError:
+                                    LOG.warning("后台任务队列已满，跳过课表 PDF 预热")
                             self._reply(200, resp)
                             return
                         self._reply(200, hit, body=cache.get_payload(ck))
@@ -1392,6 +1483,13 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                 suffix = _schedule_export_suffix(b, code, r.get("semester", ""))
                 base = public_url(self.headers)
                 r["download_url"] = base + suffix if base else suffix
+                if getattr(self.server, "schedule_pdf_prewarm", False):
+                    try:
+                        _background_executor().submit(
+                            self._prewarm_schedule_pdf, session,
+                            r.get("semester", ""), weeks_raw, odd_raw)
+                    except PoolFullError:
+                        LOG.warning("后台任务队列已满，跳过课表 PDF 预热")
             if p == "/get_schedule" and ck is not None:
                 if _cache_write_allowed(False, r):
                     if r.get("success"):
@@ -1462,6 +1560,13 @@ class Runtime:
             self.schedule_cache = _redis_mod.ResilientRedisTTLCache(
                 self._redis_backend, cfg.schedule_cache_ttl,
                 max_items=cfg.schedule_cache_max_items)
+            self.schedule_pdf_cache = _redis_mod.ResilientRedisTTLCache(
+                self._redis_backend, cfg.schedule_pdf_cache_ttl,
+                max_items=cfg.schedule_pdf_cache_max_items)
+            self.schedule_pdf_locks = _redis_mod.ResilientRedisKeyedLocks(
+                self._redis_backend,
+                lease_ms=max(60000, (PDF_TIMEOUT + 45) * 1000))
+            self.schedule_pdf_prewarm = _to_bool(cfg.schedule_pdf_prewarm)
             self.jump_cache = _redis_mod.ResilientRedisTTLCache(
                 self._redis_backend, cfg.jump_cache_ttl,
                 max_items=cfg.jump_cache_max_items)
@@ -1484,6 +1589,11 @@ class Runtime:
                                          max_items=cfg.grades_cache_max_items)
             self.schedule_cache = TTLCache(cfg.schedule_cache_ttl,
                                            max_items=cfg.schedule_cache_max_items)
+            self.schedule_pdf_cache = TTLCache(
+                cfg.schedule_pdf_cache_ttl,
+                max_items=cfg.schedule_pdf_cache_max_items)
+            self.schedule_pdf_locks = KeyedLocks()
+            self.schedule_pdf_prewarm = _to_bool(cfg.schedule_pdf_prewarm)
             self.jump_cache = TTLCache(cfg.jump_cache_ttl,
                                        max_items=cfg.jump_cache_max_items)
             self.jump_codes = JumpCodeStore(JUMP_CODE_TTL)
@@ -1528,6 +1638,7 @@ def _start_background(runtime, cfg, stop_event=None):
             runtime.sessions.sweep()
             runtime.grades_cache.sweep()
             runtime.schedule_cache.sweep()
+            runtime.schedule_pdf_cache.sweep()
             runtime.jump_cache.sweep()
             runtime.jump_codes.sweep()
             runtime.export_codes.sweep()
@@ -2252,6 +2363,15 @@ def _parser():
     ap.add_argument("--schedule-cache-ttl", type=int,
                     default=int(_env("JWXT_SCHEDULE_CACHE_TTL", "300")),
                     help="课表查询结果缓存秒数（按 学号+学期+周次；0 关闭；内存/Redis 模式均生效）")
+    ap.add_argument("--schedule-pdf-cache-ttl", type=int,
+                    default=int(_env("JWXT_SCHEDULE_PDF_CACHE_TTL", "300")),
+                    help="课表 PDF 导出缓存秒数（按 owner+学期+周次；0 关闭；成功结果才缓存）")
+    ap.add_argument("--schedule-pdf-cache-max-items", type=int,
+                    default=int(_env("JWXT_SCHEDULE_PDF_CACHE_MAX_ITEMS", "8")),
+                    help="课表 PDF 导出内存缓存最大条数（默认 8，防大文件占满内存）")
+    ap.add_argument("--schedule-pdf-prewarm",
+                    default=_env("JWXT_SCHEDULE_PDF_PREWARM", "1"),
+                    help="课表查询成功后后台预热 PDF 1/0（默认开启）")
     ap.add_argument("--schedule-class-share",
                     default=_env("JWXT_SCHEDULE_CLASS_SHARE", "0"),
                     help="课表缓存按班级共享 1/0（默认关闭）")

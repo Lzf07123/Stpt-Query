@@ -14,6 +14,9 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
+from collections import deque
+from contextlib import contextmanager
 
 from jwxt_core import LOG, _env
 
@@ -29,8 +32,61 @@ PDF_MAX_INPUT_BYTES = max(1, int(_env("JWXT_PDF_MAX_INPUT_MB", 5))) * 1024 * 102
 _convert_slot = threading.BoundedSemaphore(PDF_CONCURRENCY)
 
 
-def rtf_to_pdf(data: bytes) -> bytes:
-    """Return the original document rendered as PDF bytes."""
+class ProfilePool:
+    """复用 LibreOffice UserInstallation 目录，减少每次转换的初始化开销。"""
+
+    def __init__(self, capacity=PDF_CONCURRENCY):
+        self.capacity = max(1, int(capacity))
+        self._condition = threading.Condition()
+        self._free = deque()
+        self._active = 0
+
+    def _acquire(self):
+        with self._condition:
+            while not self._free and self._active >= self.capacity:
+                self._condition.wait()
+            if self._free:
+                return self._free.popleft()
+            self._active += 1
+
+        try:
+            return tempfile.mkdtemp(prefix="jwxt-soffice-profile-")
+        except OSError:
+            with self._condition:
+                self._active -= 1
+                self._condition.notify()
+            raise
+
+    def _release(self, profile, healthy=True):
+        if not healthy:
+            shutil.rmtree(profile, ignore_errors=True)
+        with self._condition:
+            self._active = max(0, self._active - 1)
+            if healthy:
+                self._free.append(profile)
+            self._condition.notify()
+
+    @contextmanager
+    def lease(self):
+        profile = self._acquire()
+        health = [False]
+        try:
+            yield profile, health
+        finally:
+            self._release(profile, healthy=health[0])
+
+
+_PROFILE_POOL = ProfilePool()
+
+
+def rtf_to_pdf_detailed(data: bytes):
+    """转换 PDF 并返回 `(PDF 字节, 分段耗时指标)`。
+
+    `pdf_wait_ms` 包含等待转换槽与 profile 池的时间；`pdf_convert_ms`
+    从拿到槽位开始计算，覆盖临时文件写入和 LibreOffice 子进程运行。
+    """
+    metrics = {"pdf_wait_ms": 0, "pdf_convert_ms": 0}
+    started = time.perf_counter()
     if not data:
         raise PdfConversionError("课表文档为空，无法转换 PDF")
     if len(data) > PDF_MAX_INPUT_BYTES:
@@ -40,9 +96,10 @@ def rtf_to_pdf(data: bytes) -> bytes:
     if not soffice:
         raise PdfConversionError("未找到 LibreOffice 转换器")
 
-    with _convert_slot:
+    with _convert_slot, _PROFILE_POOL.lease() as (profile, profile_health):
+        metrics["pdf_wait_ms"] = max(0, int((time.perf_counter() - started) * 1000))
+        convert_started = time.perf_counter()
         with tempfile.TemporaryDirectory(prefix="jwxt-pdf-") as workdir:
-            profile = os.path.join(workdir, "profile")
             output_dir = os.path.join(workdir, "out")
             source = os.path.join(workdir, "schedule.doc")
             target = os.path.join(output_dir, "schedule.pdf")
@@ -88,4 +145,12 @@ def rtf_to_pdf(data: bytes) -> bytes:
                 pdf = fp.read()
             if not pdf.startswith(b"%PDF-"):
                 raise PdfConversionError("课表 PDF 输出无效")
-            return pdf
+            profile_health[0] = True
+            metrics["pdf_convert_ms"] = max(
+                0, int((time.perf_counter() - convert_started) * 1000))
+            return pdf, metrics
+
+
+def rtf_to_pdf(data: bytes) -> bytes:
+    """Return the original document rendered as PDF bytes."""
+    return rtf_to_pdf_detailed(data)[0]

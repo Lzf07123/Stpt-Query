@@ -80,3 +80,55 @@ def test_rtf_to_pdf_kills_timed_out_process_group(monkeypatch):
     with pytest.raises(PdfConversionError, match="超时"):
         rtf_to_pdf(b"{\\rtf1 document}")
     assert killed == [(4321, rtf_pdf.signal.SIGKILL)]
+
+
+def test_rtf_to_pdf_reuses_profile_and_reports_metrics(monkeypatch):
+    profiles = []
+
+    def fake_popen(command, **kwargs):
+        prefix = "-env:UserInstallation=file://"
+        profiles.append(Path(command[1][len(prefix):]))
+        return _fake_popen()(command, **kwargs)
+
+    monkeypatch.setattr("rtf_pdf.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
+
+    first_pdf, first_metrics = rtf_pdf.rtf_to_pdf_detailed(b"{\\rtf1 first}")
+    second_pdf, second_metrics = rtf_pdf.rtf_to_pdf_detailed(b"{\\rtf1 second}")
+
+    assert first_pdf == second_pdf == b"%PDF-1.7\n"
+    assert profiles[0] == profiles[1]
+    assert profiles[0].exists()
+    assert first_metrics["pdf_wait_ms"] >= 0
+    assert first_metrics["pdf_convert_ms"] >= 0
+    assert second_metrics["pdf_convert_ms"] >= 0
+
+
+def test_rtf_to_pdf_destroys_profile_after_failed_conversion(monkeypatch):
+    profiles = []
+
+    def fake_popen(command, **kwargs):
+        prefix = "-env:UserInstallation=file://"
+        profile = Path(command[1][len(prefix):])
+        profiles.append(profile)
+        return _fake_popen(returncode=1)(command, **kwargs)
+
+    monkeypatch.setattr("rtf_pdf.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
+    with pytest.raises(PdfConversionError, match="转换失败"):
+        rtf_to_pdf(b"{\\rtf1 document}")
+
+    def success_popen(command, **kwargs):
+        prefix = "-env:UserInstallation=file://"
+        profiles.append(Path(command[1][len(prefix):]))
+        return _fake_popen()(command, **kwargs)
+
+    monkeypatch.setattr("rtf_pdf.subprocess.Popen", success_popen)
+    pdf, metrics = rtf_pdf.rtf_to_pdf_detailed(b"{\\rtf1 document}")
+
+    assert pdf == b"%PDF-1.7\n"
+    assert len(profiles) == 2
+    assert profiles[0] != profiles[1]
+    assert not profiles[0].exists()
+    assert profiles[1].exists()
+    assert metrics["pdf_convert_ms"] >= 0
