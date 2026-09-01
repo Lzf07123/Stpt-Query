@@ -20,6 +20,7 @@ from jwxt_core import (
     TRUSTED_PROXY_CIDRS, UA, UPSTREAM_GLOBAL, UPSTREAM_PARALLEL, UPSTREAM_SEM,
     UPSTREAM_SEM_TIMEOUT, VERIFY_TLS, VERSION, WARM_WAIT, Config, J,
     SchoolError, SessionInvalidError, TokenError, UpstreamBusyError,
+    WarmPendingError,
     UpstreamError, LockTimeoutError, PoolFullError, dump_cookies,
     dump_portal, dump_session_cookies, load_cookies, main, main_schedule,
     public_url, setup_logging, set_trace_id, to_webvpn, trace_id,

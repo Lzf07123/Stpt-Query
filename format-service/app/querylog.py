@@ -44,10 +44,12 @@ class JSONLFileWriter:
     """脱敏后的按大小轮转 JSONL 追加写入器。"""
 
     def __init__(self, path: str, max_bytes: int = 50 * 1024 * 1024,
-                 backup_count: int = 7) -> None:
+                 backup_count: int = 7,
+                 collection_root: str | None = None) -> None:
         self.path = path
         self.max_bytes = max(1, int(max_bytes))
         self.backup_count = max(0, int(backup_count))
+        self.collection_root = collection_root or os.path.dirname(path)
         self.last_error: str = ""
         self._lock = Lock()
 
@@ -123,7 +125,32 @@ class JSONLFileWriter:
     def iter_recent_lines(self) -> Iterator[str]:
         """按最新到最旧流式遍历 JSONL 行，避免一次性载入全部备份。"""
         chunk_size = 64 * 1024
-        for path in self.archive_files():
+        yield from self._iter_file_lines(self.archive_files())
+
+    def collection_files(self) -> list[str]:
+        """返回共享卷上所有实例的当前文件与轮转备份，新文件在前。"""
+        base_name = os.path.basename(self.path)
+        prefix = base_name + "."
+        files: dict[str, int] = {}
+        for root, _, names in os.walk(self.collection_root):
+            for name in names:
+                if name != base_name and not name.startswith(prefix):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    files[path] = os.stat(path).st_mtime_ns
+                except OSError:
+                    continue
+        return sorted(files, key=lambda path: (files[path], path), reverse=True)
+
+    def iter_collection_recent_lines(self) -> Iterator[str]:
+        """跨副本按文件修改时间读取最新到最旧的 JSONL 行。"""
+        yield from self._iter_file_lines(self.collection_files())
+
+    def _iter_file_lines(self, paths: list[str]) -> Iterator[str]:
+        """按调用方给出的文件顺序反向流式读取行。"""
+        chunk_size = 64 * 1024
+        for path in paths:
             if os.path.getsize(path) == 0:
                 continue
             tail = b""

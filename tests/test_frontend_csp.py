@@ -34,3 +34,24 @@ def test_retry_buttons_use_delegated_listener_not_inline_handler():
     assert 'class="btn btn-ghost js-retry-query"' in index
     assert "onclick=" not in index
     assert '.closest(".js-retry-query")' in index
+
+
+def test_admin_limit_selector_lives_in_log_pagination():
+    admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    form_start = admin.index('<form class="card filter-card logs-primary" id="logFilter">')
+    form_end = admin.index("</form>", form_start)
+    pagination_start = admin.index('<div class="pagination">')
+    pagination_end = admin.index('<section class="card log-detail-panel"', pagination_start)
+
+    form = admin[form_start:form_end]
+    pagination = admin[pagination_start:pagination_end]
+    assert 'name="limit"' not in form
+    assert '<div class="pagination-nav">' in pagination
+    assert 'class="filter-control pagination-limit"' in pagination
+    assert '<select class="custom-select-native" id="limitSelect" name="limit"' in pagination
+    assert '<button class="custom-select-trigger" id="limitTrigger"' in pagination
+
+    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    assert 'limitSelect: $("limitSelect")' in script
+    assert "elements.filter.elements.limit" not in script
+    assert 'new FormData(elements.filter).get("limit")' not in script

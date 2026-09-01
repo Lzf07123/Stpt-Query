@@ -944,6 +944,51 @@
   padding: 14px 18px;
 }
 
+.pagination-nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pagination-limit {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pagination-limit label {
+  white-space: nowrap;
+}
+
+.pagination-limit .custom-select {
+  width: 132px;
+}
+
+.pagination-limit .custom-select-trigger {
+  min-height: 40px;
+}
+
+.pagination-limit .custom-select-menu {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+@media (max-width: 759px) {
+  .pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pagination-limit .custom-select {
+    flex: 1;
+    width: auto;
+  }
+}
+
 .resource-hero {
   animation: resource-hero-in .45s var(--eduquery-ease-out) both;
   display: grid;

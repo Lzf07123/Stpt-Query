@@ -82,6 +82,60 @@ def test_service_status_restores_local_file_after_restart(tmp_path):
     assert body["results"][0]["kind"] == "grades"
 
 
+def test_service_status_returns_recent_100_and_accepted_total(tmp_path):
+    path = tmp_path / "instance-a" / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    for index in range(105):
+        writer.write_raw({
+            "event": "query",
+            "time": f"2026-08-28T10:{index // 60:02d}:{index % 60:02d}+08:00",
+            "run_id": f"run-{index:03d}",
+            "username": f"2023000{index:03d}",
+            "password": "secret",
+            "success": index % 4 != 0,
+            "kind": "grades",
+        })
+
+    with TestClient(create_app(_cfg(tmp_path, file_log_path=str(path)))) as client:
+        first_response = client.get("/service-status", headers=HEADERS)
+        first = first_response.json()
+
+    assert first["total"] == 100
+    assert first["accepted_total"] == 105
+    assert first["accepted_success"] == 78
+    assert "pagination" not in first
+    assert [item["time"] for item in first["results"]] == [
+        f"2026-08-28T10:{(104 - index) // 60:02d}:{(104 - index) % 60:02d}+08:00"
+        for index in range(100)
+    ]
+    assert "2023000104" not in first_response.text
+    assert "secret" not in first_response.text
+
+
+def test_service_status_scans_all_instance_directories(tmp_path):
+    writer_a = JSONLFileWriter(str(tmp_path / "instance-a" / "queries.jsonl"))
+    writer_b = JSONLFileWriter(str(tmp_path / "instance-b" / "queries.jsonl"))
+    writer_a.write_raw({
+        "event": "query", "time": "2026-08-28T10:00:00+08:00",
+        "run_id": "run-a", "username": "2023000001",
+        "success": False, "kind": "login_error",
+    })
+    writer_b.write_raw({
+        "event": "query", "time": "2026-08-28T10:01:00+08:00",
+        "run_id": "run-b", "username": "2023000002",
+        "success": True, "kind": "grades",
+    })
+
+    with TestClient(create_app(
+        _cfg(tmp_path, file_log_path=str(tmp_path / "{instance_id}" / "queries.jsonl")),
+    )) as client:
+        body = client.get("/service-status", headers=HEADERS).json()
+
+    assert body["accepted_total"] == 2
+    assert body["accepted_success"] == 1
+    assert [item["kind"] for item in body["results"]] == ["grades", "login_error"]
+
+
 class FakePipeline:
     def __init__(self, redis):
         self.redis = redis

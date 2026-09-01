@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import heapq
 import json
 import math
+import os
 import re
 import secrets
 import socket
@@ -142,7 +144,7 @@ def _service_status_item(item: Any) -> Optional[dict]:
 
 
 def _service_status_payload(items: list[dict]) -> dict:
-    """汇总最近 100 次查询的服务状态。"""
+    """汇总最近窗口服务状态；accepted_* 由调用方补充全量计数。"""
     total = len(items)
     success = sum(1 for item in items if item["success"])
     return {
@@ -150,6 +152,62 @@ def _service_status_payload(items: list[dict]) -> dict:
         "total": total,
         "success": success,
         "availability": round(success / total * 100, 1) if total else None,
+    }
+
+
+def _log_timestamp(item: dict) -> float:
+    try:
+        return datetime.fromisoformat(
+            str(item.get("time", "")).replace("Z", "+00:00")
+        ).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _read_service_status_summary(
+    writer: JSONLFileWriter,
+    recent_limit: int = 100,
+) -> dict:
+    """扫描共享日志卷，返回公开状态窗口与全量已受理统计。"""
+    window: list[tuple[float, str, int, dict]] = []
+    seen_run_ids: set[str] = set()
+    accepted_total = 0
+    accepted_success = 0
+    scanned = 0
+    parse_errors = 0
+    for line in writer.iter_collection_recent_lines():
+        scanned += 1
+        try:
+            item = sanitize_entry(json.loads(line))
+        except (OSError, ValueError, TypeError):
+            parse_errors += 1
+            continue
+        if item.get("event") != "query":
+            continue
+        view = _service_status_item(item)
+        if view is None:
+            continue
+        run_id = str(item.get("run_id") or "")
+        if run_id and run_id in seen_run_ids:
+            continue
+        if run_id:
+            seen_run_ids.add(run_id)
+        accepted_total += 1
+        if view["success"]:
+            accepted_success += 1
+        heapq.heappush(
+            window, (_log_timestamp(item), run_id, scanned, view))
+        if len(window) > recent_limit:
+            heapq.heappop(window)
+
+    window.sort(key=lambda value: (value[0], value[1], value[2]), reverse=True)
+    items = [view for _, _, _, view in window]
+    return {
+        "items": items,
+        "accepted_total": accepted_total,
+        "accepted_success": accepted_success,
+        "scanned": scanned,
+        "parse_errors": parse_errors,
     }
 
 
@@ -291,12 +349,18 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     app.state.rate_limit = max(1, cfg.rate_limit)
     app.state.trust_proxy = bool(cfg.trust_proxy)
     file_log_path = cfg.file_log_path.replace("{instance_id}", file_instance_id)
+    if "{instance_id}" in cfg.file_log_path:
+        path_prefix = cfg.file_log_path[:cfg.file_log_path.index("{instance_id}")]
+        file_log_collection_root = os.path.dirname(path_prefix)
+    else:
+        file_log_collection_root = os.path.dirname(file_log_path)
     file_log_writer = None
     if cfg.file_log_enabled and file_log_path.strip():
         file_log_writer = JSONLFileWriter(
             path=file_log_path,
             max_bytes=cfg.file_log_max_bytes,
             backup_count=cfg.file_log_backup_count,
+            collection_root=file_log_collection_root,
         )
     app.state.file_log_writer = file_log_writer
     resource_monitor = ResourceMonitor(
@@ -906,15 +970,11 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         success: Optional[bool] = None,
         time_from: Optional[datetime] = None,
         time_to: Optional[datetime] = None,
-        scan_limit: int = Query(default=5000, ge=0, le=100000),
+        scan_limit: int = Query(default=0, ge=0, le=100000),
         offset: int = Query(default=0, ge=0),
-        limit: int = Query(default=50, ge=1, le=200),
+        limit: int = Query(default=20, ge=1, le=100),
 ) -> dict:
-        """管理端查询历史；优先读取文件通道，无文件时降级 Redis/内存。
-
-        scan_limit=0 表示全量扫描；默认限制 newest-first 扫描行数，避免大日志
-        拖高常驻内存。
-        """
+        """管理端查询历史；优先读取文件通道，无文件时降级 Redis/内存。"""
         keyword = keyword.strip().casefold()
         kind = kind.strip().casefold()
         option = option.strip().casefold()
@@ -923,10 +983,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         scanned = 0
 
         def timestamp(item: dict) -> float:
-            try:
-                return datetime.fromisoformat(str(item.get("time", "")).replace("Z", "+00:00")).timestamp()
-            except (TypeError, ValueError):
-                return 0.0
+            return _log_timestamp(item)
 
         def matches(item: dict) -> bool:
             entry_time = timestamp(item)
@@ -949,7 +1006,36 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
         writer = app.state.file_log_writer
         parse_errors = 0
-        if app.state.redis_history is not None:
+        if writer is not None:
+            source = "file"
+
+            def scan_file() -> tuple[list[dict], int, int]:
+                nonlocal parse_errors
+                matched: list[dict] = []
+                seen_run_ids: set[str] = set()
+                seen = 0
+                for line in writer.iter_collection_recent_lines():
+                    if scan_limit and seen >= scan_limit:
+                        break
+                    seen += 1
+                    try:
+                        item = sanitize_entry(json.loads(line))
+                    except ValueError:
+                        parse_errors += 1
+                        continue
+                    if not isinstance(item, dict) or not matches(item):
+                        continue
+                    run_id = str(item.get("run_id") or "")
+                    if run_id and run_id in seen_run_ids:
+                        continue
+                    if run_id:
+                        seen_run_ids.add(run_id)
+                    matched.append((timestamp(item), run_id, item))
+                parsed = [entry for _, _, entry in matched]
+                return parsed, seen, parse_errors
+
+            entries, scanned, parse_errors = await asyncio.to_thread(scan_file)
+        elif app.state.redis_history is not None:
             source = "redis"
             try:
                 snapshot = await asyncio.wait_for(
@@ -963,29 +1049,6 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             entries: list[dict] = [
                 sanitize_entry(item) for item in snapshot if matches(item)
             ]
-        elif writer is not None:
-            source = "file"
-
-            def scan_file() -> tuple[list[dict], int, int]:
-                nonlocal parse_errors
-                matched: list[dict] = []
-                seen = 0
-                for line in writer.iter_recent_lines():
-                    if scan_limit and seen >= scan_limit:
-                        break
-                    seen += 1
-                    try:
-                        item = json.loads(line)
-                    except ValueError:
-                        parse_errors += 1
-                        continue
-                    if isinstance(item, dict) and matches(item):
-                        item = sanitize_entry(item)
-                        matched.append((timestamp(item), str(item.get("run_id", "")), item))
-                parsed = [entry for _, _, entry in matched]
-                return parsed, seen, parse_errors
-
-            entries, scanned, parse_errors = await asyncio.to_thread(scan_file)
         else:
             source = "memory"
             snapshot = app.state.local_history.recent("gw:v2:query-logs")
@@ -1143,12 +1206,41 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         return await _passthrough(request, "/get_schedule/export")
 
     @app.get("/service-status")
-    async def service_status(_: None = Depends(_require_auth)) -> dict:
-        """返回最近服务状态；由跨副本查询日志派生，避免双写状态漂移。"""
-        raw_items = await _recent_query_logs()
-        items = [view for view in map(_service_status_item, raw_items)
-                 if view is not None]
-        return _service_status_payload(items)
+    async def service_status(
+        _: None = Depends(_require_auth),
+    ) -> dict:
+        """返回最近 100 次公开状态与全量已受理统计。"""
+        writer = app.state.file_log_writer
+        if writer is not None:
+            scan = await asyncio.to_thread(
+                _read_service_status_summary, writer)
+            items = scan["items"]
+            accepted_total = scan["accepted_total"]
+            accepted_success = scan["accepted_success"]
+            source = "file"
+            scanned = scan["scanned"]
+            parse_errors = scan["parse_errors"]
+        else:
+            raw_items = await _recent_query_logs(limit=100)
+            all_items = [view for view in map(_service_status_item, raw_items)
+                         if view is not None]
+            items = all_items
+            accepted_total = len(all_items)
+            accepted_success = sum(1 for view in all_items if view["success"])
+            source = "redis" if app.state.redis_history is not None else "memory"
+            scanned = len(raw_items)
+            parse_errors = 0
+
+        payload = _service_status_payload(items)
+        payload.update({
+            "accepted_total": accepted_total,
+            "accepted_success": accepted_success,
+            "accepted_failure": accepted_total - accepted_success,
+            "source": source,
+            "scanned": scanned,
+            "parse_errors": parse_errors,
+        })
+        return payload
 
     return app
 

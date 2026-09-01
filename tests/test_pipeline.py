@@ -111,7 +111,7 @@ async def test_session_job_skips_password_login():
         username="2023000001", option="成绩", password=None)
     result = await Pipeline(service=svc, llm=FakeLLM()).run(req, session="ticket-1")
     assert result["success"]
-    assert svc.calls == ["/jump", "/get_grades"]
+    assert svc.calls == ["/get_grades", "/jump"]
 
 
 async def test_session_grade_job_reports_phase_transitions():
@@ -154,3 +154,78 @@ async def test_llm_and_pdf_semaphores_are_accepted():
         pdf_semaphore=asyncio.Semaphore(1))
     assert pipeline.llm_semaphore._value == 1
     assert pipeline.pdf_semaphore._value == 1
+
+
+class SessionFailureService(FakeService):
+    def __init__(self, failures_before_success: int = 1) -> None:
+        super().__init__()
+        self.failures_before_success = failures_before_success
+        self.logins = 0
+        self.schedule_calls = 0
+
+    async def post(self, path, payload):
+        self.calls.append(path)
+        if path == "/login":
+            self.logins += 1
+            return {"success": True, "session": f"s{self.logins}",
+                    "username": payload["username"]}
+        if path == "/get_schedule":
+            self.schedule_calls += 1
+            if self.schedule_calls <= self.failures_before_success:
+                raise ServiceError(
+                    401,
+                    {"success": False,
+                     "error": "session 无效或已过期，请先 POST /login 获取新 session"},
+                    "上游服务 HTTP 401")
+            return {"success": True, "output": "| 节次 | 周一 |",
+                    "download_url": "https://x/dl"}
+        if path == "/jump":
+            return {"success": True, "url": "https://example.com/home",
+                    "login_url": "https://example.com/jump/go?code=x"}
+        return await super().post(path, payload)
+
+
+async def test_schedule_relogs_in_once_after_first_query_session_error():
+    svc = SessionFailureService()
+    result = await Pipeline(service=svc, llm=FakeLLM()).run(_req(option="课表"))
+
+    assert result["success"] and result["kind"] == "schedule"
+    assert result["meta"]["relogin_retry"] is True
+    assert svc.calls == ["/login", "/get_schedule", "/login",
+                         "/get_schedule", "/jump"]
+
+
+async def test_schedule_does_not_retry_session_error_more_than_once():
+    svc = SessionFailureService(failures_before_success=10)
+    result = await Pipeline(service=svc, llm=FakeLLM()).run(_req(option="课表"))
+
+    assert not result["success"]
+    assert svc.calls == ["/login", "/get_schedule", "/login", "/get_schedule"]
+
+
+async def test_external_session_job_does_not_relog_in():
+    svc = SessionFailureService()
+    req = SessionWorkflowRequest(username="2023000001", option="课表", password=None)
+    result = await Pipeline(service=svc, llm=FakeLLM()).run(req, session="ticket-1")
+
+    assert not result["success"]
+    assert svc.calls == ["/get_schedule"]
+
+
+async def test_credential_error_does_not_trigger_relogin():
+    class BadCredentialService(SessionFailureService):
+        async def post(self, path, payload):
+            if path == "/get_schedule":
+                self.calls.append(path)
+                self.schedule_calls += 1
+                raise ServiceError(
+                    401,
+                    {"success": False, "error": "账号或密码错误"},
+                    "上游服务 HTTP 401")
+            return await super().post(path, payload)
+
+    svc = BadCredentialService()
+    result = await Pipeline(service=svc, llm=FakeLLM()).run(_req(option="课表"))
+
+    assert not result["success"]
+    assert svc.calls == ["/login", "/get_schedule"]
