@@ -32,6 +32,7 @@ from jwxt_core import (
     PUBLIC_URL, SCHEDULE_CLASS_SHARE, SESSION_TTL, SERVICE, TIMEOUT, TRUST_PROXY,
     UPSTREAM_PARALLEL, UPSTREAM_SEM_TIMEOUT, VERSION, WARM_WAIT, Config, J,
     SchoolError, SessionInvalidError, TokenError, UpstreamError,
+    WarmPendingError,
     UpstreamBusyError, LockTimeoutError, PoolFullError, apply_config, load_config,
     main, main_schedule, public_url, to_webvpn, _background_executor, _cache_put,
     _cache_write_allowed, _clone_j, _cors_allow, _deep_executor, _env, _internal_error_body,
@@ -517,6 +518,14 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                                   "url": "", "page": page_name, "count": 0, "rows": []})
             else:
                 self._reply_text(400, str(e))
+                return
+        except WarmPendingError as e:
+            LOG.warning("跳转会话预热未完成: %s", e)
+            self._reply(503, {"success": False,
+                              "error": str(e),
+                              "error_code": "warm_pending",
+                              "retryable": True,
+                              "url": "", "page": page_name, "count": 0, "rows": []})
             return
         except TokenError as e:
             LOG.warning("跳转会话无效: %s", e)
@@ -1224,6 +1233,14 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                         self._reply(401, {"success": False, "error": str(e),
                                           "output": "", "count": 0, "rows": []})
                         return
+                    except WarmPendingError as e:
+                        LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
+                        self._reply(503, {"success": False,
+                                          "error": str(e),
+                                          "error_code": "warm_pending",
+                                          "retryable": True,
+                                          "output": "", "count": 0, "rows": []})
+                        return
                 else:
                     if not self._login_rate_ok():
                         return
@@ -1248,6 +1265,14 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                         LOG.warning("会话无效 endpoint=%s error=%s", p, e)
                         self.server.sessions.invalidate(session)
                         self._reply(401, {"success": False, "error": str(e),
+                                          "output": "", "count": 0, "rows": []})
+                        return
+                    except WarmPendingError as e:
+                        LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
+                        self._reply(503, {"success": False,
+                                          "error": str(e),
+                                          "error_code": "warm_pending",
+                                          "retryable": True,
                                           "output": "", "count": 0, "rows": []})
                         return
             else:
@@ -1301,6 +1326,15 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                                           "output": "", "count": 0, "rows": [],
                                           "info": {}, "stats": None})
                         return
+                    except WarmPendingError as e:
+                        LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
+                        self._reply(503, {"success": False,
+                                          "error": str(e),
+                                          "error_code": "warm_pending",
+                                          "retryable": True,
+                                          "output": "", "count": 0, "rows": [],
+                                          "info": {}, "stats": None})
+                        return
                 else:
                     try:
                         with self.server.login_locks.lock(u, timeout=LOGIN_LOCK_TIMEOUT):
@@ -1325,6 +1359,15 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                         LOG.warning("会话无效 endpoint=%s error=%s", p, e)
                         self.server.sessions.invalidate(session)
                         self._reply(401, {"success": False, "error": str(e),
+                                          "output": "", "count": 0, "rows": [],
+                                          "info": {}, "stats": None})
+                        return
+                    except WarmPendingError as e:
+                        LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
+                        self._reply(503, {"success": False,
+                                          "error": str(e),
+                                          "error_code": "warm_pending",
+                                          "retryable": True,
                                           "output": "", "count": 0, "rows": [],
                                           "info": {}, "stats": None})
                         return

@@ -15,9 +15,10 @@ from jwxt_core import (
     J, BASE, UA, TIMEOUT, VERIFY_TLS, LOG, UPSTREAM_SEM, JUMP_PAGES,
     LOGIN_REUSE, WARM_WAIT, VERSION, MAX_SESSIONS, JUMP_CODE_TTL, SessionInvalidError,
     TokenError, UpstreamBusyError, LockTimeoutError, LATENCY_BUCKETS_MS, to_webvpn,
+    WarmPendingError,
     dump_session_cookies, dump_portal, load_cookies,
     set_trace_id, _shared_adapter, _upstream_slot, _sanitize_url, _has_session_hint,
-    _is_auth_failure, _METRICS, _METRICS_LOCK,
+    _is_auth_failure, _is_transient_error, _METRICS, _METRICS_LOCK,
 )
 
 class ServerState:
@@ -488,6 +489,8 @@ def _ensure_warmed(sessions, sid, c):
     except TokenError:
         raise
     except Exception as e:
+        if _is_transient_error(e):
+            raise WarmPendingError("会话预热门户暂未完成，请稍后重试")
         raise TokenError("session 无效或已过期，请先 POST /login 获取新 session（%s）" % e)
     finally:
         if j is not None:

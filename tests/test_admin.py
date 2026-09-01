@@ -72,7 +72,7 @@ def test_admin_query_logs_filters_and_paginates_file_history(tmp_path):
         assert all(key not in failed["logs"][0] for key in ("password", "token", "session"))
 
 
-def test_admin_query_logs_bounds_file_scan_by_default(tmp_path):
+def test_admin_query_logs_scans_full_file_history_by_default(tmp_path):
     path = tmp_path / "queries.jsonl"
     writer = JSONLFileWriter(str(path))
     for index in range(6):
@@ -86,7 +86,7 @@ def test_admin_query_logs_bounds_file_scan_by_default(tmp_path):
         payload = client.get("/admin/api/query-logs?limit=2", headers=ADMIN).json()
         assert payload["scanned"] == 6
         assert payload["total"] == 6
-        assert payload["scan_limit"] == 5000
+        assert payload["scan_limit"] == 0
         assert payload["scan_truncated"] is False
 
         bounded = client.get("/admin/api/query-logs?limit=2&scan_limit=4",
@@ -96,6 +96,59 @@ def test_admin_query_logs_bounds_file_scan_by_default(tmp_path):
         assert bounded["scan_limit"] == 4
         assert bounded["scan_truncated"] is True
         assert [item["run_id"] for item in bounded["logs"]] == ["run-5", "run-4"]
+
+
+def test_admin_query_logs_reads_all_instance_directories_beyond_100(tmp_path):
+    path = tmp_path / "instance-a" / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    for index in range(101):
+        writer.write_raw({
+            "event": "query", "time": f"2026-08-28T10:{index // 60:02d}:{index % 60:02d}+08:00",
+            "run_id": f"run-{index:03d}", "username": f"2023000{index:03d}",
+            "success": True, "kind": "grades",
+        })
+
+    with TestClient(create_app(_settings(tmp_path, file_log_path=str(path)))) as client:
+        first = client.get("/admin/api/query-logs", headers=ADMIN).json()
+        last = client.get(
+            "/admin/api/query-logs?offset=100", headers=ADMIN).json()
+
+    assert first["source"] == "file"
+    assert first["total"] == 101
+    assert [item["run_id"] for item in first["logs"]][0] == "run-100"
+    assert first["stats"]["success"] == 101
+    assert first["pagination"]["has_more"] is True
+    assert last["total"] == 101
+    assert [item["run_id"] for item in last["logs"]] == ["run-000"]
+    assert last["pagination"]["has_more"] is False
+
+
+def test_admin_query_logs_prefers_file_history_over_redis(tmp_path):
+    path = tmp_path / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    writer.write_raw({
+        "event": "query", "time": "2026-08-28T10:00:00+08:00",
+        "run_id": "run-file", "username": "2023000001",
+        "success": True, "kind": "grades",
+    })
+
+    class RedisOnlyHistory:
+        async def recent(self, versioned_key, legacy_key, limit=100):
+            return [{
+                "event": "query", "time": "2026-08-28T10:01:00+08:00",
+                "run_id": "run-redis", "username": "2023000002",
+                "success": False, "kind": "login_error",
+            }]
+
+    app = create_app(_settings(
+        tmp_path, file_log_path=str(path), redis_url="redis://redis:6379/0"))
+    app.state.redis_history = RedisOnlyHistory()
+    client = TestClient(app)
+
+    payload = client.get("/admin/api/query-logs", headers=ADMIN).json()
+
+    assert payload["source"] == "file"
+    assert [item["run_id"] for item in payload["logs"]] == ["run-file"]
 
 
 def test_admin_metrics_reports_snapshot_and_service_status(tmp_path):

@@ -194,6 +194,10 @@ class TokenError(Exception):
     """会话相关错误（保留旧类名以减少改动面）。"""
 
 
+class WarmPendingError(Exception):
+    """首次查询时预热门户尚未成功；会话记录仍有效，可短退避后重试。"""
+
+
 SESSION_TTL = 12 * 3600      # 内存会话有效期（秒），make_app() 启动时按配置覆盖
 
 

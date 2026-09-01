@@ -15,7 +15,7 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=58">
+  <link rel="stylesheet" href="/style.css?v=62">
 </head>
 <body>
   <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
@@ -176,14 +176,6 @@
               </div>
               <label>开始时间<input class="input" name="time_from" type="datetime-local"></label>
               <label>结束时间<input class="input" name="time_to" type="datetime-local"></label>
-              <div class="filter-control">
-                <label for="limitTrigger">每页</label>
-                <div class="custom-select" data-custom-select>
-                  <select class="custom-select-native" name="limit" aria-label="每页数量"><option value="20">20 条</option><option value="50" selected>50 条</option><option value="100">100 条</option><option value="200">200 条</option></select>
-                  <button class="custom-select-trigger" id="limitTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="limitMenu"><span class="custom-select-value">50 条</span><svg class="custom-select-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-                  <ul class="custom-select-menu" id="limitMenu" role="listbox" aria-labelledby="limitTrigger" hidden><li class="custom-select-option" id="limitOption20" role="option" data-value="20" aria-selected="false" tabindex="-1">20 条</li><li class="custom-select-option" id="limitOption50" role="option" data-value="50" aria-selected="true" tabindex="-1">50 条</li><li class="custom-select-option" id="limitOption100" role="option" data-value="100" aria-selected="false" tabindex="-1">100 条</li><li class="custom-select-option" id="limitOption200" role="option" data-value="200" aria-selected="false" tabindex="-1">200 条</li></ul>
-                </div>
-              </div>
             </div>
           </div>
           <div class="filter-actions">
@@ -211,9 +203,19 @@
             </table>
           </div>
           <div class="pagination">
-            <button class="btn secondary-btn" id="prevPage" type="button">上一页</button>
-            <span id="pageInfo">第 1 页</span>
-            <button class="btn secondary-btn" id="nextPage" type="button">下一页</button>
+            <div class="pagination-nav">
+              <button class="btn secondary-btn" id="prevPage" type="button">上一页</button>
+              <span id="pageInfo">第 1 页</span>
+              <button class="btn secondary-btn" id="nextPage" type="button">下一页</button>
+            </div>
+            <div class="filter-control pagination-limit">
+              <label for="limitTrigger">每页</label>
+              <div class="custom-select" data-custom-select>
+                <select class="custom-select-native" id="limitSelect" name="limit" aria-label="每页数量"><option value="20" selected>20 条</option><option value="50">50 条</option><option value="100">100 条</option></select>
+                <button class="custom-select-trigger" id="limitTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="limitMenu"><span class="custom-select-value">20 条</span><svg class="custom-select-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+                <ul class="custom-select-menu" id="limitMenu" role="listbox" aria-labelledby="limitTrigger" hidden><li class="custom-select-option" id="limitOption20" role="option" data-value="20" aria-selected="true" tabindex="-1">20 条</li><li class="custom-select-option" id="limitOption50" role="option" data-value="50" aria-selected="false" tabindex="-1">50 条</li><li class="custom-select-option" id="limitOption100" role="option" data-value="100" aria-selected="false" tabindex="-1">100 条</li></ul>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -282,6 +284,6 @@
   <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=12" defer></script>
+  <script src="/admin.js?v=15" defer></script>
 </body>
 </html>

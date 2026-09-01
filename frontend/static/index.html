@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=57">
+  <link rel="stylesheet" href="/style.css?v=62">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
 </head>
@@ -1056,29 +1056,30 @@
       });
     });
 
+    let serviceStatusSeq = 0;
     function renderServiceStatus() {
+      const requestSeq = ++serviceStatusSeq;
       fetch("/service-status", { headers: authHeaders() })
         .then(function (resp) { return resp.json(); })
         .then(function (data) {
+          if (requestSeq !== serviceStatusSeq) return;
           const results = data.results || [];
+          const acceptedTotal = Number(data.accepted_total || 0);
           if (!results.length) {
             serviceStatusBox.classList.add("hidden");
             return;
           }
-          const slots = 100;
-          const ordered = results.slice().reverse();
-          const segments = new Array(slots).fill("");
-          for (let i = 0; i < slots; i++) {
-            const item = i >= slots - ordered.length ? ordered[i - (slots - ordered.length)] : null;
+          // API 返回最新在前；状态条按时间从右到左展示。
+          const segments = results.slice().reverse().map(function (item) {
             const cls = item ? (item.success ? "success" : "fail") : "";
             const attrs = item
               ? ' data-success="' + (item.success ? "1" : "0") +
                 '" data-kind="' + escapeHtml(item.kind || (item.success ? "success" : "business_error")) +
                 '" data-time="' + escapeHtml(item.time || "") + '"'
               : "";
-            segments[i] = '<span class="status-seg ' + cls + '"' + attrs + "></span>";
-          }
-          const total = data.total != null ? data.total : results.length;
+            return '<span class="status-seg ' + cls + '"' + attrs + "></span>";
+          });
+          const total = results.length;
           const okCount = data.success != null ? data.success : results.filter(function (item) { return item.success; }).length;
           const failCount = total - okCount;
           const availability = data.availability != null ? data.availability : (total ? Math.round(okCount / total * 1000) / 10 : 0);
@@ -1098,9 +1099,10 @@
           else if (availability < 90) availClass = "avail-mid";
           serviceStatusBox.classList.remove("hidden");
           serviceStatusBox.innerHTML =
-            '<div class="status-title">服务状态 · 最近 ' + results.length + ' 次查询</div>' +
+            '<div class="status-title">服务状态 · 已受理 ' + acceptedTotal + ' 次</div>' +
             barHtml +
-            '<div class="status-summary"><span class="' + availClass + '">可用性 ' +
+            '<div class="status-summary">' +
+            '<span class="' + availClass + '">最近 ' + total + ' 次可用性 ' +
             availability.toFixed(1) + "%</span> · " + okCount + " 成功 · " + failCount + " 失败</div>";
         })
         .catch(function () {

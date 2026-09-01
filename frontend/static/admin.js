@@ -12,6 +12,7 @@
     tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), logsPanel: $("logsPanel"),
     metricsPanel: $("metricsPanel"), filter: $("logFilter"), exportBtn: $("exportBtn"),
     filterToggle: $("filterToggle"),
+    limitSelect: $("limitSelect"),
     dependencyNotices: $("dependencyNotices"),
     autoLogs: $("autoLogs"), autoMetrics: $("autoMetrics"),
     body: $("logsBody"), prev: $("prevPage"), next: $("nextPage"), pageInfo: $("pageInfo"),
@@ -399,7 +400,7 @@
   function selectedFilters(form) {
     var data = new FormData(form);
     var query = new URLSearchParams();
-    ["keyword", "kind", "option", "success", "time_from", "time_to", "limit"].forEach(function (key) {
+    ["keyword", "kind", "option", "success", "time_from", "time_to"].forEach(function (key) {
       var value = data.get(key);
       if (value == null || String(value).trim() === "") return;
       if (key.indexOf("time_") === 0) {
@@ -409,6 +410,7 @@
         query.set(key, String(value));
       }
     });
+    if (elements.limitSelect) query.set("limit", elements.limitSelect.value || "20");
     query.set("offset", String(state.offset));
     return query.toString();
   }
@@ -636,8 +638,9 @@
   }
 
   function updatePagination() {
-    var limit = Number(new FormData(elements.filter).get("limit") || 50);
-    elements.pageInfo.textContent = "第 " + (state.offset / limit + 1) + " 页";
+    var limit = Number(elements.limitSelect && elements.limitSelect.value || 20);
+    var totalPages = Math.max(1, Math.ceil(Number(elements.total.textContent) / limit));
+    elements.pageInfo.textContent = "第 " + (state.offset / limit + 1) + " / " + totalPages + " 页";
     elements.prev.disabled = state.offset <= 0;
     elements.next.disabled = !state.hasMore;
   }
@@ -877,16 +880,23 @@
     elements.filter.addEventListener("submit", function (event) {
       event.preventDefault(); state.offset = 0; loadLogs().catch(showError);
     });
+    elements.limitSelect.addEventListener("change", function () {
+      state.offset = 0;
+      loadLogs().catch(showError);
+    });
     elements.filter.addEventListener("reset", function () {
-      window.setTimeout(function () { state.offset = 0; loadLogs().catch(showError); }, 0);
+      window.setTimeout(function () {
+        elements.limitSelect.value = "20";
+        elements.limitSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      }, 0);
     });
     elements.prev.addEventListener("click", function () {
-      var limit = Number(new FormData(elements.filter).get("limit") || 50);
+      var limit = Number(elements.limitSelect.value || 20);
       state.offset = Math.max(0, state.offset - limit);
       loadLogs().catch(showError);
     });
     elements.next.addEventListener("click", function () {
-      var limit = Number(new FormData(elements.filter).get("limit") || 50);
+      var limit = Number(elements.limitSelect.value || 20);
       state.offset += limit;
       loadLogs().catch(function (error) {
         state.offset = Math.max(0, state.offset - limit);

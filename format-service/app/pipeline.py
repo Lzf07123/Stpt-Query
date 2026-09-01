@@ -1,6 +1,6 @@
 """查询编排主流程：把固定的 Dify 工作流图代码化为顺序分支。
 
-对应原图：login → 状态判断 → 获取session → /jump → 查询项目分支 → 成绩/课表
+对应原图：login → 状态判断 → 获取session → 查询项目分支 → /jump
 → 状态判断 → 渲染/分析/格式化 → (md2pdf 分支) → 合并输出。
 迁移时已修复原编排中的两处问题：
 1. 不再把登录响应拼入输出（原变量聚合器泄漏 session 的风险）；
@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import asyncio
 import time
+import re
 from typing import Any, Awaitable, Callable, Dict, Optional, Protocol
 
 import httpx
@@ -32,6 +33,13 @@ class ServiceError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+
+
+_SESSION_INVALID_RE = re.compile(
+    r"session.{0,32}(invalid|expired|失效|过期)|会话无效|会话已过期|"
+    r"学校端会话|TokenError|重新登录",
+    re.IGNORECASE,
+)
 
 
 class ServiceClient(Protocol):
@@ -128,6 +136,23 @@ class Pipeline:
             if close is not None:
                 await close()
 
+    async def _get_jump_body(
+        self,
+        session_info: Dict[str, str],
+        run_id: str = "",
+    ) -> Dict[str, Any]:
+        """免密链接是输出增强，不是查询依赖；失败只降级，不阻断数据。"""
+        try:
+            # json=1：显式取结构化响应（login_url/app_url），避免依赖纯文本返回
+            return await self._post("/jump", {
+                "session": session_info["session"], "json": "1"})
+        except ServiceError as exc:
+            LOG.warning("run=%s 获取免密链接失败，降级处理", run_id)
+            self._record_dependency(
+                "query_proxy", "degraded",
+                "免密链接获取失败，查询继续但返回内容不含跳转链接")
+            return {}
+
     async def run(
         self,
         req: WorkflowRequest,
@@ -160,22 +185,11 @@ class Pipeline:
                                                           "elapsed_ms": _elapsed(started)}})
                 return result
 
-        # 3) 获取免密登录链接（失败降级为无链接，不阻断查询）
-        jump_body: Dict[str, Any] = {}
-        try:
-            # json=1：显式取结构化响应（login_url/app_url），避免依赖纯文本返回
-            jump_body = await self._post("/jump", {"session": session_info["session"], "json": "1"})
-        except ServiceError:
-            LOG.warning("run=%s 获取免密链接失败，降级处理", run_id)
-            self._record_dependency(
-                "query_proxy", "degraded",
-                "免密链接获取失败，查询继续但返回内容不含跳转链接")
-
-        # 4) 查询项目分支
+        # 4) 查询项目分支；免密链接在数据查询成功后获取
         if req.option == "成绩":
-            result = await self._run_grades(req, session_info, jump_body, progress_cb)
+            result = await self._run_grades(req, session_info, progress_cb)
         elif req.option == "课表":
-            result = await self._run_schedule(req, session_info, jump_body, progress_cb)
+            result = await self._run_schedule(req, session_info, progress_cb)
         else:
             result = classify_error("request", body="option=%s 非法" % req.option)
 
@@ -187,7 +201,6 @@ class Pipeline:
         self,
         req: WorkflowRequest,
         session_info: Dict[str, str],
-        jump_body: Dict[str, Any],
         progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         await self._report_phase("querying", progress_cb)
@@ -198,14 +211,15 @@ class Pipeline:
             "include_all": "false",
         }
         try:
-            data = await self._post("/get_grades", payload)
+            data, retried = await self._post_with_session_recovery(
+                req, session_info, path="/get_grades", payload=payload)
         except ServiceError as exc:
             self._record_service_error(exc)
             return classify_error("grades", exc.status_code, exc.body,
                                   error_message=str(exc))
-
         if not _is_success(data):
             return classify_error("grades", body=data)
+        jump_body = await self._get_jump_body(session_info)
         if classify_empty_result("grades", data):
             # success:true 且 count:0 → 正常无数据，不算故障
             output = format_grades(data, jump_body)
@@ -236,6 +250,8 @@ class Pipeline:
             "count": data.get("count", 0),
             "response_summary": summarize_response(data),
         })
+        if retried:
+            result["meta"]["relogin_retry"] = True
         if req.check:
             result["meta"]["analysis_used"] = bool(analysis)
             usage_total = _analysis_usage(getattr(self.llm, "last_usage", None))
@@ -252,7 +268,6 @@ class Pipeline:
         self,
         req: WorkflowRequest,
         session_info: Dict[str, str],
-        jump_body: Dict[str, Any],
         progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         await self._report_phase("querying", progress_cb)
@@ -263,16 +278,66 @@ class Pipeline:
             "include_rows": "false",
         }
         try:
-            data = await self._post("/get_schedule", payload)
+            data, retried = await self._post_with_session_recovery(
+                req, session_info, path="/get_schedule", payload=payload)
         except ServiceError as exc:
             self._record_service_error(exc)
             return classify_error("schedule", exc.status_code, exc.body,
                                   error_message=str(exc))
-
         if not _is_success(data):
             return classify_error("schedule", body=data)
-        return _ok("schedule", format_schedule(data, jump_body),
-                   meta={"response_summary": summarize_response(data)})
+        jump_body = await self._get_jump_body(session_info)
+        result = _ok("schedule", format_schedule(data, jump_body),
+                     meta={"response_summary": summarize_response(data)})
+        if retried:
+            result["meta"]["relogin_retry"] = True
+        return result
+
+    async def _post_with_session_recovery(
+        self,
+        req: WorkflowRequest,
+        session_info: Dict[str, str],
+        path: str,
+        payload: Dict[str, Any],
+    ) -> tuple[Dict[str, Any], bool]:
+        """首次查询的预热竞态可能表现为 401；这里只允许一次受控重登。"""
+        retried = False
+        try:
+            data = await self._post(path, payload)
+            return data, retried
+        except ServiceError as exc:
+            if not self._can_relogin_after_session_error(req, exc):
+                raise
+
+        retried = True
+        login_payload = {"username": req.username, "password": req.password}
+        try:
+            login_body = await self._post("/login", login_payload)
+            new_session_info = extract_session(login_body)
+            if not new_session_info.get("session"):
+                raise ServiceError(200, login_body, "重新登录未返回 session")
+        except ServiceError as exc:
+            self._record_service_error(exc)
+            raise
+
+        session_info["session"] = new_session_info["session"]
+        retry_payload = {**payload, "session": session_info["session"]}
+        data = await self._post(path, retry_payload)
+        return data, retried
+
+    @staticmethod
+    def _can_relogin_after_session_error(
+        req: WorkflowRequest,
+        exc: ServiceError,
+    ) -> bool:
+        if exc.status_code != 401 or not req.password:
+            return False
+        body = exc.body if isinstance(exc.body, dict) else {"error": str(exc.body or "")}
+        message = " ".join(str(part) for part in (
+            body.get("error") or body.get("message") or "",
+            str(exc),
+        ) if part)
+        return bool(_SESSION_INVALID_RE.search(message))
 
     async def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return await self.service.post(path, payload)
