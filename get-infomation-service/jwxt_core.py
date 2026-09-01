@@ -1664,6 +1664,14 @@ def _schedule_cache_key(cache_u, sem_raw, weeks_raw, odd_raw,
         include_rows, include_details)
 
 
+def _schedule_pdf_cache_key(cache_u, sem_raw, weeks_raw, odd_raw):
+    """构造课表 PDF 缓存键；参数语义与课表查询一致，但不含渲染裁剪开关。"""
+    sem_key = (sem_raw or "").strip() or "__current__"
+    return "pdf|%s|%s|%s|%s" % (
+        _schedule_cache_owner(cache_u), sem_key,
+        _norm_weeks_key(weeks_raw), _to_int(odd_raw, 1))
+
+
 def _schedule_export_suffix(body, code, semester):
     """构造课表导出下载地址的查询串，与请求参数保持一致（code 为短时下载码，
     不包含长期有效的 session，避免令牌出现在 URL/访问日志/浏览器历史中）。
@@ -1837,6 +1845,9 @@ class Config:
     health_interval: int = 300
     grades_cache_ttl: int = 300
     schedule_cache_ttl: int = 300
+    schedule_pdf_cache_ttl: int = 300
+    schedule_pdf_cache_max_items: int = 8
+    schedule_pdf_prewarm: str = "1"
     schedule_class_share: str = "0"
     jump_cache_ttl: int = 30
     jump_code_ttl: int = 60
@@ -1889,6 +1900,10 @@ def load_config():
         health_interval=int(_env("JWXT_HEALTH_INTERVAL", "300")),
         grades_cache_ttl=int(_env("JWXT_GRADES_CACHE_TTL", "300")),
         schedule_cache_ttl=int(_env("JWXT_SCHEDULE_CACHE_TTL", "300")),
+        schedule_pdf_cache_ttl=int(_env("JWXT_SCHEDULE_PDF_CACHE_TTL", "300")),
+        schedule_pdf_cache_max_items=int(
+            _env("JWXT_SCHEDULE_PDF_CACHE_MAX_ITEMS", "8")),
+        schedule_pdf_prewarm=_env("JWXT_SCHEDULE_PDF_PREWARM", "1"),
         schedule_class_share=_env("JWXT_SCHEDULE_CLASS_SHARE", "0"),
         jump_cache_ttl=int(_env("JWXT_JUMP_CACHE_TTL", "30")),
         jump_code_ttl=int(_env("JWXT_JUMP_CODE_TTL", "60")),
