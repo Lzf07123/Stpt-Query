@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.main import Settings, create_app
+from app import metrics
 from app.querylog import JSONLFileWriter
 
 
@@ -175,10 +176,42 @@ def test_admin_metrics_reports_snapshot_and_service_status(tmp_path):
         assert set(stack) >= {
             "memory_bytes", "limit_bytes", "source", "discovered_services", "expected_services", "services",
         }
-        assert stack["expected_services"] == 3
+        assert stack["expected_services"] == 4
         assert stack["services"]["format-service"]["source"] == "cgroup"
-        assert set(stack["services"]) == {"format-service", "get-infomation-service", "frontend"}
+        assert set(stack["services"]) == {
+            "format-service", "get-infomation-service", "frontend", "redis",
+        }
         assert set(body) >= {"generated_at", "application", "services"}
         assert body["application"]["window_seconds"] == 300
         assert body["application"]["requests"] == 0
         assert body["application"]["elapsed_p95_ms"] is None
+
+
+def test_orchestration_memory_includes_redis(tmp_path, monkeypatch):
+    container_id = "a" * 64
+    process_dir = tmp_path / "100"
+    process_dir.mkdir()
+    (process_dir / "cmdline").write_bytes(b"redis-server\x00*:6379\x00")
+    (process_dir / "cgroup").write_text(f"0::/docker/{container_id}\n")
+    (process_dir / "status").write_text("VmRSS:\t2048 kB\n")
+    redis_memory = 128 * 1024 * 1024
+
+    monkeypatch.setattr(metrics, "_proc_root", lambda: tmp_path)
+    monkeypatch.setattr(metrics, "_cgroup_memory", lambda: (None, None))
+    monkeypatch.setattr(
+        metrics, "_host_cgroup_values", lambda cgroup_id: (redis_memory, redis_memory))
+
+    assert metrics._classify_orchestration_process("redis-server *:6379") == "redis"
+    result = metrics._orchestration_memory()
+
+    assert result["expected_services"] == 4
+    assert result["discovered_services"] == 1
+    assert result["services"]["redis"] == {
+        "memory_bytes": redis_memory,
+        "limit_bytes": redis_memory,
+        "process_count": 1,
+        "source": "cgroup",
+    }
+    assert result["memory_bytes"] == redis_memory
+    # format-service 样本缺失时，聚合上限不可知；Redis 自身上限必须仍可见
+    assert result["limit_bytes"] is None
