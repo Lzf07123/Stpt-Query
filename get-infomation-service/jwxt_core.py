@@ -91,7 +91,7 @@ KNOWN_PATHS = {
     "/get_grades", "/get_schedule", "/get_schedule/export",
     "/jump", "/jump/go", "/metrics",
 }
-DNS_FALLBACK_IPS = ["154.214.217.209", "221.5.10.101"]
+DNS_FALLBACK_IPS: list[str] = []
 UPSTREAM_PARALLEL = 4  # 查询时对学校上游的最大并发请求数（--upstream-parallel / JWXT_UPSTREAM_PARALLEL 可调）
 # 上游并发上限（内存模式进程级；Redis 模式下由 jwxt_redis.RedisSemaphore 替换为
 # 多副本全局共享）：所有请求共用同一信号量，避免业务线程全忙时对学校上游
@@ -1863,7 +1863,7 @@ class Config:
     public_url: str = ""
     cors_origin: str = ""
     trust_proxy: str = "0"
-    dns_fallback_ips: str = "154.214.217.209,221.5.10.101"
+    dns_fallback_ips: str = ""
     log_file: str = ""
     log_level: str = "INFO"
     # 安全可配置项（默认保持原有宽松行为，运维可按需收紧）

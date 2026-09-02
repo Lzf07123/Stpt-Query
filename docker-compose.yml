@@ -8,7 +8,7 @@ services:
         BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
         APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org/debian}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}jwxt-service:latest
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}jwxt-service:${APP_IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -58,6 +58,7 @@ services:
       - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
       - JWXT_TRUST_PROXY=0
       - JWXT_LOG_FILE=
+      - JWXT_DNS_FALLBACK_IPS=${JWXT_DNS_FALLBACK_IPS:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/health')"]
       interval: 30s
@@ -73,7 +74,7 @@ services:
       args:
         BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-format:latest
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-format:${APP_IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     deploy:
       replicas: ${FORMAT_REPLICAS:-2}
@@ -120,6 +121,7 @@ services:
       - RATE_LIMIT=${RATE_LIMIT:-30}
       # 唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
       - TRUST_PROXY=${TRUST_PROXY:-true}
+      - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
       - REDIS_URL=${REDIS_URL:-}
       - INSTANCE_ID=${INSTANCE_ID:-}
       - JOB_WORKERS=${JOB_WORKERS:-2}
@@ -159,7 +161,7 @@ services:
       context: ./frontend
       args:
         BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}nginxinc/nginx-unprivileged:1.27-alpine
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-frontend:latest
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-frontend:${APP_IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -188,7 +190,7 @@ services:
       - "${APP_PORT:-8000}:8080"
     depends_on:
       format-service:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
       interval: 30s

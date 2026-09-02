@@ -149,6 +149,10 @@
   .history-row {
     @apply flex items-end gap-3;
   }
+  .history-row .history-column {
+    flex: 1;
+    min-width: 0;
+  }
   .history-row .btn {
     min-height: 48px;
   }

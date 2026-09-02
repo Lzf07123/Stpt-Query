@@ -32,14 +32,15 @@ class FakeService:
 
 
 class FakeLLM:
-    last_usage = {"total_tokens": 46}
-
     def __init__(self) -> None:
         self.called = False
 
     async def chat(self, system, user):
         self.called = True
         return "分析正文"
+
+    async def chat_with_usage(self, system, user):
+        return await self.chat(system, user), {"total_tokens": 46}
 
 
 def _req(**kwargs):

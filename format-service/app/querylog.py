@@ -52,24 +52,11 @@ class JSONLFileWriter:
         self.collection_root = collection_root or os.path.dirname(path)
         self.last_error: str = ""
         self._lock = Lock()
+        self._descriptor: int | None = None
 
     @property
     def status(self) -> str:
         return "error" if self.last_error else "ok"
-
-    def _rotate(self) -> None:
-        if os.path.getsize(self.path) < self.max_bytes:
-            return
-        first_backup = f"{self.path}.1"
-        for index in range(self.backup_count - 1, 0, -1):
-            source = f"{self.path}.{index}"
-            target = f"{self.path}.{index + 1}"
-            if os.path.exists(source):
-                os.replace(source, target)
-        if self.backup_count == 0:
-            os.unlink(self.path)
-        else:
-            os.replace(self.path, first_backup)
 
     def write_raw(self, entry: Dict[str, Any]) -> None:
         clean = sanitize_entry(entry)
@@ -80,17 +67,21 @@ class JSONLFileWriter:
             os.makedirs(parent, mode=0o700, exist_ok=True)
             if os.path.exists(self.path):
                 self._rotate()
-            descriptor = os.open(
-                self.path,
-                os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0),
-                0o600,
-            )
-            try:
-                written = 0
-                while written < len(payload):
-                    written += os.write(descriptor, payload[written:])
-            finally:
-                os.close(descriptor)
+            if self._descriptor is None:
+                self._descriptor = os.open(
+                    self.path,
+                    os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                )
+            written = 0
+            while written < len(payload):
+                written += os.write(self._descriptor, payload[written:])
+
+    def close(self) -> None:
+        with self._lock:
+            if self._descriptor is not None:
+                os.close(self._descriptor)
+                self._descriptor = None
 
     def check_access(self) -> None:
         """启动前验证日志目录和文件打开权限。"""
@@ -103,6 +94,23 @@ class JSONLFileWriter:
                 0o600,
             )
             os.close(descriptor)
+
+    def _rotate(self) -> None:
+        if self._descriptor is not None:
+            os.close(self._descriptor)
+            self._descriptor = None
+        if os.path.getsize(self.path) < self.max_bytes:
+            return
+        first_backup = f"{self.path}.1"
+        for index in range(self.backup_count - 1, 0, -1):
+            source = f"{self.path}.{index}"
+            target = f"{self.path}.{index + 1}"
+            if os.path.exists(source):
+                os.replace(source, target)
+        if self.backup_count == 0:
+            os.unlink(self.path)
+        else:
+            os.replace(self.path, first_backup)
 
     def archive_files(self) -> list[str]:
         """返回日志文件列表：新备份在前，当前文件最后。"""

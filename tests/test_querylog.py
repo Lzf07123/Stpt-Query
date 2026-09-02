@@ -69,6 +69,21 @@ def test_jsonl_file_writer_sanitizes_and_appends(tmp_path):
         assert forbidden not in data
 
 
+def test_jsonl_file_writer_keeps_one_handle_until_closed(tmp_path):
+    path = tmp_path / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    entry = {"event": "query", "run_id": "r1", "success": True}
+
+    writer.write_raw(entry)
+    descriptor = writer._descriptor
+    writer.write_raw(entry)
+
+    assert descriptor is not None
+    assert writer._descriptor == descriptor
+    writer.close()
+    assert writer._descriptor is None
+
+
 def test_jsonl_file_writer_rotates_by_size(tmp_path):
     path = tmp_path / "queries.jsonl"
     writer = JSONLFileWriter(str(path), max_bytes=32, backup_count=2)

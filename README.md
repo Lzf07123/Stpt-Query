@@ -121,7 +121,7 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | --- | --- |
 | `event` | 固定 `query`（限流命中为 `rate_limited`） |
 | `time` / `run_id` | 发生时间（含时区）/ 贯穿本次查询的 32 位运行 ID |
-| `client_ip` | 客户端地址（`TRUST_PROXY=true` 时取 `X-Forwarded-For` 首段） |
+| `client_ip` | 客户端地址（`TRUST_PROXY=true` 且连接来源命中 `TRUSTED_PROXY_CIDRS` 时取 XFF 首段） |
 | `username` / `option` | 学号 / 查询项目 |
 | `semesters` / `weeks` / `md2pdf` / `check` | 查询参数 |
 | `analysis` / `analysis_usage` | 成绩分析是否产出内容 / 消耗的总 token 数；无用量时为 `—` |
@@ -149,8 +149,9 @@ Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生�
   生产建议经集中日志查询，不长期依赖进程内存。
 - 公开站通过 `GET /health/public` 获取本站、查询代理和学校服务的粗粒度状态；
   接口只返回状态、延迟和检查时间，不暴露内部地址、错误详情或凭据，结果缓存 15 秒。
-- `GET /service-status` 返回最近 100 次公开状态和全量历史中的「已受理次数」。启用文件
-  通道时按共享日志卷跨实例派生并按 `run_id` 去重；未启用时降级 Redis/内存最近 100 条。
+- `GET /service-status` 返回最近 100 次公开状态和聚合计数中的「已受理次数」。
+  Redis 可用时聚合值按多副本累加；启用文件通道时最多扫描
+  `SERVICE_STATUS_SCAN_LIMIT` 行来恢复最近窗口，并在降级时返回受限扫描。
   响应只包含 `success/kind/time`，不包含学号、IP、错误详情、`run_id` 等查询日志上下文。
 
 ### 管理后台
@@ -173,6 +174,8 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   CPU 趋势（每 2 秒采样一次）。
 - 管理端是单实例运维视图：读取当前副本文件和本地进程指标；Redis 仅在无文件通道时作
   历史降级源。生产多副本应继续把 stdout 交给集中平台聚合分析。
+- `GET /metrics` 输出 Prometheus 文本指标（请求状态/耗时、LLM 成功/失败、PDF 缓存命中、
+  并发等待和 Redis 降级）；它只在内网服务发现中抓取，不经 frontend 反代。
 - nginx 使用不含 query string 的隐私访问日志；携带个人票号的 `/jump/go` 与 `/get_schedule/export`
   不写 access log。边缘响应启用 CSP、反点击劫持与 Referrer 隔离，本地历史结果只保留 6 小时。
 - Compose 默认启用内存/PID 护栏：Python 服务 `256m / 64 PIDs`，Nginx `64m / 32 PIDs`，
@@ -297,6 +300,8 @@ cd frontend && npm install && npm run build
 ## Kubernetes 迁移就绪
 
 当前不随仓库附带 `k8s/` 清单，但已按未来可迁入 K8s 设计（无状态、环境变量配置、`/health/live` + `/health/ready` 探针、固定 API Token、PDF 内联无 PV）。详见 [docs/kubernetes-migration.md](docs/kubernetes-migration.md)。
+
+生产容量参数、保留周期和 Redis 备份流程见 [docs/production-operations.md](docs/production-operations.md)。
 
 ## 仓库结构
 

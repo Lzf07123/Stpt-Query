@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose
+        run: docker compose config --quiet
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build test image
+        run: docker build -q -t format-service:test format-service
+      - name: Run pytest
+        run: |
+          docker run --rm -v "$PWD":/app -w /app format-service:test \
+            sh -c "pip install -q pytest pytest-asyncio requests redis && python -m pytest -q"
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build CSS
+        working-directory: frontend
+        run: npm run build
+      - name: Verify CSP
+        run: docker build -q -t format-service:csp format-service && docker run --rm -v "$PWD":/app -w /app format-service:csp sh -c "pip install -q pytest && python -m pytest -q tests/test_frontend_csp.py tests/test_security.py::test_inline_script_hashes_are_covered_by_csp"
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pip-audit
+        run: python -m pip install pip-audit
+      - name: Audit Python dependencies
+        run: |
+          pip-audit -r format-service/requirements.txt
+          pip-audit -r get-infomation-service/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts && npm audit --audit-level=high
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build all service images
+        run: APP_IMAGE_TAG=${{ github.sha }} docker compose build get-infomation-service format-service frontend

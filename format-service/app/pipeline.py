@@ -22,6 +22,7 @@ from .llm import LLMClient, LLMError
 from .prompts import GRADE_ANALYSIS_SYSTEM, grade_analysis_user
 from .render import (assemble, extract_session, format_grades, format_schedule,
                      preprocess_grades, strip_login_note)
+from .runtime_metrics import RuntimeMetrics
 from .schema import WorkflowRequest
 from .trace import LOG, new_run_id
 
@@ -121,6 +122,7 @@ class Pipeline:
         pdf_semaphore: Optional[asyncio.Semaphore] = None,
         progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
         dependency_health: Optional[DependencyHealth] = None,
+        metrics: Optional[RuntimeMetrics] = None,
     ) -> None:
         self.service = service or HTTPServiceClient(base_url, service_token)
         self.llm = llm or LLMClient()
@@ -129,6 +131,7 @@ class Pipeline:
         self.pdf_semaphore = pdf_semaphore or asyncio.Semaphore(2)
         self.progress_cb = progress_cb
         self.dependency_health = dependency_health
+        self.metrics = metrics
 
     async def aclose(self) -> None:
         for client in (self.service, self.llm):
@@ -230,18 +233,27 @@ class Pipeline:
             # 分析功能判断 true：预处理 → LLM 分析 → 数据组装
             await self._report_phase("analyzing", progress_cb)
             parts = preprocess_grades(data, jump_body)
+            llm_wait_started = time.perf_counter()
             try:
                 async with self.llm_semaphore:
-                    analysis = await self.llm.chat(
+                    if self.metrics is not None:
+                        self.metrics.observe_concurrency_wait(
+                            "llm", time.perf_counter() - llm_wait_started)
+                    analysis, analysis_usage = await self.llm.chat_with_usage(
                         GRADE_ANALYSIS_SYSTEM,
                         grade_analysis_user(parts["table_text"], parts["stats_text"]))
                 self._record_dependency(
                     "llm", "ok", "成绩分析 LLM 最近一次调用成功")
+                if self.metrics is not None:
+                    self.metrics.observe_llm(True)
             except LLMError as exc:
                 LOG.warning("成绩分析 LLM 失败：%s，降级为纯成绩表", exc)
                 analysis = ""
+                analysis_usage = None
                 self._record_dependency(
                     "llm", "degraded", "成绩分析 LLM 不可用，已降级为纯成绩表")
+                if self.metrics is not None:
+                    self.metrics.observe_llm(False)
             output = assemble(parts["prefix_text"], analysis)
         else:
             output = format_grades(data, jump_body)
@@ -254,12 +266,16 @@ class Pipeline:
             result["meta"]["relogin_retry"] = True
         if req.check:
             result["meta"]["analysis_used"] = bool(analysis)
-            usage_total = _analysis_usage(getattr(self.llm, "last_usage", None))
+            usage_total = _analysis_usage(analysis_usage)
             if usage_total is not None:
                 result["meta"]["analysis_usage"] = usage_total
         if req.md2pdf:
             await self._report_phase("generating_pdf", progress_cb)
+            pdf_wait_started = time.perf_counter()
             async with self.pdf_semaphore:
+                if self.metrics is not None:
+                    self.metrics.observe_concurrency_wait(
+                        "pdf", time.perf_counter() - pdf_wait_started)
                 result["pdf_base64"] = await self._to_pdf_base64(strip_login_note(output))
             result["kind"] = "grades_pdf"
         return result

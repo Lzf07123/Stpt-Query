@@ -32,13 +32,14 @@ async def test_chat_uses_thinking_switch_and_system_prompt_override():
         system_prompt="环境变量提示词",
     )
     try:
-        assert await client.chat("内置提示词", "成绩数据") == "分析正文"
+        content, usage = await client.chat_with_usage("内置提示词", "成绩数据")
+        assert content == "分析正文"
     finally:
         await client.aclose()
 
     assert seen["messages"][0] == {"role": "system", "content": "环境变量提示词"}
     assert seen["thinking"] == {"type": "disabled"}
-    assert client.last_usage == {"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46}
+    assert usage == {"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46}
 
 
 @pytest.mark.asyncio
@@ -53,10 +54,11 @@ async def test_chat_keeps_builtin_prompt_and_enables_thinking():
 
     client = _client(handler, enable_thinking=True)
     try:
-        assert await client.chat("内置提示词", "成绩数据") == "分析正文"
+        content, usage = await client.chat_with_usage("内置提示词", "成绩数据")
+        assert content == "分析正文"
     finally:
         await client.aclose()
 
     assert seen["messages"][0] == {"role": "system", "content": "内置提示词"}
     assert seen["thinking"] == {"type": "enabled"}
-    assert client.last_usage is None
+    assert usage is None

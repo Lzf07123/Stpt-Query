@@ -30,10 +30,11 @@ def test_liveness():
 
 def test_readiness_without_redis():
     resp = _client().get("/health/ready")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     body = resp.json()
-    assert body["status"] == "ready"
+    assert body["status"] == "not-ready"
     assert body["redis"] == "not-configured"
+    assert body["query_proxy"] == "error"
 
 
 def test_file_log_path_is_isolated_per_instance(tmp_path):
@@ -110,6 +111,33 @@ def test_run_records_structured_query_log_without_password(caplog):
     assert data["analysis_usage"] == "—"
     assert data["response_summary"].startswith("HTTP 0；响应：")
     assert "password" not in query_records[0].getMessage()
+
+
+def test_run_internal_error_hides_exception_class():
+    class FailingPipeline:
+        async def run(self, request):
+            raise RuntimeError("SecretDiagnosis")
+
+    app = create_app(Settings(
+        _env_file=None,
+        environment="development",
+        auto_rotate_token=False,
+        api_token="test-token",
+        service_base_url="http://127.0.0.1:9",
+        service_api_token="x",
+        llm_api_key="",
+    ))
+    app.state.pipeline = FailingPipeline()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/run",
+            headers={"Authorization": "Bearer test-token"},
+            json={"username": "2023000001", "password": "pw", "option": "成绩"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "internal_error"
+    assert body["output"] == "服务内部异常，请稍后重试"
+    assert "SecretDiagnosis" not in resp.text
 
 
 def test_query_logs_requires_bearer_token():
