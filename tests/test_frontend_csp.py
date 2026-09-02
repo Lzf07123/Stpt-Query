@@ -36,6 +36,17 @@ def test_retry_buttons_use_delegated_listener_not_inline_handler():
     assert '.closest(".js-retry-query")' in index
 
 
+def test_history_scrubs_current_and_legacy_schedule_download_links():
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert r"/^\[点击下载课表（(?:PDF|Word) 文件）\]\(/.test(line)" in index
+    assert 'line.indexOf("> ⚠️ 此链接含个人令牌，请勿外传。") === 0' in index
+    assert "storeResultText(id, stripLoginNote(String(record.resultText || \"\")))" in index
+    assert "function sanitizeStoredHistory()" in index
+    assert "sanitizeStoredHistory();" in index
+
+
 def test_admin_limit_selector_lives_in_log_pagination():
     admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
     form_start = admin.index('<form class="card filter-card logs-primary" id="logFilter">')
