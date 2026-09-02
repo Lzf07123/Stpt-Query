@@ -1,11 +1,18 @@
 """首查预热的错误语义：瞬时失败必须与会话失效区分。"""
 from __future__ import annotations
 
+import json
 import requests
 import pytest
 
 import jwxt_state
-from jwxt_core import SessionInvalidError, TokenError, WarmPendingError
+from jwxt_core import (
+    SessionInvalidError,
+    TokenError,
+    WarmPendingError,
+    _mask_body,
+    _sanitize_url,
+)
 
 
 class FakeSessions:
@@ -53,3 +60,9 @@ def test_auth_warm_failure_remains_session_invalid(monkeypatch):
 
     with pytest.raises(TokenError):
         jwxt_state._ensure_warmed(sessions, "sid", record)
+
+
+def test_short_codes_are_redacted_from_logs():
+    sanitized = _sanitize_url("/get_schedule/export?code=abc123&semester=2025-2026-1")
+    assert sanitized == "/get_schedule/export?code=***&semester=2025-2026-1"
+    assert json.loads(_mask_body('{"code":"abc123"}')) == {"code": "***"}

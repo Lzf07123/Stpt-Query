@@ -1,6 +1,6 @@
 services:
       # ===== 容器 1：查询代理（本仓库自包含源码）=====
-  # 仅挂在 internal 内网，只有格式化后端可调用，不映射任何宿主端口
+  # 默认仅挂 internal 内网；显式加载 compose.direct-query.yml 才能直连
   get-infomation-service:
     build:
       context: ./get-infomation-service
@@ -67,7 +67,7 @@ services:
       retries: 3
 
   # ===== 容器 2：格式化后端（编排 + 渲染 + 分析 + PDF）=====
-  # 同时挂 web 与 internal：对外只经 nginx 反代，向内调查询代理
+  # 默认同时挂 web 与 internal；显式加载 compose.direct-format.yml 才能直连
   format-service:
     build:
       context: ./format-service
@@ -119,7 +119,7 @@ services:
       - CONCURRENCY_WAIT_TIMEOUT=${CONCURRENCY_WAIT_TIMEOUT:-2}
       - GLOBAL_CONCURRENCY=${GLOBAL_CONCURRENCY:-4}
       - RATE_LIMIT=${RATE_LIMIT:-30}
-      # 唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
+      # 默认唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
       - TRUST_PROXY=${TRUST_PROXY:-true}
       - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
       - REDIS_URL=${REDIS_URL:-}
@@ -154,7 +154,7 @@ services:
       start_period: 10s
       retries: 3
 
-  # ===== 容器 3：前端（唯一对外入口）=====
+  # ===== 容器 3：前端（默认唯一对外入口）=====
   # nginx 静态页 + 反代 /run、/service-status、/health* 到格式化后端
   frontend:
     build:

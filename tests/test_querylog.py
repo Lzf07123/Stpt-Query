@@ -6,6 +6,7 @@ import logging
 import os
 
 from app.querylog import JSONLFileWriter, _sanitize, log_query
+from app.trace import _redact_sensitive_log_message
 
 
 def test_sanitize_keeps_allowed_fields_only():
@@ -103,3 +104,9 @@ def test_jsonl_file_writer_rotates_by_size(tmp_path):
     assert len(first) == 1
     assert json.loads(active_lines[0]) == record | {"run_id": "r3"}
     assert len(active_lines) >= 1
+
+
+def test_log_filter_redacts_sensitive_query_values():
+    redacted = _redact_sensitive_log_message(
+        "GET /get_schedule/export?code=abcdef123456&semester=2025-2026-1")
+    assert redacted == "GET /get_schedule/export?code=***&semester=2025-2026-1"

@@ -30,7 +30,7 @@
 
 ## 关于
 
-本仓库把固定的「汕职院教务信息查询」Dify 工作流重写为自包含项目，由三个容器组成：`get-infomation-service`（查询代理）、`format-service`（格式化后端）与 `frontend`（前端）。查询代理源码保留在本仓库完成学校统一认证登录与教务查询；格式化后端负责编排固定工作流、成绩/课表渲染、成绩分析 LLM 与 PDF；前端托管原 dify-workflow-api 的完整页面，是唯一对外入口。
+本仓库把固定的「汕职院教务信息查询」Dify 工作流重写为自包含项目，由三个容器组成：`get-infomation-service`（查询代理）、`format-service`（格式化后端）与 `frontend`（前端）。查询代理源码保留在本仓库完成学校统一认证登录与教务查询；格式化后端负责编排固定工作流、成绩/课表渲染、成绩分析 LLM 与 PDF；前端托管原 dify-workflow-api 的完整页面，是默认唯一对外入口。
 
 | 项目 | 内容 |
 | --- | --- |
@@ -62,7 +62,7 @@
 
 ```mermaid
 flowchart LR
-    U[用户浏览器] -->|唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /run"]
+    U[用户浏览器] -->|默认唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /run"]
     F -->|web 网络| S["format-service ×2（编排 + 渲染 + 分析 + PDF）"]
     S -->|internal 内网| G["get-infomation-service（查询代理）<br/>统一认证登录 / 教务查询 / 免密跳转"]
     S -.队列/限流/查询日志.-> R["Redis AOF（不暴露宿主端口）"]
@@ -70,7 +70,40 @@ flowchart LR
     G --> U2["学校教务系统（WebVPN/CAS）"]
 ```
 
-**端口与网络隔离**：仅 `frontend` 映射宿主端口 `8000`（容器内为无特权 `8080`）；`format-service` 挂 `web` 与 `internal` 两个网络；`get-infomation-service` 只挂 `internal` 内网——宿主与前端都无法直达查询代理，只能通过格式化后端在编排内调用。
+**默认端口与网络隔离**：仅 `frontend` 映射宿主端口 `8000`（容器内为无特权 `8080`）；`format-service` 挂 `web` 与 `internal` 两个网络；`get-infomation-service` 只挂 `internal` 内网——宿主与前端都无法直达查询代理，只能通过格式化后端在编排内调用。
+
+### 容器边界与可选直连
+
+| 容器 | 职责边界 | 默认网络 | 对外契约 | 直连方式 |
+| --- | --- | --- | --- | --- |
+| `frontend` | 静态页面、CSP/安全响应头、注入网关令牌并反代 API | `web` | `APP_PORT` 上的页面和受代理 API | 默认已暴露 |
+| `format-service` | 固定工作流编排、成绩/课表渲染、LLM、PDF、日志与异步任务 | `web` + `internal` | Bearer `API_TOKEN` 保护 `/run`；`/health*` 与 `/service-status` 有公开/受限契约 | `compose.direct-format.yml` |
+| `get-infomation-service` | 学校统一认证、会话、免密跳转、原始查询与课表导出 | `internal` | Bearer `SERVICE_API_TOKEN` 保护业务接口；`/health` 为轻量健康检查 | `compose.direct-query.yml` |
+| `redis` | 共享限流、日志、队列和短期状态 | `internal` | 不提供 HTTP 契约 | 不直连 |
+
+默认编排保持“只有 frontend 暴露宿主端口”。开发、联调或单容器验收时，可用显式 override
+把查询代理或格式化后端映射到宿主回环地址；Redis 不提供直连文件。若把直连地址从
+`127.0.0.1` 改为 `0.0.0.0`，必须自行补上 TLS、防火墙、反向代理与最小来源访问控制。
+
+```bash
+# 直连格式化后端（默认 http://127.0.0.1:18080）
+docker compose -f docker-compose.yml -f compose.direct-format.yml \
+  up -d --no-deps format-service
+curl -s http://127.0.0.1:18080/health/ready
+
+# 直连查询代理（默认 http://127.0.0.1:18766）
+docker compose -f docker-compose.yml -f compose.direct-query.yml \
+  up -d --no-deps get-infomation-service
+curl -s http://127.0.0.1:18766/health
+
+# 同时打开两个后端直连
+docker compose -f docker-compose.yml \
+  -f compose.direct-format.yml -f compose.direct-query.yml up -d --build
+```
+
+直连 override 不是生产默认拓扑：format 直连强制单副本、自动关闭 `TRUST_PROXY`；query 直连自动启用
+`JWXT_ALLOW_GET_CREDENTIALS=0` 与 `JWXT_PROTECT_LOGIN_STATUS=1`。业务调用仍必须带对应
+Bearer Token；`/metrics` 等运维接口只适合回环或内网访问。
 
 ## 与 Dify 工作流的映射
 
@@ -322,7 +355,7 @@ Stpt-Query/
 │   ├── app/trace.py           # run_id 与日志
 │   ├── Dockerfile             # python:3.11-slim 镜像
 │   └── requirements.txt
-├── frontend/                  # 前端（nginx，唯一对外入口）
+├── frontend/                  # 前端（nginx，默认唯一对外入口）
 │   ├── templates/default.conf.template  # 反代 /run 等并注入令牌
 │   ├── static/index.html      # 查询页面（Li-Design 令牌重构）
 │   ├── static/style.css       # Tailwind CSS 4 编译产物（自托管）

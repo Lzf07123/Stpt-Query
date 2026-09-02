@@ -8,7 +8,7 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 
 - **get-infomation-service（查询代理）**：源码自包含于本仓库同名目录，负责学校统一认证登录、免密跳转、成绩/课表原始查询。
 - **format-service（格式化后端）**：本仓库维护，负责编排固定工作流、成绩/课表 Markdown 渲染、成绩分析 LLM、异常分类与 PDF。
-- **frontend（前端）**：Nginx 托管原 dify-workflow-api 页面，是唯一对外入口，反向代理 `/run`、`/service-status`、`/health*` 并注入网关令牌。
+- **frontend（前端）**：Nginx 托管原 dify-workflow-api 页面，是默认唯一对外入口，反向代理 `/run`、`/service-status`、`/health*` 并注入网关令牌。
 
 ## 二、事实来源
 
@@ -26,7 +26,7 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 ## 三、硬性规则
 
 1. **三容器边界不变**：查询代理源码自包含在 `get-infomation-service/`；禁止把查询代理再复制到其他服务目录，也不允许绕过本仓库恢复兄弟仓库构建依赖。
-2. **唯一对外入口**：只有 `frontend` 映射宿主端口；`format-service` 与 `get-infomation-service` 不得暴露宿主端口；查询代理仅挂 `internal` 网络。
+2. **默认唯一对外入口**：默认编排只有 `frontend` 映射宿主端口；`format-service` 与 `get-infomation-service` 不得在默认拓扑暴露宿主端口。开发/验收可显式加载 `compose.direct-*.yml` 直连，默认绑定宿主回环地址；公网直连必须先补 TLS、防火墙、访问控制与安全验收。查询代理默认仅挂 `internal` 网络。
 3. **编排层无状态**：`format-service` 不落盘业务状态；PDF 以 Base64 内联返回，不引入文件存储/PV。
 4. **令牌安全**：固定 `API_TOKEN`（前端与后端共用）；nginx 反代时注入 `Authorization`；页面不得持有令牌；日志与响应不得输出密码/session/token。
 5. **单一事实来源**：提示词只在 `prompts.py`、异常规则只在 `classifier.py`、渲染逻辑只在 `render.py`、环境变量文档只在 `.env.example`，禁止重复实现。

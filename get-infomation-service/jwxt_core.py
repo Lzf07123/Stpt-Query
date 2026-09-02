@@ -297,7 +297,7 @@ def setup_logging(level=logging.INFO, log_file=""):
             LOG.addHandler(fh)
 
 
-SENSITIVE_PARAM = ("password", "ticket", "token", "st", "session")
+SENSITIVE_PARAM = ("password", "ticket", "token", "st", "session", "code")
 
 
 def _sanitize_url(url):
@@ -323,7 +323,7 @@ def _mask_body(raw):
     out = {}
     for k, v in obj.items():
         kk = str(k).lower()
-        if kk in ("password", "passwd"):
+        if kk in ("password", "passwd", "code"):
             out[k] = "***"
         elif kk in ("session", "seesion", "token", "authorization"):
             out[k] = (str(v)[:6] + "***") if v not in (None, "") else v
