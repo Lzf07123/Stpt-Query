@@ -245,7 +245,8 @@
     var names = {
       "format-service": "编排后端",
       "get-infomation-service": "查询代理",
-      "frontend": "前端入口"
+      "frontend": "前端入口",
+      "redis": "编排 Redis"
     };
     var services = stack.services || {};
     elements.stackServices.innerHTML = Object.keys(names).map(function (key) {
