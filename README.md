@@ -62,7 +62,7 @@
 
 ```mermaid
 flowchart LR
-    U[用户浏览器] -->|默认唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /run"]
+    U[用户浏览器] -->|默认唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /run 和 /notices"]
     F -->|web 网络| S["format-service ×2（编排 + 渲染 + 分析 + PDF）"]
     S -->|internal 内网| G["get-infomation-service（查询代理）<br/>统一认证登录 / 教务查询 / 免密跳转"]
     S -.队列/限流/查询日志.-> R["Redis AOF（不暴露宿主端口）"]
@@ -77,7 +77,7 @@ flowchart LR
 | 容器 | 职责边界 | 默认网络 | 对外契约 | 直连方式 |
 | --- | --- | --- | --- | --- |
 | `frontend` | 静态页面、CSP/安全响应头、注入网关令牌并反代 API | `web` | `APP_PORT` 上的页面和受代理 API | 默认已暴露 |
-| `format-service` | 固定工作流编排、成绩/课表渲染、LLM、PDF、日志与异步任务 | `web` + `internal` | Bearer `API_TOKEN` 保护 `/run`；`/health*` 与 `/service-status` 有公开/受限契约 | `compose.direct-format.yml` |
+| `format-service` | 固定工作流编排、成绩/课表渲染、LLM、PDF、日志与异步任务 | `web` + `internal` | Bearer `API_TOKEN` 保护 `/run`、`/notices*`；`/health*` 与 `/service-status` 有公开/受限契约 | `compose.direct-format.yml` |
 | `get-infomation-service` | 学校统一认证、会话、免密跳转、原始查询与课表导出 | `internal` | Bearer `SERVICE_API_TOKEN` 保护业务接口；`/health` 为轻量健康检查 | `compose.direct-query.yml` |
 | `redis` | 共享限流、日志、队列和短期状态 | `internal` | 不提供 HTTP 契约 | 不直连 |
 
@@ -185,6 +185,8 @@ Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生�
 - `GET /service-status` 返回最近 100 次公开状态和聚合计数中的「已受理次数」。
   Redis 可用时聚合值按多副本累加；启用文件通道时最多扫描
   `SERVICE_STATUS_SCAN_LIMIT` 行来恢复最近窗口，并在降级时返回受限扫描。
+  若文件扫描到的历史总量大于 Redis 聚合值（例如聚合键丢失或部分不可用），
+  公开「已受理」统计会取文件历史结果，避免因重建容器导致计数倒退。
   响应只包含 `success/kind/time`，不包含学号、IP、错误详情、`run_id` 等查询日志上下文。
 
 ### 管理后台
@@ -213,6 +215,24 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   不写 access log。边缘响应启用 CSP、反点击劫持与 Referrer 隔离，本地历史结果只保留 6 小时。
 - Compose 默认启用内存/PID 护栏：Python 服务 `256m / 64 PIDs`，Nginx `64m / 32 PIDs`，
   并设置 `MALLOC_ARENA_MAX=2`；内存模式查询代理默认最多 1000 个会话与每类 1000 条缓存。
+
+### 全站通知
+
+首页通知条支持多条通知轮播、悬停暂停、溢出跑马灯和历史回看；后台“通知管理”可创建草稿、
+发布、下线和重新上线。通知只使用单行纯文本（最多 120 字符），公开接口不返回草稿。
+
+- 公开契约：`GET /notices/active` 返回上线通知；`GET /notices/history?limit=50`
+  返回最近下线通知。Nginx 注入公共网关令牌，浏览器不持有凭据。
+- 管理契约：`GET/POST /admin/api/notices`、`PATCH/DELETE /admin/api/notices/{id}`，
+  使用独立 `ADMIN_TOKEN`。已发布内容不可改，修订流程是下线旧通知并新建修订版；
+  只有草稿可删除。
+- 存储与降级：共享 JSONL 文件是权威存储，路径由 `NOTICE_FALLBACK_PATH` 控制；
+  写入会加共享文件锁、`fsync` 并在超过阈值后压缩。Redis 仅作为尽力同步的恢复副本，
+  Redis 异常不阻断文件写入；文件缺失时可从 Redis 重建。
+- 配额：同时上线最多 `NOTICE_ACTIVE_MAX=10` 条，历史最多保留
+  `NOTICE_HISTORY_MAX=500` 条，文件原始行数达到 `NOTICE_COMPACT_AFTER=2000` 后压缩。
+- 无状态规则例外：这是全站运营配置，不是查询业务编排状态；Compose 使用专用
+  `format-notice-fallback` 共享卷。查询业务编排本身仍不落盘、不引入文件存储。
 
 ### 课表导出提速
 
@@ -342,8 +362,9 @@ cd frontend && npm install && npm run build
 Stpt-Query/
 ├── get-infomation-service/    # 查询代理源码（登录/跳转/原始查询）
 ├── format-service/            # 格式化后端（编排 + 渲染 + 分析 + PDF）
-│   ├── app/main.py            # HTTP 层：/run /query-logs /health* /service-status
+│   ├── app/main.py            # HTTP 层：/run /notices /query-logs /health* /service-status
 │   ├── app/metrics.py         # 容器 CPU/内存/磁盘/网络资源监控
+│   ├── app/notices.py         # 全站通知文件权威存储与 Redis 恢复副本
 │   ├── app/pipeline.py        # 固定工作流编排
 │   ├── app/render.py          # 成绩/课表渲染（原代码节点移植）
 │   ├── app/classifier.py      # 确定性异常分类

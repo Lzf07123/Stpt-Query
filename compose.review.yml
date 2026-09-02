@@ -1,0 +1,7 @@
+volumes:
+  format-query-logs:
+    name: edu-query-review_format-query-logs-persistent
+  format-notice-fallback:
+    name: edu-query-review_format-notice-fallback
+  redis-data:
+    name: edu-query-review_redis-data-persistent

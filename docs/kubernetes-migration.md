@@ -8,7 +8,7 @@
 
 | 能力 | 现状 | K8s 对应 |
 |---|---|---|
-| 无状态编排层 | 业务状态在 `get-infomation-service`（Redis 共享）；本服务只落盘查询日志，服务状态是其派生视图，不落盘业务状态 | 可直接水平扩容，任意副本可调度 |
+| 无状态编排层 | 业务状态在 `get-infomation-service`（Redis 共享）；本服务只落盘查询日志和全站通知配置降级文件。查询编排不落盘业务状态 | 可直接水平扩容；通知需共享 RWX PVC，其余副本可任意调度 |
 | PDF 内联返回 | `pdf_base64` 直接放在响应里，无文件存储 | **无需 PV/PVC** |
 | 环境变量配置 | 全部配置来自 `.env`/环境变量（`Settings`） | ConfigMap + Secret 直接映射 |
 | 固定 API Token | 生产强制 `AUTO_ROTATE_TOKEN=false` + 固定 `API_TOKEN` | Secret 注入，多副本一致 |
@@ -20,6 +20,7 @@
 | 跨副本限流/状态历史 | format-service 用 `REDIS_URL` 共享固定窗口限流、历史与日志；查询代理用 `JWXT_REDIS_URL` 共享会话与缓存 | 接入托管 Redis（云 Redis / Operator） |
 | 外部依赖降级 | Redis 故障时切本地限流/历史/会话；LLM 故障返回纯表；查询代理故障返回分类错误；后台展示降级提示 | 可避免单个外部依赖导致入口整体不可用 |
 | 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 每副本 WAL + 进程内历史 + Redis（`gw:v2:query-logs`）+ `GET /query-logs`、`GET /service-status` | 服务状态由查询日志派生；采集 stdout 到集中日志；需要本地留存时只给每个 Pod 挂独立 PVC |
+| 全站通知 | 共享 JSONL 文件为权威存储，Redis 为恢复副本；`GET /notices/active`、`GET /notices/history` | 多副本挂同一 `ReadWriteMany` PVC；托管存储不支持 RWX 时改为支持 `flock` 的网络文件系统或外部配置存储 |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
 ## 二、迁入 K8s 时的映射清单（三容器 → 三个 Deployment）
@@ -27,7 +28,7 @@
 | 现状（Compose） | K8s 对象 |
 |---|---|
 | `get-infomation-service` | Deployment + Service（有状态：会话/缓存，多副本需 Redis） |
-| `format-service` | Deployment（无状态，`replicas>=2`）+ Service |
+| `format-service` | Deployment（查询编排无状态，`replicas>=2`）+ Service + 通知共享 RWX PVC |
 | `frontend` | Deployment + Service + Ingress（终止 HTTPS） |
 | `API_TOKEN` / `LLM_API_KEY` / `SERVICE_API_TOKEN` | Secret |
 | `SERVICE_BASE_URL` / `LLM_*` / `RATE_LIMIT` | ConfigMap / 环境变量 |
@@ -42,7 +43,7 @@
 
 1. **镜像治理**：三个镜像统一语义化 tag + digest，开启镜像扫描与签名。
 2. **资源规格**：`requests/limits`（CPU/内存）、`securityContext.runAsNonRoot`、
-   `readOnlyRootFilesystem`（本服务无写盘需求，可直接开）。
+  `readOnlyRootFilesystem`（本服务查询编排无写盘需求；通知挂专用 RWX PVC）。
 3. **探针参数**：liveness 建议 `initialDelaySeconds: 10, periodSeconds: 10`；
    readiness 建议 `periodSeconds: 10`，开启 `TRUST_PROXY=true` 后限流依赖 Ingress
    正确传递 `X-Forwarded-For`。

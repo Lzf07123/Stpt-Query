@@ -10,7 +10,9 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p -m 700 /var/log/edu-query \
+    && mkdir -p -m 700 /var/lib/edu-query/notices \
     && chown -R 10001:10001 /var/log/edu-query
+RUN chown -R 10001:10001 /var/lib/edu-query
 
 COPY app ./app
 RUN chown -R 10001:10001 /app

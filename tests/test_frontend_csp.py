@@ -73,4 +73,41 @@ def test_admin_orchestration_distribution_includes_redis():
     page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
 
     assert '"redis": "编排 Redis"' in script
-    assert "/admin.js?v=16" in page
+    assert "/admin.js?v=17" in page
+
+
+def test_homepage_notice_bar_and_history_are_external_scripts():
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "static" / "notice.js").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+    assert 'id="noticeBar"' in index
+    assert 'id="noticeHistoryModal"' in index
+    assert 'src="/notice.js?v=5"' in index
+    assert 'href="/style.css?v=67"' in index
+    assert 'id="noticePause"' not in index
+    assert 'id="noticePause"' not in script
+    assert "text.scrollWidth > track.clientWidth + 2" in script
+    assert "track.clientWidth - firstCharWidth - 1" in script
+    assert 'bar.classList.toggle("notice-bar-warning", item.level === "warning")' in script
+    assert "min-height: 44px;" in style
+    assert "padding: 22px 20px 0;" in style
+    assert ".notice-history-panel .modal-footer" in style
+    assert 'translateX(var(--notice-start, 100%))' in style
+    assert "transform: translateX(-100%);" in style
+
+
+def test_admin_notice_management_ui_is_wired():
+    admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    assert 'id="tabNotices"' in admin
+    assert 'id="noticesPanel"' in admin
+    assert 'noticeForm: $("noticeForm")' in script
+    assert 'async function loadNotices()' in script
+    assert 'request("notices?" + noticeQuery())' in script
+
+
+def test_public_notice_routes_are_proxied_by_frontend():
+    policy = (ROOT / "frontend" / "templates" / "default.conf.template").read_text(
+        encoding="utf-8"
+    )
+    assert "notices(?:/active|/history)" in policy

@@ -9,7 +9,8 @@
   var elements = {
     loginForm: $("loginForm"), tokenInput: $("adminToken"),
     loginMessage: $("loginMessage"), app: $("adminApp"), logout: $("logoutBtn"),
-    tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), logsPanel: $("logsPanel"),
+    tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), tabNotices: $("tabNotices"),
+    logsPanel: $("logsPanel"), noticesPanel: $("noticesPanel"),
     metricsPanel: $("metricsPanel"), filter: $("logFilter"), exportBtn: $("exportBtn"),
     filterToggle: $("filterToggle"),
     limitSelect: $("limitSelect"),
@@ -31,6 +32,14 @@
     trendMax: $("trendMax"), cpuChart: $("cpuChart"),
     trendPeak: $("trendPeak"), trendAverage: $("trendAverage"), trendSamples: $("trendSamples"),
     metricsUpdated: $("metricsUpdated"), metricsNotice: $("metricsNotice"), metricsRefresh: $("metricsRefresh"),
+    noticeForm: $("noticeForm"), noticeContent: $("noticeContent"), noticeLevel: $("noticeLevel"),
+    noticePublish: $("noticePublish"), noticeSaveDraft: $("noticeSaveDraft"),
+    noticeCancelEdit: $("noticeCancelEdit"), noticeMessage: $("noticeMessage"),
+    noticeFilter: $("noticeFilter"), noticeKeyword: $("noticeKeyword"),
+    noticeStatusFilter: $("noticeStatusFilter"), noticesBody: $("noticesBody"),
+    noticeTotal: $("noticeTotal"), noticeStorage: $("noticeStorage"),
+    noticePrev: $("noticePrevPage"), noticeNext: $("noticeNextPage"),
+    noticePageInfo: $("noticePageInfo"),
     rss: $("rssValue"), threadInfo: $("threadInfo"), disk: $("diskValue"),
     diskPath: $("diskPath"), network: $("networkValue"), uptime: $("uptimeValue"),
     services: $("serviceList"),
@@ -51,7 +60,8 @@
   var state = {
     logs: [], offset: 0, autoLogsTimer: null, autoMetricsTimer: null,
     detail: null, detailScope: "", relatedLogs: [], relatedRequest: 0,
-    metricHistory: [], metricsLoading: false
+    metricHistory: [], metricsLoading: false,
+    noticeOffset: 0, noticeLimit: 20, noticeEditingId: ""
   };
 
   function getToken() {
@@ -65,11 +75,18 @@
     } catch (e) {}
   }
 
-  async function request(path) {
+  async function request(path, options) {
+    options = options || {};
     var response;
     try {
       response = await fetch("/admin/api/" + path, {
-        headers: { Authorization: "Bearer " + getToken() },
+        method: options.method || "GET",
+        headers: Object.assign(
+          { Authorization: "Bearer " + getToken() },
+          options.body ? { "Content-Type": "application/json" } : {},
+          options.headers || {}
+        ),
+        body: options.body ? JSON.stringify(options.body) : undefined,
         cache: "no-store"
       });
     } catch (error) {
@@ -78,7 +95,7 @@
     var payload = null;
     try { payload = await response.json(); } catch (e) {}
     if (!response.ok) {
-      if (response.status === 404) throw new Error("凭据无效");
+      if (response.status === 404 && !(payload && payload.detail)) throw new Error("凭据无效");
       if (response.status === 401 || response.status === 403) throw new Error("凭据无效");
       throw new Error(payload && payload.detail ? String(payload.detail) : "请求失败");
     }
@@ -270,6 +287,159 @@
     startTimers();
   }
 
+  function showNoticeMessage(message, state) {
+    elements.noticeMessage.textContent = message;
+    elements.noticeMessage.classList.toggle("hidden", !message);
+    elements.noticeMessage.classList.toggle("notice-error", state === "error");
+    elements.noticeMessage.classList.toggle("notice-info", state !== "error");
+  }
+
+  function setNoticeLevel(level) {
+    elements.noticeLevel.value = level;
+    document.querySelectorAll(".notice-level .seg-btn").forEach(function (button) {
+      button.classList.toggle("active", button.dataset.level === level);
+    });
+  }
+
+  function resetNoticeForm() {
+    state.noticeEditingId = "";
+    elements.noticeContent.value = "";
+    setNoticeLevel("info");
+    elements.noticePublish.textContent = "发布";
+    elements.noticeSaveDraft.textContent = "存草稿";
+    elements.noticeCancelEdit.classList.add("hidden");
+    showNoticeMessage("");
+  }
+
+  function noticeQuery() {
+    var query = new URLSearchParams();
+    var keyword = elements.noticeKeyword.value.trim();
+    if (keyword) query.set("keyword", keyword);
+    if (elements.noticeStatusFilter.value) query.set("status", elements.noticeStatusFilter.value);
+    query.set("offset", String(state.noticeOffset));
+    query.set("limit", String(state.noticeLimit));
+    return query.toString();
+  }
+
+  function noticeBadge(status) {
+    var labels = { draft: "草稿", active: "已发布", archived: "已下线" };
+    var classes = { draft: "badge-muted", active: "badge-success", archived: "badge-primary" };
+    return '<i class="badge ' + (classes[status] || "badge-muted") + '">' + escapeHtml(labels[status] || status) + '</i>';
+  }
+
+  function noticeLevelBadge(level) {
+    var label = level === "warning" ? "重要" : "普通";
+    var badgeClass = level === "warning" ? "badge-warning" : "badge-primary";
+    return '<i class="badge ' + badgeClass + '">' + escapeHtml(label) + '</i>';
+  }
+
+  function noticeActionButton(label, action, id, danger) {
+    return '<button type="button" class="btn btn-ghost notice-action' + (danger ? " notice-danger" : "") + '"' +
+      ' data-action="' + action + '" data-id="' + escapeHtml(id) + '">' + escapeHtml(label) + '</button>';
+  }
+
+  function renderNotices(payload) {
+    var items = payload.notices || [];
+    elements.noticesBody.innerHTML = "";
+    if (!items.length) {
+      elements.noticesBody.innerHTML = '<tr><td colspan="7" class="empty-cell">暂无通知</td></tr>';
+    } else {
+      items.forEach(function (item) {
+        var row = document.createElement("tr");
+        var actions = "";
+        if (item.status === "draft") {
+          actions = noticeActionButton("编辑", "edit", item.id) +
+            noticeActionButton("发布", "publish", item.id) +
+            noticeActionButton("删除", "delete", item.id, true);
+        } else if (item.status === "active") {
+          actions = noticeActionButton("下线", "archive", item.id);
+        } else {
+          actions = noticeActionButton("重新上线", "publish", item.id);
+        }
+        row.innerHTML =
+          '<td class="notice-content">' + escapeHtml(item.content) + '</td>' +
+          '<td>' + noticeLevelBadge(item.level) + '</td>' +
+          '<td>' + noticeBadge(item.status) + '</td>' +
+          '<td>' + escapeHtml(formatTime(item.published_at)) + '</td>' +
+          '<td>' + escapeHtml(formatTime(item.archived_at)) + '</td>' +
+          '<td>' + escapeHtml(formatTime(item.updated_at)) + '</td>' +
+          '<td><div class="notice-actions-cell">' + actions + '</div></td>';
+        elements.noticesBody.appendChild(row);
+      });
+    }
+    elements.noticeTotal.textContent = String(payload.total);
+    var storage = payload.storage || {};
+    var redisLabels = {
+      "ok": "热备份正常", "degraded": "热备份降级",
+      "not-configured": "未启用", "unknown": "检测中"
+    };
+    elements.noticeStorage.textContent = storage.status === "ok"
+      ? "文件正常 · " + (redisLabels[storage.redis] || storage.redis)
+      : "文件异常" + (storage.last_error ? " · " + storage.last_error : "");
+    var page = Math.floor(state.noticeOffset / state.noticeLimit) + 1;
+    elements.noticePageInfo.textContent = "第 " + page + " 页";
+    elements.noticePrev.disabled = state.noticeOffset <= 0;
+    elements.noticeNext.disabled = !payload.pagination || !payload.pagination.has_more;
+  }
+
+  async function loadNotices() {
+    var payload = await request("notices?" + noticeQuery());
+    renderNotices(payload);
+  }
+
+  async function submitNotice(status) {
+    var content = elements.noticeContent.value.trim();
+    if (!content) {
+      showNoticeMessage("请输入通知内容", "error");
+      return;
+    }
+    var level = elements.noticeLevel.value;
+    if (state.noticeEditingId) {
+      await request("notices/" + state.noticeEditingId, {
+        method: "PATCH",
+        body: { content: content, level: level, status: status }
+      });
+      showNoticeMessage(status === "active" ? "修订已发布" : "草稿已保存");
+    } else {
+      await request("notices", {
+        method: "POST",
+        body: { content: content, level: level, status: status }
+      });
+      showNoticeMessage(status === "active" ? "通知已发布" : "草稿已创建");
+    }
+    resetNoticeForm();
+    state.noticeOffset = 0;
+    await loadNotices();
+  }
+
+  async function noticeAction(action, id) {
+    if (action === "edit") {
+      var row = elements.noticesBody.querySelector('[data-action="edit"][data-id="' + id + '"]');
+      var content = row ? row.closest("tr").querySelector(".notice-content").textContent : "";
+      state.noticeEditingId = id;
+      elements.noticeContent.value = content;
+      elements.noticePublish.textContent = "发布修订";
+      elements.noticeSaveDraft.textContent = "保存草稿";
+      elements.noticeCancelEdit.classList.remove("hidden");
+      elements.noticeContent.focus();
+      showNoticeMessage("正在编辑草稿");
+      return;
+    }
+    if (action === "delete") {
+      if (!window.confirm("确定删除这份草稿？")) return;
+      await request("notices/" + id, { method: "DELETE" });
+      if (state.noticeEditingId === id) resetNoticeForm();
+      showNoticeMessage("草稿已删除");
+    } else {
+      await request("notices/" + id, {
+        method: "PATCH",
+        body: { status: action === "publish" ? "active" : "archived" }
+      });
+      showNoticeMessage(action === "publish" ? "通知已上线" : "通知已下线");
+    }
+    await loadNotices();
+  }
+
   function setupCustomSelects() {
     document.querySelectorAll(".custom-select").forEach(function (control) {
       if (control.dataset.customSelectReady === "true") return;
@@ -372,13 +542,18 @@
 
   function setActiveTab(tab, reload) {
     var isMetrics = tab === "metrics";
+    var isNotices = tab === "notices";
     elements.tabMetrics.classList.toggle("active", isMetrics);
-    elements.tabLogs.classList.toggle("active", !isMetrics);
+    elements.tabLogs.classList.toggle("active", !isMetrics && !isNotices);
+    elements.tabNotices.classList.toggle("active", isNotices);
     elements.tabMetrics.setAttribute("aria-current", isMetrics ? "page" : "false");
-    elements.tabLogs.setAttribute("aria-current", !isMetrics ? "page" : "false");
+    elements.tabLogs.setAttribute("aria-current", !isMetrics && !isNotices ? "page" : "false");
+    elements.tabNotices.setAttribute("aria-current", isNotices ? "page" : "false");
     elements.metricsPanel.hidden = !isMetrics;
-    elements.logsPanel.hidden = isMetrics;
+    elements.noticesPanel.hidden = !isNotices;
+    elements.logsPanel.hidden = isMetrics || isNotices;
     if (isMetrics && reload !== false) loadMetrics().catch(function () {});
+    if (isNotices) loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
   }
 
   function stopTimers() {
@@ -866,10 +1041,53 @@
     elements.logout.addEventListener("click", function () {
       setToken(""); stopTimers(); location.reload();
     });
-    [["tabMetrics", "metrics"], ["tabLogs", "logs"]].forEach(function (pair) {
+    [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"]].forEach(function (pair) {
       $(pair[0]).addEventListener("click", function () {
         setActiveTab(pair[1]);
       });
+    });
+    document.querySelectorAll(".notice-level .seg-btn").forEach(function (button) {
+      button.addEventListener("click", function () { setNoticeLevel(button.dataset.level); });
+    });
+    document.querySelectorAll(".notice-status-filter .seg-btn").forEach(function (button) {
+      button.addEventListener("click", function () {
+        elements.noticeStatusFilter.value = button.dataset.status || "";
+        document.querySelectorAll(".notice-status-filter .seg-btn").forEach(function (item) {
+          item.classList.toggle("active", item === button);
+        });
+        state.noticeOffset = 0;
+        loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
+      });
+    });
+    elements.noticeForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      submitNotice("active").catch(function (error) { showNoticeMessage(error.message, "error"); });
+    });
+    elements.noticeSaveDraft.addEventListener("click", function () {
+      submitNotice("draft").catch(function (error) { showNoticeMessage(error.message, "error"); });
+    });
+    elements.noticeCancelEdit.addEventListener("click", resetNoticeForm);
+    elements.noticeFilter.addEventListener("submit", function (event) {
+      event.preventDefault();
+      state.noticeOffset = 0;
+      loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
+    });
+    elements.noticePrev.addEventListener("click", function () {
+      state.noticeOffset = Math.max(0, state.noticeOffset - state.noticeLimit);
+      loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
+    });
+    elements.noticeNext.addEventListener("click", function () {
+      state.noticeOffset += state.noticeLimit;
+      loadNotices().catch(function (error) {
+        state.noticeOffset = Math.max(0, state.noticeOffset - state.noticeLimit);
+        showNoticeMessage(error.message, "error");
+      });
+    });
+    elements.noticesBody.addEventListener("click", function (event) {
+      var button = event.target.closest("button[data-action]");
+      if (!button) return;
+      noticeAction(button.dataset.action, button.dataset.id)
+        .catch(function (error) { showNoticeMessage(error.message, "error"); });
     });
     elements.filterToggle.addEventListener("click", function () {
       var expanded = elements.filterToggle.getAttribute("aria-expanded") === "true";

@@ -231,6 +231,186 @@
   .notice .spinner {
     flex: none;
   }
+
+  /* ---------- 首页跑马灯通知条 ---------- */
+  .notice-bar {
+    align-items: center;
+    background: color-mix(in srgb, var(--eduquery-primary-soft) 62%, transparent);
+    border: 1px solid color-mix(in srgb, var(--eduquery-primary) 24%, transparent);
+    border-radius: 16px;
+    box-shadow: var(--shadow-sm);
+    display: grid;
+    gap: 6px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    margin: -14px auto 22px;
+    max-width: 680px;
+    min-height: 44px;
+    padding: 4px 8px;
+    width: 100%;
+  }
+
+  .notice-bar.hidden {
+    display: none;
+  }
+
+  .notice-bar-warning {
+    background: color-mix(in srgb, var(--eduquery-warning-soft) 78%, transparent);
+    border-color: color-mix(in srgb, var(--eduquery-warning) 26%, transparent);
+  }
+
+  .notice-label {
+    align-items: center;
+    color: var(--eduquery-primary);
+    display: flex;
+    flex: none;
+    padding-inline: 3px;
+  }
+
+  .notice-bar-warning .notice-label {
+    color: var(--eduquery-warning);
+  }
+
+  .notice-label svg {
+    height: 16px;
+    width: 16px;
+  }
+
+  .notice-track {
+    align-items: center;
+    display: flex;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .notice-track.is-static-list {
+    display: grid;
+    gap: 5px;
+    max-height: 92px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    white-space: normal;
+  }
+
+  .notice-text {
+    display: inline-block;
+    font-size: .84rem;
+    font-weight: 550;
+    line-height: 1.45;
+    padding-right: 3rem;
+    width: max-content;
+  }
+
+  .notice-track.is-scrolling .notice-text {
+    animation: notice-marquee var(--notice-duration, 12s) linear infinite;
+    will-change: transform;
+  }
+
+  .notice-bar:hover .notice-text,
+  .notice-bar:focus-within .notice-text {
+    animation-play-state: paused;
+  }
+
+  .notice-actions {
+    display: flex;
+    flex: none;
+    gap: 4px;
+  }
+
+  .notice-btn {
+    align-items: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: var(--eduquery-muted);
+    cursor: pointer;
+    display: inline-flex;
+    height: 32px;
+    position: relative;
+    justify-content: center;
+    width: 32px;
+  }
+
+  .notice-btn::before {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
+
+  .notice-btn:hover {
+    background: color-mix(in srgb, var(--eduquery-surface) 62%, transparent);
+    color: var(--eduquery-foreground);
+  }
+
+  .notice-btn svg {
+    height: 18px;
+    width: 18px;
+  }
+
+  @keyframes notice-marquee {
+    from {
+      transform: translateX(var(--notice-start, 100%));
+    }
+
+    to {
+      transform: translateX(-100%);
+    }
+  }
+
+  .notice-history-panel {
+    display: grid;
+    gap: 16px;
+    max-height: min(82dvh, 720px);
+    max-width: min(94vw, 680px);
+    padding: 22px 20px 0;
+    width: 680px;
+  }
+
+  .notice-history-head {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    padding-right: 36px;
+  }
+
+  .notice-history-head h2 {
+    font-size: 1.08rem;
+    margin: 0;
+  }
+
+  .notice-history-list {
+    display: grid;
+    gap: 10px;
+    max-height: min(58dvh, 520px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 20px;
+  }
+
+  .notice-history-panel .modal-footer {
+    margin: 0 -20px;
+  }
+
+  .notice-history-item {
+    background: var(--eduquery-surface-2);
+    border: 1px solid var(--eduquery-border);
+    border-radius: 12px;
+    display: grid;
+    gap: 6px;
+    padding: 12px;
+  }
+
+  .notice-history-item p {
+    color: var(--eduquery-fg);
+    font-size: .9rem;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .notice-history-item small {
+    color: var(--eduquery-muted);
+    font-size: .76rem;
+  }
 /* ---------- 后台工作台：查询日志与资源监控 ---------- */
 .admin-app[hidden],
 .admin-layout[hidden],
@@ -398,6 +578,63 @@
 
 .btn.secondary-btn:hover {
   background: color-mix(in srgb, var(--eduquery-surface-2) 72%, var(--eduquery-surface));
+}
+
+/* ---------- 后台通知管理 ---------- */
+.notice-create-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.notice-content-label {
+  display: grid;
+  gap: 6px;
+  color: var(--eduquery-muted);
+  font-size: .82rem;
+  font-weight: 600;
+}
+
+.notice-content-label .input {
+  min-height: 44px;
+  text-align: left;
+}
+
+.notice-create-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.notice-create-actions .btn {
+  min-width: 104px;
+}
+
+.notice-status-filter,
+.notice-level {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.notice-table-scroll table {
+  min-width: 880px;
+}
+
+.notice-actions-cell {
+  display: flex;
+  gap: 6px;
+}
+
+.notice-action {
+  min-height: 30px;
+  padding-inline: 9px;
+  white-space: nowrap;
+}
+
+.notice-action.notice-danger {
+  color: var(--eduquery-destructive);
 }
 
 .panel {

@@ -29,6 +29,12 @@ server {
         expires -1;
     }
 
+    # 首页 HTML 承载缓存版本号，禁止浏览器长时间保留旧入口。
+    location = / {
+        try_files /index.html =404;
+        expires epoch;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
         expires 1h;
@@ -107,7 +113,7 @@ server {
     }
 
     # 反向代理到格式化后端；令牌由服务端注入，外部请求无需携带
-    location ~ ^/(run(?:/jobs(?:/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])?)?|v1/workflows/run|service-status|health(/.*)?|jump(/.*)?|get_schedule/export)$ {
+    location ~ ^/(run(?:/jobs(?:/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])?)?|v1/workflows/run|service-status|notices(?:/active|/history)|health(/.*)?|jump(/.*)?|get_schedule/export)$ {
         proxy_pass http://format-service:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -125,5 +131,6 @@ server {
         proxy_hide_header Permissions-Policy;
         proxy_hide_header Cross-Origin-Opener-Policy;
         proxy_hide_header Content-Security-Policy;
+        expires epoch;
     }
 }
