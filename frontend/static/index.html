@@ -329,7 +329,7 @@
           skipping = false;
         }
         // 回看历史时同样隐藏课表下载链接与其令牌提示（下载码短时有效）
-        if (line.indexOf("[点击下载课表（Word 文件）](") === 0) return;
+        if (/^\[点击下载课表（(?:PDF|Word) 文件）\]\(/.test(line)) return;
         if (line.indexOf("> ⚠️ 此链接含个人令牌，请勿外传。") === 0) return;
         out.push(line);
       });
@@ -349,7 +349,7 @@
         arr.splice(dupIndex, 1);
       }
       const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      storeResultText(id, String(record.resultText || ""));
+      storeResultText(id, stripLoginNote(String(record.resultText || "")));
       arr.unshift({
         id: id,
         savedAt: Date.now(),
@@ -380,6 +380,14 @@
         setCookie(HISTORY_KEY, JSON.stringify(valid), 30);
       }
       return valid;
+    }
+
+    function sanitizeStoredHistory() {
+      pruneExpiredHistory().forEach(function (r) {
+        const raw = getResultText(r.id);
+        const clean = stripLoginNote(raw);
+        if (clean !== raw) storeResultText(r.id, clean);
+      });
     }
 
     function renderHistorySelect() {
@@ -1908,7 +1916,7 @@
       else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
     });
 
-    pruneExpiredHistory();
+    sanitizeStoredHistory();
     renderServiceStatus();
     renderHistorySelect();
     restoreUrlParams();
