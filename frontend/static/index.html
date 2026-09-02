@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=62">
+  <link rel="stylesheet" href="/style.css?v=63">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
 </head>
@@ -31,12 +31,12 @@
     <span class="tech-beam"></span>
     <span class="tech-beam tech-beam--violet"></span>
     <span class="tech-beam tech-beam--sage"></span>
-    <span class="tech-dot" style="left:14%; top:18%; --tech-dot-color:var(--eduquery-accent-aqua); animation-delay:-1.4s"></span>
-    <span class="tech-dot" style="left:78%; top:12%; --tech-dot-color:var(--eduquery-accent-ice); animation-delay:-3.2s"></span>
-    <span class="tech-dot" style="left:62%; top:30%; --tech-dot-color:var(--eduquery-accent-mint); animation-delay:-5.1s"></span>
-    <span class="tech-dot" style="left:22%; top:64%; --tech-dot-color:var(--eduquery-accent-sage); animation-delay:-0.6s"></span>
-    <span class="tech-dot" style="left:86%; top:72%; --tech-dot-color:var(--eduquery-accent-lilac); animation-delay:-2.7s"></span>
-    <span class="tech-dot" style="left:42%; top:86%; --tech-dot-color:var(--eduquery-accent-sand); animation-delay:-4.4s"></span>
+    <span class="tech-dot tech-dot-1"></span>
+    <span class="tech-dot tech-dot-2"></span>
+    <span class="tech-dot tech-dot-3"></span>
+    <span class="tech-dot tech-dot-4"></span>
+    <span class="tech-dot tech-dot-5"></span>
+    <span class="tech-dot tech-dot-6"></span>
   </div>
   <div class="page-shell" id="main">
     <div class="wrap">
@@ -139,7 +139,7 @@
             </label>
           </div>
           <div class="full history-row">
-            <div style="flex:1">
+            <div class="history-column">
               <label for="historyTrigger">历史查询结果</label>
               <div class="dropdown" id="historyDropdown">
                 <button type="button" class="dropdown-trigger" id="historyTrigger" aria-haspopup="listbox" aria-expanded="false">— 选择历史查询结果 —</button>
@@ -429,6 +429,7 @@
           resultHtml.classList.remove("hidden");
           resultBox.classList.add("hidden");
           resultHtml.innerHTML = note + renderMarkdown(stripLoginNote(text));
+          applyRenderedElementStyles(resultHtml);
         } else {
           resultHtml.classList.add("hidden");
           resultBox.classList.remove("hidden");
@@ -745,7 +746,7 @@
             : '<span class="query-step-dot"></span>';
           return [
             '<div class="query-step ', state, enterClass, '" aria-current="', ariaCurrent, '"',
-            ' style="--step-index:', wasHidden ? index : 0, '">',
+            ' data-step-index="', wasHidden ? index : 0, '">',
             dot,
             '<span class="query-step-label"></span>',
             '</div>'
@@ -753,6 +754,9 @@
         }).join("");
         progressSteps.querySelectorAll(".query-step-label").forEach(function (node, index) {
           node.textContent = steps[index].label;
+        });
+        progressSteps.querySelectorAll(".query-step").forEach(function (node, index) {
+          node.style.setProperty("--step-index", String(wasHidden ? index : 0));
         });
       }
       progressTrack.classList.remove("hidden");
@@ -847,7 +851,7 @@
       el.innerHTML =
         '<span class="toast-icon toast-icon-pop">' + icon + "</span>" +
         '<span class="toast-message">' + escapeHtml(message) + "</span>" +
-        '<span class="toast-progress" style="animation-duration: 3000ms"></span>';
+        '<span class="toast-progress"></span>';
       toastWrap.appendChild(el);
       setTimeout(function () {
         el.classList.remove("toast-enter");
@@ -908,6 +912,7 @@
         (extraHtml || "") +
         (withRetry ? '<button type="button" class="empty-state-action btn btn-primary js-retry-query">重试</button>' : "") +
         "</div>";
+      applyRenderedElementStyles(resultHtml);
       resultCard.classList.remove("fade-in");
       resultCard.classList.add("fade-in");
     }
@@ -1097,8 +1102,8 @@
             const okPct = total ? Math.round(okCount / total * 100) : 0;
             const failPct = total ? Math.round(failCount / total * 100) : 0;
             barHtml = '<div class="status-bar-mobile">' +
-              '<span class="seg-success" style="width:' + okPct + '%"></span>' +
-              '<span class="seg-fail" style="width:' + failPct + '%"></span></div>';
+              '<span class="seg-success" data-width="' + okPct + '"></span>' +
+              '<span class="seg-fail" data-width="' + failPct + '"></span></div>';
           } else {
             barHtml = '<div class="status-bar">' + segments.join("") + "</div>";
           }
@@ -1112,6 +1117,9 @@
             '<div class="status-summary">' +
             '<span class="' + availClass + '">最近 ' + total + ' 次可用性 ' +
             availability.toFixed(1) + "%</span> · " + okCount + " 成功 · " + failCount + " 失败</div>";
+          serviceStatusBox.querySelectorAll("[data-width]").forEach(function (node) {
+            node.style.width = node.dataset.width + "%";
+          });
         })
         .catch(function () {
           serviceStatusBox.classList.add("hidden");
@@ -1247,6 +1255,15 @@
       return /^\s*\|?[\s:|-]+\|?\s*$/.test(line) && line.includes("-");
     }
 
+    function applyRenderedElementStyles(root) {
+      root.querySelectorAll("[data-score]").forEach(function (node) {
+        node.style.width = node.dataset.score + "%";
+      });
+      root.querySelectorAll("[data-width]").forEach(function (node) {
+        node.style.width = node.dataset.width + "%";
+      });
+    }
+
     function renderMarkdown(text) {
       const lines = String(text).replace(/\r\n/g, "\n").split("\n");
       const html = [];
@@ -1331,7 +1348,7 @@
                   const pct = Math.min(100, Math.max(0, num));
                   return '<td data-label="' + label + '" class="' + cls + '">' +
                     renderInline(cell) +
-                    '<div class="score-bar"><i style="width:' + pct + '%"></i></div></td>';
+                    '<div class="score-bar"><i data-score="' + pct + '"></i></div></td>';
                 }
               }
               if (colIdx === typeIdx) {
@@ -1523,6 +1540,7 @@
           resultHtml.classList.remove("hidden");
           resultBox.classList.add("hidden");
           resultHtml.innerHTML = renderMarkdown(markdown);
+          applyRenderedElementStyles(resultHtml);
         } else {
           resultHtml.classList.add("hidden");
           resultBox.classList.remove("hidden");

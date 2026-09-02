@@ -827,6 +827,7 @@
   .toast-progress {
     @apply absolute bottom-0 left-0 h-0.5 w-full origin-left;
     animation-name: toast-progress;
+    animation-duration: 3s;
     animation-timing-function: linear;
     animation-fill-mode: forwards;
   }
@@ -1921,6 +1922,13 @@
   will-change: transform, opacity;
   pointer-events: none;
 }
+
+.tech-dot-1 { left: 14%; top: 18%; --tech-dot-color: var(--eduquery-accent-aqua); animation-delay: -1.4s; }
+.tech-dot-2 { left: 78%; top: 12%; --tech-dot-color: var(--eduquery-accent-ice); animation-delay: -3.2s; }
+.tech-dot-3 { left: 62%; top: 30%; --tech-dot-color: var(--eduquery-accent-mint); animation-delay: -5.1s; }
+.tech-dot-4 { left: 22%; top: 64%; --tech-dot-color: var(--eduquery-accent-sage); animation-delay: -0.6s; }
+.tech-dot-5 { left: 86%; top: 72%; --tech-dot-color: var(--eduquery-accent-lilac); animation-delay: -2.7s; }
+.tech-dot-6 { left: 42%; top: 86%; --tech-dot-color: var(--eduquery-accent-sand); animation-delay: -4.4s; }
 
 .tech-beam--violet {
   background: linear-gradient(

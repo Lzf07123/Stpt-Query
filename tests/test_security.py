@@ -72,6 +72,39 @@ def test_redis_rate_limiter_degrades_to_local_memory():
     assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 429
 
 
+def test_redis_rate_limiter_sets_ttl_atomically():
+    class AtomicRedis:
+        def __init__(self):
+            self.counts = {}
+            self.ttls = {}
+            self.eval_count = 0
+
+        async def eval(self, script, numkeys, key, seconds):
+            assert "INCR" in script
+            assert "EXPIRE" in script
+            self.eval_count += 1
+            count = self.counts.get(key, 0) + 1
+            self.counts[key] = count
+            if count == 1 or self.ttls.get(key, -2) < 0:
+                self.ttls[key] = seconds
+            return count
+
+        async def hincrby(self, key, field, amount):
+            return 1
+
+        async def aclose(self):
+            return None
+
+    fake_redis = AtomicRedis()
+    app = create_app(_cfg(rate_limit=2))
+    app.state.redis = fake_redis
+    with TestClient(app) as client:
+        assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
+        assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
+        assert fake_redis.eval_count == 2
+        assert list(fake_redis.ttls.values()) == [60]
+
+
 def test_edge_hides_sensitive_query_strings_and_sets_csp():
     config = open("frontend/templates/default.conf.template", encoding="utf-8").read()
     assert 'location = /jump/go {' in config
@@ -108,3 +141,9 @@ def test_inline_script_hashes_are_covered_by_csp():
         for script in inline_scripts:
             digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
             assert f"sha256-{digest}" in declared_hashes
+
+
+def test_csp_does_not_allow_inline_styles():
+    config = open("frontend/templates/default.conf.template", encoding="utf-8").read()
+    assert "'unsafe-inline'" not in config
+    assert "style-src 'self';" in config

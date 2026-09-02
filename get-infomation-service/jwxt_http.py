@@ -269,6 +269,8 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
             self.send_header(k, v)
         self.send_header("X-Trace-Id", getattr(self, "trace_id", "-"))
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-PDF-Cache-Hit",
+                         "1" if getattr(self, "_pdf_cache_hit", False) else "0")
         for k, v in getattr(self, "_extra_headers", []):
             self.send_header(k, v)
         self.end_headers()
@@ -277,7 +279,9 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
 
     def _ok(self):
         token = self.server.token
-        ok = not token or self.headers.get("Authorization", "") == "Bearer " + token
+        authorization = self.headers.get("Authorization", "")
+        provided = authorization[7:] if authorization.startswith("Bearer ") else ""
+        ok = not token or secrets.compare_digest(provided, token)
         if not ok:
             LOG.warning("未授权访问 path=%s client=%s",
                         urlparse(self.path).path,
@@ -287,6 +291,53 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
     def do_OPTIONS(self):
         self._begin()
         self._reply(200, {})
+
+    def _execute_data_query(self, p, session, u, pw, query):
+        """成绩/课表共用：session 查询，或密码路径登录后查询。
+
+        返回 (result, session, error_reply)；error_reply 为 None 表示已向上游
+        写出响应，或正常拿到 result。
+        """
+        if session:
+            try:
+                return query_with_session(
+                    self.server.sessions, session,
+                    query), session, None
+            except TokenError as e:
+                LOG.warning("会话无效 endpoint=%s error=%s", p, e)
+                self.server.sessions.invalidate(session)
+                return None, session, (401, {
+                    "success": False, "error": str(e),
+                    "output": "", "count": 0, "rows": [],
+                    **self._data_query_error_fields(p),
+                })
+            except WarmPendingError as e:
+                LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
+                return None, session, (503, {
+                    "success": False, "error": str(e),
+                    "error_code": "warm_pending", "retryable": True,
+                    "output": "", "count": 0, "rows": [],
+                    **self._data_query_error_fields(p),
+                })
+
+        if not self._login_rate_ok():
+            return None, session, (None, None)
+        try:
+            with self.server.login_locks.lock(u, timeout=LOGIN_LOCK_TIMEOUT):
+                session, _ = self._login_session(u, pw)
+        except LockTimeoutError:
+            LOG.warning("登录锁等待超时 endpoint=%s username=%s", p, u)
+            return None, session, (503, {
+                "success": False, "error": "登录处理繁忙，请稍后重试",
+                "output": "", "count": 0, "rows": [],
+            })
+        except Exception as e:
+            self._reply_login_error(e)
+            return None, session, (None, None)
+        return self._execute_data_query(p, session, u, pw, query)
+
+    def _data_query_error_fields(self, p):
+        return {"info": {}, "stats": None} if p == "/get_grades" else {}
 
     def _health(self, state):
         return health_payload(state, self.server)
@@ -382,6 +433,7 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                     return
                 pdf_data, sem2, metrics = self._schedule_pdf_cached(
                     session, semester, weeks, odd)
+            self._pdf_cache_hit = bool(metrics.get("pdf_cache_hit"))
             metrics["output_bytes"] = len(pdf_data)
             with self.server.state.lock:
                 self.server.state.last_real = {"at": int(time.time()),
@@ -1312,60 +1364,16 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                             return
                         self._reply(200, hit, body=cache.get_payload(ck))
                         return
-                if session:
-                    try:
-                        r = query_with_session(self.server.sessions, session, lambda uu, pp, jj: main_schedule(
-                            uu, pp, sem_raw,
-                            weeks_raw, odd_raw, j=jj,
-                            include_rows=include_rows, include_details=include_details))
-                    except TokenError as e:
-                        LOG.warning("会话无效 endpoint=%s error=%s", p, e)
-                        self.server.sessions.invalidate(session)
-                        self._reply(401, {"success": False, "error": str(e),
-                                          "output": "", "count": 0, "rows": []})
-                        return
-                    except WarmPendingError as e:
-                        LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
-                        self._reply(503, {"success": False,
-                                          "error": str(e),
-                                          "error_code": "warm_pending",
-                                          "retryable": True,
-                                          "output": "", "count": 0, "rows": []})
-                        return
-                else:
-                    if not self._login_rate_ok():
-                        return
-                    try:
-                        with self.server.login_locks.lock(u, timeout=LOGIN_LOCK_TIMEOUT):
-                            session, _ = self._login_session(u, pw)
-                    except LockTimeoutError:
-                        LOG.warning("登录锁等待超时 endpoint=%s username=%s", p, u)
-                        self._reply(503, {"success": False,
-                                          "error": "登录处理繁忙，请稍后重试",
-                                          "output": "", "count": 0, "rows": []})
-                        return
-                    except Exception as e:
-                        self._reply_login_error(e)
-                        return
-                    try:
-                        r = query_with_session(self.server.sessions, session, lambda uu, pp, jj: main_schedule(
-                            uu, pp, sem_raw,
-                            weeks_raw, odd_raw, j=jj,
-                            include_rows=include_rows, include_details=include_details))
-                    except TokenError as e:
-                        LOG.warning("会话无效 endpoint=%s error=%s", p, e)
-                        self.server.sessions.invalidate(session)
-                        self._reply(401, {"success": False, "error": str(e),
-                                          "output": "", "count": 0, "rows": []})
-                        return
-                    except WarmPendingError as e:
-                        LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
-                        self._reply(503, {"success": False,
-                                          "error": str(e),
-                                          "error_code": "warm_pending",
-                                          "retryable": True,
-                                          "output": "", "count": 0, "rows": []})
-                        return
+                r, session, error_reply = self._execute_data_query(
+                    p, session, u, pw,
+                    lambda uu, pp, jj: main_schedule(
+                        uu, pp, sem_raw, weeks_raw, odd_raw, j=jj,
+                        include_rows=include_rows, include_details=include_details))
+                if error_reply is not None:
+                    status_code, body = error_reply
+                    if status_code is not None:
+                        self._reply(status_code, body)
+                    return
             else:
                 grades_include_rows = _to_bool(b.get("include_rows", True))
                 grades_include_output = _to_bool(b.get("include_output", True))
@@ -1399,69 +1407,19 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                             LOG.warning("业务失败（负缓存命中） endpoint=%s error=%s", p, hit.get("error"))
                         self._reply(200, hit, body=cache.get_payload(ck))
                         return
-                if not session and not self._login_rate_ok():
-                    # 缓存未命中且未携带 session：即将触发完整登录，与 /login 共用登录限流
+                r, session, error_reply = self._execute_data_query(
+                    p, session, u, pw,
+                    lambda uu, pp, jj: main(
+                        uu, pp, str(b.get("semesters") or ""),
+                        grades_include_all,
+                        include_rows=grades_include_rows,
+                        include_output=grades_include_output,
+                        include_sensitive=grades_include_sensitive, j=jj))
+                if error_reply is not None:
+                    status_code, body = error_reply
+                    if status_code is not None:
+                        self._reply(status_code, body)
                     return
-                if session:
-                    try:
-                        r = query_with_session(self.server.sessions, session, lambda uu, pp, jj: main(
-                            uu, pp, str(b.get("semesters") or ""),
-                            grades_include_all,
-                            include_rows=grades_include_rows,
-                            include_output=grades_include_output,
-                            include_sensitive=grades_include_sensitive, j=jj))
-                    except TokenError as e:
-                        LOG.warning("会话无效 endpoint=%s error=%s", p, e)
-                        self.server.sessions.invalidate(session)
-                        self._reply(401, {"success": False, "error": str(e),
-                                          "output": "", "count": 0, "rows": [],
-                                          "info": {}, "stats": None})
-                        return
-                    except WarmPendingError as e:
-                        LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
-                        self._reply(503, {"success": False,
-                                          "error": str(e),
-                                          "error_code": "warm_pending",
-                                          "retryable": True,
-                                          "output": "", "count": 0, "rows": [],
-                                          "info": {}, "stats": None})
-                        return
-                else:
-                    try:
-                        with self.server.login_locks.lock(u, timeout=LOGIN_LOCK_TIMEOUT):
-                            session, _ = self._login_session(u, pw)
-                    except LockTimeoutError:
-                        LOG.warning("登录锁等待超时 endpoint=%s username=%s", p, u)
-                        self._reply(503, {"success": False,
-                                          "error": "登录处理繁忙，请稍后重试",
-                                          "output": "", "count": 0, "rows": []})
-                        return
-                    except Exception as e:
-                        self._reply_login_error(e)
-                        return
-                    try:
-                        r = query_with_session(self.server.sessions, session, lambda uu, pp, jj: main(
-                            uu, pp, str(b.get("semesters") or ""),
-                            grades_include_all,
-                            include_rows=grades_include_rows,
-                            include_output=grades_include_output,
-                            include_sensitive=grades_include_sensitive, j=jj))
-                    except TokenError as e:
-                        LOG.warning("会话无效 endpoint=%s error=%s", p, e)
-                        self.server.sessions.invalidate(session)
-                        self._reply(401, {"success": False, "error": str(e),
-                                          "output": "", "count": 0, "rows": [],
-                                          "info": {}, "stats": None})
-                        return
-                    except WarmPendingError as e:
-                        LOG.warning("会话预热未完成 endpoint=%s error=%s", p, e)
-                        self._reply(503, {"success": False,
-                                          "error": str(e),
-                                          "error_code": "warm_pending",
-                                          "retryable": True,
-                                          "output": "", "count": 0, "rows": [],
-                                          "info": {}, "stats": None})
-                        return
                 # 敏感字段（身份证/证件照）响应不缓存；失败结果仅当标记
                 # neg_cacheable（上游瞬时故障）时负缓存，凭据错误不缓存
                 if ck is not None and _cache_write_allowed(grades_include_sensitive, r):
@@ -1687,6 +1645,7 @@ class FastHandler(Handler):
         self._pending_headers = []
         self._body_chunks = []
         self._cache_hit = False
+        self._pdf_cache_hit = False
 
     def handle(self):
         """FastAPI 直接调用 do_GET/do_POST，不再需要 BaseHTTPRequestHandler 的 socket 循环。"""
@@ -1837,7 +1796,8 @@ def _token_required_for(payload):
                    credentials: HTTPAuthorizationCredentials = Security(
                        HTTPBearer(auto_error=False))):
         token = runtime.token
-        if token and (credentials is None or credentials.credentials != token):
+        if token and (credentials is None or not secrets.compare_digest(
+                credentials.credentials, token)):
             _sync_trace(request)
             LOG.warning("未授权访问 path=%s client=%s",
                         _sanitize_url(_raw_target(request)), _client_ip(request))
@@ -1854,7 +1814,8 @@ def _export_code_or_token_required(request: Request,
     token = runtime.token
     if not token:
         return
-    if credentials is not None and credentials.credentials == token:
+    if credentials is not None and secrets.compare_digest(
+            credentials.credentials, token):
         return
     if request.method == "GET" and request.query_params.get("code"):
         # 只要带 code 就放行到 handler，由 _export 返回“链接已失效”等友好错误

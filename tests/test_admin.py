@@ -72,7 +72,7 @@ def test_admin_query_logs_filters_and_paginates_file_history(tmp_path):
         assert all(key not in failed["logs"][0] for key in ("password", "token", "session"))
 
 
-def test_admin_query_logs_scans_full_file_history_by_default(tmp_path):
+def test_admin_query_logs_uses_configured_scan_limit_by_default(tmp_path):
     path = tmp_path / "queries.jsonl"
     writer = JSONLFileWriter(str(path))
     for index in range(6):
@@ -86,7 +86,7 @@ def test_admin_query_logs_scans_full_file_history_by_default(tmp_path):
         payload = client.get("/admin/api/query-logs?limit=2", headers=ADMIN).json()
         assert payload["scanned"] == 6
         assert payload["total"] == 6
-        assert payload["scan_limit"] == 0
+        assert payload["scan_limit"] == 10000
         assert payload["scan_truncated"] is False
 
         bounded = client.get("/admin/api/query-logs?limit=2&scan_limit=4",

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import heapq
+import ipaddress
 import json
 import math
 import os
@@ -17,12 +18,13 @@ import socket
 import time
 from collections import OrderedDict, deque
 from datetime import datetime
+from contextlib import asynccontextmanager
 from threading import Lock
 from typing import Any, Optional
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -34,6 +36,7 @@ from .llm import LLMClient
 from .metrics import ResourceMonitor
 from .pipeline import HTTPServiceClient, Pipeline, ServiceError
 from .querylog import JSONLFileWriter, log_query, sanitize_entry
+from .runtime_metrics import RuntimeMetrics
 from .schema import (JobSubmissionResponse, JobStatusResponse, QueryResult,
                      SessionWorkflowRequest, WorkflowRequest)
 from .trace import LOG, new_run_id, setup_logging
@@ -68,6 +71,7 @@ class Settings(BaseSettings):
     pdf_concurrency: int = 2
     rate_limit: int = 30
     trust_proxy: bool = False
+    trusted_proxy_cidrs: str = "172.16.0.0/12"
     redis_url: str = ""
     instance_id: str = ""
     history_sync_interval_seconds: float = 60.0
@@ -76,6 +80,8 @@ class Settings(BaseSettings):
     file_log_path: str = "/tmp/edu-query/queries.jsonl"
     file_log_max_bytes: int = 50 * 1024 * 1024
     file_log_backup_count: int = 7
+    service_status_scan_limit: int = 10000
+    admin_log_scan_limit: int = 10000
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8",
                                       extra="ignore")
@@ -111,6 +117,14 @@ PASSTHROUGH_ALLOWED = ("/jump/go", "/get_schedule/export")
 MAX_RATE_KEYS = 4096
 # 后台回填最多扫描的 JSONL 行数；更早日志由 stdout/集中日志平台长期保存
 MAX_HISTORY_SYNC_SCAN_LINES = 20_000
+MAX_LOG_SCAN_LIMIT = 100_000
+RATE_LIMIT_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 or redis.call('TTL', KEYS[1]) < 0 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+"""
 
 
 async def _raw_get(base_url: str, token: str, path_qs: str, timeout: float):
@@ -167,8 +181,9 @@ def _log_timestamp(item: dict) -> float:
 def _read_service_status_summary(
     writer: JSONLFileWriter,
     recent_limit: int = 100,
+    scan_limit: int = 10000,
 ) -> dict:
-    """扫描共享日志卷，返回公开状态窗口与全量已受理统计。"""
+    """扫描共享日志卷，返回公开状态窗口与窗口内受理统计。"""
     window: list[tuple[float, str, int, dict]] = []
     seen_run_ids: set[str] = set()
     accepted_total = 0
@@ -176,6 +191,8 @@ def _read_service_status_summary(
     scanned = 0
     parse_errors = 0
     for line in writer.iter_collection_recent_lines():
+        if scan_limit and scanned >= max(0, scan_limit):
+            break
         scanned += 1
         try:
             item = sanitize_entry(json.loads(line))
@@ -226,6 +243,19 @@ def _dependency_public_state(payload: dict) -> tuple[str, str, str]:
         elif redis_info.get("ok") is False:
             redis_state = "error"
     return proxy_status, school_status, redis_state
+
+
+def _parse_trusted_proxy_cidrs(value: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for part in value.split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError:
+            LOG.warning("忽略无效的编排层受信代理网段：%s", candidate)
+    return networks
 
 
 def _read_recent_file_logs(writer: JSONLFileWriter, limit: int = 100,
@@ -311,7 +341,10 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     pipeline = Pipeline(service=service, llm=llm,
                         request_timeout=cfg.request_timeout,
                         llm_semaphore=llm_slots, pdf_semaphore=pdf_slots,
-                        dependency_health=dependency_health)
+                        dependency_health=dependency_health,
+                        metrics=RuntimeMetrics())
+    metrics = pipeline.metrics
+    assert metrics is not None
     public_health_cache: dict = {"at": 0.0, "payload": None}
 
     async def _shutdown() -> None:
@@ -331,9 +364,19 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         await resource_monitor.stop()
+        if app.state.file_log_writer is not None:
+            app.state.file_log_writer.close()
         if app.state.redis is not None:
             await app.state.redis.aclose()
         await pipeline.aclose()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        await _startup()
+        try:
+            yield
+        finally:
+            await _shutdown()
 
     app = FastAPI(
         title="edu-query-app",
@@ -342,12 +385,15 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         docs_url=None if is_production else "/docs",
         redoc_url=None if is_production else "/redoc",
         openapi_url=None if is_production else "/openapi.json",
+        lifespan=lifespan,
     )
-    app.add_event_handler("shutdown", _shutdown)
     app.state.pipeline = pipeline
     app.state.api_token = api_token
     app.state.rate_limit = max(1, cfg.rate_limit)
     app.state.trust_proxy = bool(cfg.trust_proxy)
+    app.state.trusted_proxy_cidrs = _parse_trusted_proxy_cidrs(
+        cfg.trusted_proxy_cidrs)
+    app.state.metrics = metrics
     file_log_path = cfg.file_log_path.replace("{instance_id}", file_instance_id)
     if "{instance_id}" in cfg.file_log_path:
         path_prefix = cfg.file_log_path[:cfg.file_log_path.index("{instance_id}")]
@@ -392,6 +438,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     app.state.redis_history = RedisEventHistory(_redis) if _redis is not None else None
     app.state.local_history = MemoryEventHistory()
     app.state.instance_id = instance_id
+    metrics.observe_redis(False)
 
     async def _startup() -> None:
         if app.state.file_log_writer is not None:
@@ -470,7 +517,10 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
                 try:
                     await report_phase("dispatching")
+                    dispatch_wait_started = time.perf_counter()
                     async with query_slots:
+                        metrics.observe_concurrency_wait(
+                            "query", time.perf_counter() - dispatch_wait_started)
                         started_at = time.time()
                         await report_phase("querying")
                         if not await app.state.job_store.mark_running(
@@ -490,7 +540,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                     LOG.exception("异步 job=%s 执行异常", job_id)
                     result = {
                         "success": False, "kind": "internal_error", "run_id": job_id,
-                        "output": "服务内部异常：%s" % exc.__class__.__name__,
+                        "output": "服务内部异常，请稍后重试",
                         "meta": {"elapsed_ms": int((time.time() - started_at) * 1000)},
                     }
 
@@ -510,9 +560,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             app.state.job_reaper_task = asyncio.create_task(
                 reap_stale_jobs(), name="query-job-reaper")
 
-        app.add_event_handler("startup", start_job_workers)
-
-    app.add_event_handler("startup", _startup)
+        await start_job_workers()
 
     rate_hits = OrderedDict()
     rate_lock = Lock()
@@ -538,7 +586,17 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
-        response = await call_next(request)
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            metrics.observe_request(
+                getattr(request.scope.get("route", None), "path", "unmatched"),
+                500, time.perf_counter() - started)
+            raise
+        metrics.observe_request(
+            getattr(request.scope.get("route", None), "path", "unmatched"),
+            response.status_code, time.perf_counter() - started)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -559,11 +617,18 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                                 detail="admin area unavailable")
 
     def _client_ip(request: Request) -> str:
+        remote_ip = request.client.host if request.client else "unknown"
         if app.state.trust_proxy:
             forwarded = request.headers.get("x-forwarded-for")
-            if forwarded:
-                return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+            if forwarded and remote_ip != "unknown":
+                try:
+                    remote_address = ipaddress.ip_address(remote_ip)
+                except ValueError:
+                    return remote_ip
+                if any(remote_address in network
+                       for network in app.state.trusted_proxy_cidrs):
+                    return forwarded.split(",")[0].strip()
+        return remote_ip
 
     async def _check_rate_limit(ip: str) -> None:
         now = time.time()
@@ -577,22 +642,22 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             key = f"gw:rate:{digest}"
             try:
                 count = int(await asyncio.wait_for(
-                    app.state.redis.incr(key), timeout=1.5))
-                if count == 1:
-                    await asyncio.wait_for(
-                        app.state.redis.expire(key, 60), timeout=1.5)
+                    app.state.redis.eval(
+                        RATE_LIMIT_SCRIPT, 1, key, 60), timeout=1.5))
                 limited = count > limit
             except Exception as exc:
                 LOG.warning("限流后端不可用：%s", exc.__class__.__name__)
                 app.state.dependency_health.record(
                     "redis", "degraded",
                     "Redis 不可用，查询继续；限流、历史与异步任务降级")
+                metrics.observe_redis(True)
                 redis_unavailable = True
 
         if redis_unavailable:
             limited = _memory_rate_allow(ip, now, limit)
         elif app.state.redis is not None:
             app.state.dependency_health.record("redis", "ok")
+            metrics.observe_redis(False)
         if limited:
             log_query({"event": "rate_limited", "client_ip": ip,
                        "message": "rate limit exceeded"})
@@ -605,6 +670,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         entry["run_id"] = str(entry.get("run_id") or new_run_id())
         score = event_score(entry, time.time())
         app.state.local_history.add("gw:v2:query-logs", entry, entry["run_id"], score)
+        if entry.get("event") == "query":
+            await _record_service_status_count(bool(entry.get("success")))
         if app.state.file_log_writer is not None:
             app.state.file_log_writer.last_error = ""
             try:
@@ -625,6 +692,35 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                     "Redis 不可用，查询继续；限流、历史与异步任务降级")
                 LOG.warning("查询日志写入 Redis 失败：%s", exc.__class__.__name__)
         log_query(entry)
+
+    async def _record_service_status_count(success: bool) -> None:
+        if app.state.redis is None:
+            return
+        key = "gw:v2:service-status:accepted"
+        try:
+            await asyncio.wait_for(
+                app.state.redis.hincrby(key, "total", 1), timeout=1.5)
+            if success:
+                await asyncio.wait_for(
+                    app.state.redis.hincrby(key, "success", 1), timeout=1.5)
+        except Exception as exc:
+            LOG.warning("服务状态聚合计数写入失败：%s", exc.__class__.__name__)
+
+    async def _service_status_counts() -> tuple[Optional[int], Optional[int]]:
+        if app.state.redis is None:
+            return None, None
+        try:
+            counts = await asyncio.wait_for(
+                app.state.redis.hgetall("gw:v2:service-status:accepted"),
+                timeout=1.5,
+            )
+            if not counts:
+                return None, None
+            total = max(0, int(counts.get("total", 0)))
+            success = max(0, int(counts.get("success", 0)))
+            return total, min(success, total)
+        except Exception:
+            return None, None
 
     async def _recent_query_logs(limit: int = 100) -> list[dict]:
         """读取跨副本热日志；Redis 不可用时降级本实例历史。"""
@@ -781,6 +877,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         started = time.time()
         try:
             try:
+                wait_started = time.perf_counter()
                 await asyncio.wait_for(query_slots.acquire(),
                                        timeout=max(0.001, cfg.concurrency_wait_timeout))
             except asyncio.TimeoutError as exc:
@@ -799,6 +896,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="当前查询并发已达上限，请稍后再试") from exc
             try:
+                metrics.observe_concurrency_wait(
+                    "query", time.perf_counter() - wait_started)
                 try:
                     result = await asyncio.wait_for(
                         app.state.pipeline.run(body), timeout=cfg.request_timeout)
@@ -829,7 +928,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             await _record_query_log(_query_log_entry(body, client_ip, started, result, run_id))
             return QueryResult(
                 success=False, kind="internal_error", run_id=run_id,
-                output="服务内部异常：%s" % exc.__class__.__name__,
+                output="服务内部异常，请稍后重试",
                 meta={"elapsed_ms": int((time.time() - started) * 1000)})
 
     @app.get("/health/live")
@@ -837,15 +936,33 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         """K8s livenessProbe：进程存活即 200。"""
         return {"status": "ok"}
 
+    async def _probe_query_proxy() -> str:
+        """ready 探测只关心查询代理可达性，不暴露上游错误详情。"""
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.get(
+                    cfg.service_base_url.rstrip("/") + "/health",
+                    headers={"Authorization": "Bearer " + cfg.service_api_token}
+                    if cfg.service_api_token else {},
+                )
+            if response.status_code != 200:
+                return "error"
+            payload = response.json()
+            return "ok" if payload.get("status") == "ok" else "degraded"
+        except Exception:
+            return "error"
+
     @app.get("/health/ready")
     async def health_ready() -> dict:
         """K8s readinessProbe：可选依赖降级时保持 ready，避免查询中断。"""
+        query_proxy_task = asyncio.create_task(_probe_query_proxy())
         checks = {
             "config": "ok",
             "redis": "not-configured",
             "file_log": "disabled" if app.state.file_log_writer is None else "ok",
+            "file_log_last_error": "",
+            "query_proxy": "unknown",
         }
-        ready = True
         if app.state.redis is not None:
             try:
                 await app.state.redis.ping()
@@ -856,7 +973,25 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 app.state.dependency_health.record(
                     "redis", "degraded",
                     "Redis 不可用，查询继续；限流、历史与异步任务降级")
-        return {"status": "ready" if ready else "not-ready", **checks}
+        metrics.observe_redis(checks["redis"] == "degraded")
+        checks["query_proxy"] = await query_proxy_task
+        checks["file_log"] = (
+            "disabled" if app.state.file_log_writer is None
+            else app.state.file_log_writer.status
+        )
+        checks["file_log_last_error"] = (
+            app.state.file_log_writer.last_error
+            if app.state.file_log_writer is not None else ""
+        )
+        app.state.dependency_health.record("query_proxy", checks["query_proxy"])
+        ready = checks["query_proxy"] != "error"
+        payload = {"status": "ready" if ready else "not-ready", **checks}
+        return JSONResponse(status_code=503 if not ready else 200, content=payload)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def prometheus_metrics() -> Response:
+        """Prometheus 抓取端点；由内网网络/服务发现访问，不经 frontend 反代。"""
+        return Response(content=metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
     @app.get("/health")
     async def health() -> dict:
@@ -1006,6 +1141,10 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
         writer = app.state.file_log_writer
         parse_errors = 0
+        effective_scan_limit = min(
+            scan_limit if scan_limit > 0 else max(1, cfg.admin_log_scan_limit),
+            MAX_LOG_SCAN_LIMIT,
+        )
         if writer is not None:
             source = "file"
 
@@ -1015,7 +1154,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 seen_run_ids: set[str] = set()
                 seen = 0
                 for line in writer.iter_collection_recent_lines():
-                    if scan_limit and seen >= scan_limit:
+                    if seen >= effective_scan_limit:
                         break
                     seen += 1
                     try:
@@ -1041,7 +1180,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 snapshot = await asyncio.wait_for(
                     app.state.redis_history.recent(
                         "gw:v2:query-logs", "gw:query-logs",
-                        min(100, scan_limit) if scan_limit else 100),
+                        min(100, effective_scan_limit)),
                     timeout=1.5)
             except Exception as exc:
                 LOG.warning("管理端查询日志读取 Redis 失败：%s", exc.__class__.__name__)
@@ -1065,8 +1204,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             "logs": page,
             "total": len(entries),
             "scanned": scanned,
-            "scan_limit": scan_limit,
-            "scan_truncated": bool(scan_limit and scanned >= scan_limit),
+            "scan_limit": effective_scan_limit,
+            "scan_truncated": scanned >= effective_scan_limit,
             "source": source,
             "parse_errors": parse_errors,
             "stats": {
@@ -1189,9 +1328,13 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             LOG.warning("透传上游失败 path=%s err=%s", path, exc.__class__.__name__)
             raise HTTPException(status_code=502, detail="上游服务不可用")
         headers = {}
-        for name in ("Content-Type", "Content-Disposition", "Location", "Cache-Control"):
+        for name in ("Content-Type", "Content-Disposition", "Location",
+                     "Cache-Control", "X-PDF-Cache-Hit"):
             if name in upstream.headers:
                 headers[name] = upstream.headers[name]
+        if path.split("?")[0] == "/get_schedule/export" and upstream.status_code == 200:
+            metrics.observe_pdf_cache(
+                upstream.headers.get("X-PDF-Cache-Hit", "0") == "1")
         return Response(content=upstream.content, status_code=upstream.status_code,
                         headers=headers)
 
@@ -1211,25 +1354,38 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     ) -> dict:
         """返回最近 100 次公开状态与全量已受理统计。"""
         writer = app.state.file_log_writer
+        aggregate_total, aggregate_success = await _service_status_counts()
         if writer is not None:
             scan = await asyncio.to_thread(
-                _read_service_status_summary, writer)
+                _read_service_status_summary, writer, 100,
+                cfg.service_status_scan_limit)
             items = scan["items"]
-            accepted_total = scan["accepted_total"]
-            accepted_success = scan["accepted_success"]
+            accepted_total = (
+                aggregate_total if aggregate_total is not None
+                else scan["accepted_total"])
+            accepted_success = (
+                aggregate_success if aggregate_success is not None
+                else scan["accepted_success"])
             source = "file"
             scanned = scan["scanned"]
             parse_errors = scan["parse_errors"]
+            scan_limit = cfg.service_status_scan_limit
         else:
             raw_items = await _recent_query_logs(limit=100)
             all_items = [view for view in map(_service_status_item, raw_items)
                          if view is not None]
             items = all_items
-            accepted_total = len(all_items)
-            accepted_success = sum(1 for view in all_items if view["success"])
+            if aggregate_total is not None:
+                accepted_total = aggregate_total
+                accepted_success = aggregate_success or 0
+            else:
+                accepted_total = len(all_items)
+                accepted_success = sum(
+                    1 for view in all_items if view["success"])
             source = "redis" if app.state.redis_history is not None else "memory"
             scanned = len(raw_items)
             parse_errors = 0
+            scan_limit = cfg.service_status_scan_limit
 
         payload = _service_status_payload(items)
         payload.update({
@@ -1238,6 +1394,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             "accepted_failure": accepted_total - accepted_success,
             "source": source,
             "scanned": scanned,
+            "scan_limit": scan_limit,
+            "scan_truncated": bool(writer and scanned >= scan_limit),
             "parse_errors": parse_errors,
         })
         return payload

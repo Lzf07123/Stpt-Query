@@ -802,7 +802,7 @@ class RedisKeyedLocks:
             try:
                 pipe = client.pipeline()
                 pipe.watch(key)
-                if _b(pipe.get(key)) != token:
+                if not secrets.compare_digest(_b(pipe.get(key)), token):
                     pipe.unwatch()
                     return
                 pipe.multi()

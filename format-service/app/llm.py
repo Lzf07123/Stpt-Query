@@ -5,7 +5,7 @@ LLM_BASE_URL/LLM_MODEL 可切换任意 OpenAI 兼容供应商，不依赖供应�
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -37,17 +37,22 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.enable_thinking = enable_thinking
         self.system_prompt = system_prompt.strip()
-        self.last_usage: Optional[Dict[str, Any]] = None
         self.client = httpx.AsyncClient(timeout=timeout, transport=transport)
 
     async def aclose(self) -> None:
         await self.client.aclose()
 
     async def chat(self, system: str, user: str) -> str:
-        """调用 chat/completions，返回纯文本内容。"""
+        """调用 chat/completions，只返回纯文本内容。"""
+        content, _ = await self.chat_with_usage(system, user)
+        return content
+
+    async def chat_with_usage(
+        self, system: str, user: str,
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """调用 chat/completions，请求局部返回内容与 usage。"""
         if not self.api_key:
             raise LLMError("LLM_API_KEY 未配置")
-        self.last_usage = None
         effective_system = self.system_prompt or system
         payload: Dict[str, Any] = {
             "model": self.model,
@@ -78,5 +83,4 @@ class LLMClient:
         except (KeyError, IndexError, ValueError) as exc:
             raise LLMError("LLM 响应缺少 choices[0].message.content") from exc
         usage = response_payload.get("usage")
-        self.last_usage = usage if isinstance(usage, dict) else None
-        return str(content or "").strip()
+        return str(content or "").strip(), usage if isinstance(usage, dict) else None

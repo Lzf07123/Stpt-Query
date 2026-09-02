@@ -19,7 +19,7 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-CuiBh61aS0QMjNZpnt4If4kDCSmsx4XSZ/OE4EOCZe8=' 'sha256-VQH/bITbz+z5vG3I3s0gEk3noYhyOPcV6A26sL/OD7w=' 'sha256-y8JRKoR5pl+X52aZ3ZYKWOSTroVbem8eD1908CUt0to='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-CuiBh61aS0QMjNZpnt4If4kDCSmsx4XSZ/OE4EOCZe8=' 'sha256-Eo4PP1PRQqry0mZPN7tonMa9QvHpDPK2u7S7RAIwXfY=' 'sha256-y8JRKoR5pl+X52aZ3ZYKWOSTroVbem8eD1908CUt0to='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
 
     root /usr/share/nginx/html;
     index index.html;
@@ -38,6 +38,10 @@ server {
         root /usr/share/nginx/html;
         try_files /admin.html =404;
         add_header Cache-Control "no-store" always;
+    }
+
+    location = /metrics {
+        return 404;
     }
 
     # 管理端浏览器凭据必须原样透传；这里禁止服务端注入公共网关令牌。
@@ -60,7 +64,7 @@ server {
     location = /jump/go {
         access_log off;
         # 桥接页是一次性内联脚本；精确哈希避免继承静态站点 CSP 后脚本被拦截。
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-OH8gUQ7Q9SYCDbphqBc7Cs4B7CWHxFl43qPdr39Enns='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-OH8gUQ7Q9SYCDbphqBc7Cs4B7CWHxFl43qPdr39Enns='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
         proxy_pass http://format-service:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
