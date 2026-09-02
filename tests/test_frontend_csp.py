@@ -66,3 +66,11 @@ def test_admin_limit_selector_lives_in_log_pagination():
     assert 'limitSelect: $("limitSelect")' in script
     assert "elements.filter.elements.limit" not in script
     assert 'new FormData(elements.filter).get("limit")' not in script
+
+
+def test_admin_orchestration_distribution_includes_redis():
+    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+
+    assert '"redis": "编排 Redis"' in script
+    assert "/admin.js?v=16" in page
