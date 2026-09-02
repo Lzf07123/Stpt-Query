@@ -174,7 +174,7 @@ class _FakeUpstream:
 def test_jump_passthrough_forwards_and_keeps_token(monkeypatch):
     captured = {}
 
-    async def fake_raw(base_url, token, path_qs, timeout):
+    async def fake_raw(base_url, token, path_qs, timeout, client):
         captured["base_url"] = base_url
         captured["token"] = token
         captured["path_qs"] = path_qs
@@ -191,7 +191,7 @@ def test_jump_passthrough_forwards_and_keeps_token(monkeypatch):
 
 
 def test_schedule_export_passthrough_copies_disposition(monkeypatch):
-    async def fake_raw(base_url, token, path_qs, timeout):
+    async def fake_raw(base_url, token, path_qs, timeout, client):
         return _FakeUpstream(b"DOCBINARY", 200, {
             "Content-Type": "application/msword",
             "Content-Disposition": "attachment; filename=\"schedule.doc\"",

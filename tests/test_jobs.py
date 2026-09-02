@@ -20,21 +20,71 @@ class _FakeLock:
 class _FakePipeline:
     def __init__(self, redis):
         self.redis = redis
+        self.operations = []
 
     def set(self, key, value, ex=None):
-        self.redis.data[key] = value
+        self.operations.append(("set", key, value, ex))
 
     def zadd(self, key, mapping):
-        self.redis.zsets.setdefault(key, {}).update(mapping)
+        self.operations.append(("zadd", key, mapping))
+
+    def get(self, key):
+        self.operations.append(("get", key))
+
+    def zrank(self, key, member):
+        self.operations.append(("zrank", key, member))
+
+    def delete(self, *keys):
+        self.operations.append(("delete", keys))
+
+    def zrem(self, key, member):
+        self.operations.append(("zrem", key, member))
 
     async def execute(self):
-        return []
+        self.redis.pipeline_runs.append(list(self.operations))
+        results = []
+        for operation in self.operations:
+            results.append(self._apply(operation))
+        self.operations.clear()
+        return results
+
+    def _apply(self, operation):
+        name = operation[0]
+        if name == "set":
+            _, key, value, _ex = operation
+            self.redis.data[key] = value
+            return "OK"
+        if name == "zadd":
+            _, key, mapping = operation
+            self.redis.zsets.setdefault(key, {}).update(mapping)
+            return 1
+        if name == "get":
+            return self.redis.data.get(operation[1])
+        if name == "zrank":
+            members = sorted(
+                self.redis.zsets.get(operation[1], {}),
+                key=self.redis.zsets[operation[1]].get,
+            )
+            try:
+                return members.index(operation[2])
+            except ValueError:
+                return None
+        if name == "delete":
+            for key in operation[1]:
+                self.redis.data.pop(key, None)
+            return len(operation[1])
+        if name == "zrem":
+            key, member = operation[1:]
+            self.redis.zsets.setdefault(key, {}).pop(member, None)
+            return 1
+        return None
 
 
 class _FakeRedis:
     def __init__(self):
         self.data = {}
         self.zsets = {}
+        self.pipeline_runs = []
 
     def lock(self, *args, **kwargs):
         return _FakeLock()
@@ -137,6 +187,23 @@ async def test_failure_preserves_last_reached_phase():
     assert status.state == "failed"
     assert status.phase == "querying"
     assert status.phase_label == "查询成绩/课表"
+
+
+async def test_status_and_complete_use_redis_pipelines():
+    request = SessionWorkflowRequest(
+        username="2023000001", password="secret-password", option="成绩")
+    redis = _FakeRedis()
+    store = JobStore(redis)
+    job_id, _, _ = await store.enqueue(
+        request, "short-lived-session", "127.0.0.1", 1, 900)
+
+    status = await store.status(job_id)
+    assert status is not None and status.position == 1
+    await store.complete(job_id, {"success": True, "kind": "grades"}, 900)
+
+    assert len(redis.pipeline_runs) >= 3
+    final_status = await store.status(job_id)
+    assert final_status is not None and final_status.state == "success"
 
 
 async def test_enqueue_respects_pending_limit():

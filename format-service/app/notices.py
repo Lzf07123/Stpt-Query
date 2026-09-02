@@ -5,6 +5,7 @@ import asyncio
 import fcntl
 import json
 import os
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -120,7 +121,8 @@ class NoticeStore:
     """JSONL 是唯一权威来源；Redis 仅在文件成功写入后尽力镜像。"""
 
     def __init__(self, path: str, redis: Any = None, max_active: int = 10,
-                 max_history: int = 500, compact_after: int = 2000) -> None:
+                 max_history: int = 500, compact_after: int = 2000,
+                 cache_seconds: float = 5.0) -> None:
         self.path = Path(path)
         self.lock_path = Path(str(self.path) + ".lock")
         self.redis = redis
@@ -133,6 +135,9 @@ class NoticeStore:
         self.last_error = ""
         self.redis_status = "not-configured" if redis is None else "unknown"
         self._state_signature: tuple[int, int] | None = None
+        self.redis_dirty = self.redis is not None
+        self._cache_loaded_at = 0.0
+        self._cache_seconds = max(0.0, float(cache_seconds))
 
     async def startup(self) -> None:
         await self.initialize()
@@ -180,11 +185,20 @@ class NoticeStore:
         self._prune_history()
 
     def _read_shared(self) -> None:
+        signature = self._stat_signature()
+        if (
+            self._cache_seconds > 0
+            and self._cache_loaded_at > 0
+            and time.monotonic() - self._cache_loaded_at < self._cache_seconds
+            and signature == self._state_signature
+        ):
+            return
         self._ensure_directory()
         with self.lock_path.open("a+", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
             try:
                 self._refresh()
+                self._cache_loaded_at = time.monotonic()
                 self.last_error = ""
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -203,10 +217,6 @@ class NoticeStore:
                 handle.write(append_record.model_dump_json() + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-
-        state = self._read_file()
-        if len(state.records) >= self.compact_after:
-            self._compact_locked(state.records)
 
     def _compact_locked(self, records: dict[str, NoticeRecord]) -> None:
         temporary = self.path.with_name(self.path.name + ".tmp")
@@ -231,6 +241,8 @@ class NoticeStore:
                 else:
                     self._write_records(records, record)
                 self.records = records
+                self._state_signature = None
+                self._cache_loaded_at = 0.0
                 return record
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -279,10 +291,14 @@ class NoticeStore:
                 pipeline.hset(NOTICE_REDIS_KEY, item.id, item.model_dump_json())
             await asyncio.wait_for(pipeline.execute(), timeout=1.5)
             self.redis_status = "ok"
+            self.redis_dirty = False
         except Exception as exc:
             self.redis_status = "degraded"
+            self.redis_dirty = True
 
     async def sync_redis(self) -> None:
+        if self.redis is None or not self.redis_dirty:
+            return
         await self._sync_redis()
 
     async def _after_write(self, record: NoticeRecord) -> NoticeRecord:

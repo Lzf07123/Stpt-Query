@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     service_api_token: str = ""
     service_timeout: float = 60.0
     request_timeout: float = 100.0
+    resource_monitor_interval_seconds: float = 5.0
+    resource_monitor_history_size: int = 90
     concurrency_wait_timeout: float = 2.0
     global_concurrency: int = 4
     job_workers: int = 2
@@ -78,6 +80,7 @@ class Settings(BaseSettings):
     instance_id: str = ""
     history_sync_interval_seconds: float = 60.0
     admin_token: str = ""
+    service_status_cache_seconds: float = 3.0
     file_log_enabled: bool = True
     file_log_path: str = "/tmp/edu-query/queries.jsonl"
     file_log_max_bytes: int = 50 * 1024 * 1024
@@ -133,13 +136,17 @@ return count
 """
 
 
-async def _raw_get(base_url: str, token: str, path_qs: str, timeout: float):
+async def _raw_get(base_url: str, token: str, path_qs: str, timeout: float,
+                   client: Optional[httpx.AsyncClient] = None):
     """向上游查询代理转发 GET 并原样返回（不解析、不重定向）。"""
     headers = {}
     if token:
         headers["Authorization"] = "Bearer " + token
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-        return await client.get(base_url.rstrip("/") + path_qs, headers=headers)
+    if client is None:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as shared:
+            client = shared
+    return await client.get(
+        base_url.rstrip("/") + path_qs, headers=headers, timeout=timeout)
 
 
 def _public_dependency(status: str, latency_ms: int | None = None,
@@ -185,6 +192,17 @@ def _accepted_status_counts(
     if aggregate_total is not None and aggregate_total >= scan_total:
         return aggregate_total, min(aggregate_success or 0, aggregate_total)
     return scan_total, scan_success
+
+
+def _jsonl_signature(path: str | None) -> tuple[int, int] | None:
+    """用纳秒 mtime + size 判断 JSONL 是否可能已变化。"""
+    if not path:
+        return None
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
 
 
 def _log_timestamp(item: dict) -> float:
@@ -364,6 +382,15 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     metrics = pipeline.metrics
     assert metrics is not None
     public_health_cache: dict = {"at": 0.0, "payload": None}
+    service_status_cache: dict = {
+        "at": 0.0, "payload": None, "aggregate_total": None,
+        "aggregate_success": None, "file_signature": None,
+    }
+    upstream_client = httpx.AsyncClient(
+        timeout=cfg.service_timeout,
+        limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+        follow_redirects=False,
+    )
 
     async def _shutdown() -> None:
         for task in getattr(app.state, "job_worker_tasks", []):
@@ -391,6 +418,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             app.state.file_log_writer.close()
         if app.state.redis is not None:
             await app.state.redis.aclose()
+        await upstream_client.aclose()
         await pipeline.aclose()
 
     @asynccontextmanager
@@ -434,8 +462,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     app.state.file_log_writer = file_log_writer
     resource_monitor = ResourceMonitor(
         log_path=file_log_path,
-        interval=2.0,
-        history_size=150,
+        interval=cfg.resource_monitor_interval_seconds,
+        history_size=cfg.resource_monitor_history_size,
     )
     app.state.resource_monitor = resource_monitor
     app.state.dependency_health = dependency_health
@@ -460,6 +488,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     app.state.job_store = JobStore(_redis) if _redis is not None else None
     app.state.redis_history = RedisEventHistory(_redis) if _redis is not None else None
     app.state.local_history = MemoryEventHistory()
+    app.state.history_dirty = True
+    app.state.service_status_cache = service_status_cache
     app.state.instance_id = instance_id
     app.state.notice_store = NoticeStore(
         path=cfg.notice_fallback_path,
@@ -489,6 +519,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             except Exception as exc:
                 LOG.warning("查询历史文件同步失败：%s",
                             exc.__class__.__name__)
+            app.state.history_dirty = False
 
         if app.state.redis is None:
             return
@@ -501,12 +532,13 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         async def sync_history_periodically() -> None:
             while True:
                 await asyncio.sleep(max(1.0, cfg.history_sync_interval_seconds))
-                if app.state.file_log_writer is None:
+                if app.state.file_log_writer is None or not app.state.history_dirty:
                     continue
                 try:
                     await _sync_history_from_file(
                         app.state.file_log_writer, app.state.local_history,
                         app.state.redis_history)
+                    app.state.history_dirty = False
                 except Exception as exc:
                     LOG.warning("查询历史后台回填失败：%s", exc.__class__.__name__)
 
@@ -516,6 +548,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         async def sync_notice_backup() -> None:
             while True:
                 await asyncio.sleep(max(10.0, cfg.history_sync_interval_seconds))
+                if not app.state.notice_store.redis_dirty:
+                    continue
                 try:
                     await app.state.notice_store.sync_redis()
                 except Exception:
@@ -729,6 +763,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                     timeout=1.5)
                 app.state.dependency_health.record("redis", "ok")
             except Exception as exc:
+                app.state.history_dirty = True
                 app.state.dependency_health.record(
                     "redis", "degraded",
                     "Redis 不可用，查询继续；限流、历史与异步任务降级")
@@ -740,11 +775,11 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             return
         key = "gw:v2:service-status:accepted"
         try:
-            await asyncio.wait_for(
-                app.state.redis.hincrby(key, "total", 1), timeout=1.5)
+            pipeline = app.state.redis.pipeline(transaction=True)
+            pipeline.hincrby(key, "total", 1)
             if success:
-                await asyncio.wait_for(
-                    app.state.redis.hincrby(key, "success", 1), timeout=1.5)
+                pipeline.hincrby(key, "success", 1)
+            await asyncio.wait_for(pipeline.execute(), timeout=1.5)
         except Exception as exc:
             LOG.warning("服务状态聚合计数写入失败：%s", exc.__class__.__name__)
 
@@ -981,12 +1016,12 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     async def _probe_query_proxy() -> str:
         """ready 探测只关心查询代理可达性，不暴露上游错误详情。"""
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                response = await client.get(
-                    cfg.service_base_url.rstrip("/") + "/health",
-                    headers={"Authorization": "Bearer " + cfg.service_api_token}
-                    if cfg.service_api_token else {},
-                )
+            response = await upstream_client.get(
+                cfg.service_base_url.rstrip("/") + "/health",
+                headers={"Authorization": "Bearer " + cfg.service_api_token}
+                if cfg.service_api_token else {},
+                timeout=2.0,
+            )
             if response.status_code != 200:
                 return "error"
             payload = response.json()
@@ -1070,12 +1105,12 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         proxy_latency: int | None = None
         school_latency: int | None = None
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(
-                    cfg.service_base_url.rstrip("/") + "/health",
-                    headers={"Authorization": "Bearer " + cfg.service_api_token}
-                    if cfg.service_api_token else {},
-                )
+            response = await upstream_client.get(
+                cfg.service_base_url.rstrip("/") + "/health",
+                headers={"Authorization": "Bearer " + cfg.service_api_token}
+                if cfg.service_api_token else {},
+                timeout=5.0,
+            )
             proxy_latency = int((time.perf_counter() - started) * 1000)
             if response.status_code == 200:
                 upstream = response.json()
@@ -1365,7 +1400,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         qs = request.url.query
         try:
             upstream = await _raw_get(cfg.service_base_url, cfg.service_api_token,
-                                      path + ("?" + qs if qs else ""), cfg.service_timeout)
+                                      path + ("?" + qs if qs else ""),
+                                      cfg.service_timeout, upstream_client)
         except httpx.HTTPError as exc:
             LOG.warning("透传上游失败 path=%s err=%s", path, exc.__class__.__name__)
             raise HTTPException(status_code=502, detail="上游服务不可用")
@@ -1396,7 +1432,19 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     ) -> dict:
         """返回最近 100 次公开状态与全量已受理统计。"""
         writer = app.state.file_log_writer
+        now = time.monotonic()
         aggregate_total, aggregate_success = await _service_status_counts()
+        current_signature = _jsonl_signature(writer.path if writer else None)
+        if (
+            writer is not None
+            and cfg.service_status_cache_seconds > 0
+            and service_status_cache["payload"] is not None
+            and now - service_status_cache["at"] < cfg.service_status_cache_seconds
+            and service_status_cache["aggregate_total"] == aggregate_total
+            and service_status_cache["aggregate_success"] == aggregate_success
+            and service_status_cache["file_signature"] == current_signature
+        ):
+            return service_status_cache["payload"]
         if writer is not None:
             scan = await asyncio.to_thread(
                 _read_service_status_summary, writer, 100,
@@ -1427,6 +1475,13 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             scan_limit = cfg.service_status_scan_limit
 
         payload = _service_status_payload(items)
+        if writer is not None:
+            service_status_cache.update({
+                "at": time.monotonic(), "payload": payload,
+                "aggregate_total": aggregate_total,
+                "aggregate_success": aggregate_success,
+                "file_signature": current_signature,
+            })
         payload.update({
             "accepted_total": accepted_total,
             "accepted_success": accepted_success,
