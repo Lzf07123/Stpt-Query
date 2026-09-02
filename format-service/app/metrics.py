@@ -103,6 +103,8 @@ def _classify_orchestration_process(command: str) -> Optional[str]:
         return "get-infomation-service"
     if normalized.startswith("nginx:") and "master process" in normalized:
         return "frontend"
+    if normalized.startswith("redis-server"):
+        return "redis"
     return None
 
 
@@ -111,6 +113,7 @@ def _orchestration_memory() -> dict:
         "format-service": [],
         "get-infomation-service": [],
         "frontend": [],
+        "redis": [],
     }
     proc_root = _proc_root()
     try:
