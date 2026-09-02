@@ -202,7 +202,11 @@ class JobStore:
 
     async def complete(self, job_id: str, result: dict, ttl_seconds: int) -> None:
         now = time.time()
-        raw = await self._raw_status(job_id) or {}
+        pipeline = self.redis.pipeline(transaction=True)
+        pipeline.get(self._status_key(job_id))
+        pipeline.get(self._payload_key(job_id))
+        raw, raw_payload = await pipeline.execute()
+        raw = json.loads(raw) if raw else {}
         success = bool(result.get("success"))
         phase = "done" if success else str(raw.get("phase") or "queued")
         phase_index, phase_label = _phase_meta(phase)
@@ -220,13 +224,16 @@ class JobStore:
             "completed_phases": completed,
         })
         status_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
-        await self.redis.set(self._status_key(job_id), status_json, ex=ttl_seconds)
-        fingerprint = await self._payload_fingerprint(job_id)
+        payload = json.loads(raw_payload) if raw_payload else {}
+        fingerprint = payload.get("fingerprint")
+        pipeline = self.redis.pipeline(transaction=True)
+        pipeline.set(self._status_key(job_id), status_json, ex=ttl_seconds)
         if fingerprint:
-            await self.redis.delete(self._dedupe_key(fingerprint))
-        await self.redis.zrem(self.active_key, job_id)
-        await self.redis.zrem(self.pending_key, job_id)
-        await self.redis.delete(self._payload_key(job_id))
+            pipeline.delete(self._dedupe_key(str(fingerprint)))
+        pipeline.zrem(self.active_key, job_id)
+        pipeline.zrem(self.pending_key, job_id)
+        pipeline.delete(self._payload_key(job_id))
+        await pipeline.execute()
 
     async def fail(self, job_id: str, kind: str, message: str,
                    ttl_seconds: int) -> None:
@@ -241,10 +248,15 @@ class JobStore:
         }, ttl_seconds)
 
     async def status(self, job_id: str) -> Optional[JobStatusResponse]:
-        raw = await self._raw_status(job_id)
+        pipeline = self.redis.pipeline(transaction=True)
+        pipeline.get(self._status_key(job_id))
+        pipeline.zrank(self.ready_key, job_id)
+        raw, rank = await pipeline.execute()
+        raw = json.loads(raw) if raw else None
         if not raw:
             return None
-        position = await self.position(job_id) if raw.get("state") == "queued" else None
+        position = int(rank) if (
+            raw.get("state") == "queued" and rank is not None) else None
         return _public_status(job_id, raw, position + 1 if position is not None else None)
 
     async def position(self, job_id: str) -> Optional[int]:
@@ -272,14 +284,6 @@ class JobStore:
     async def _raw_status(self, job_id: str) -> Optional[dict]:
         raw = await self.redis.get(self._status_key(job_id))
         return json.loads(raw) if raw else None
-
-    async def _payload_fingerprint(self, job_id: str) -> Optional[str]:
-        raw = await self.redis.get(self._payload_key(job_id))
-        if not raw:
-            return None
-        payload = json.loads(raw)
-        return payload.get("fingerprint")
-
 
 class QueueFullError(Exception):
     def __init__(self, limit: int) -> None:

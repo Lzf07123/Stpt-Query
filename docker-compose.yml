@@ -108,6 +108,9 @@ services:
       - SERVICE_BASE_URL=${SERVICE_BASE_URL:-http://get-infomation-service:8766}
       - SERVICE_API_TOKEN=${SERVICE_API_TOKEN:-}
       - SERVICE_TIMEOUT=${SERVICE_TIMEOUT:-60}
+      - RESOURCE_MONITOR_INTERVAL_SECONDS=${RESOURCE_MONITOR_INTERVAL_SECONDS:-5}
+      - RESOURCE_MONITOR_HISTORY_SIZE=${RESOURCE_MONITOR_HISTORY_SIZE:-90}
+      - SERVICE_STATUS_CACHE_SECONDS=${SERVICE_STATUS_CACHE_SECONDS:-3}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-glm-4.5-flash}
@@ -222,6 +225,10 @@ services:
       - "yes"
       - --appendfsync
       - everysec
+      - --maxmemory
+      - 112mb
+      - --maxmemory-policy
+      - volatile-lru
     mem_limit: 128m
     pids_limit: 48
     volumes:

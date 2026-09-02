@@ -162,7 +162,8 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | `response_summary` | 上游成功或失败响应的脱敏摘要，最多 300 字符；无摘要时为 `—` |
 
 每个副本把脱敏日志先写入 `{instance_id}` 隔离的本地 JSONL WAL，再写共享 Redis。
-Redis 暂不可用时查询继续；后台按 `HISTORY_SYNC_INTERVAL_SECONDS` 只回填本副本 WAL。
+Redis 暂不可用时查询继续；后台默认只在 Redis 历史写入失败后按
+`HISTORY_SYNC_INTERVAL_SECONDS` 回填本副本 WAL。
 Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生重复记录，`run_id`
 去重并只保留最近 100 条；读取时兼容旧 `gw:*` List 并按 `run_id` 合并，滚动升级期间
 旧副本数据仍可见。全局锁不参与一致性保障，回填最多扫描 20,000 行。
@@ -185,9 +186,10 @@ Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生�
 - `GET /service-status` 返回最近 100 次公开状态和聚合计数中的「已受理次数」。
   Redis 可用时聚合值按多副本累加；启用文件通道时最多扫描
   `SERVICE_STATUS_SCAN_LIMIT` 行来恢复最近窗口，并在降级时返回受限扫描。
+  文件扫描结果默认缓存 `SERVICE_STATUS_CACHE_SECONDS=3`；文件或 Redis 聚合
+  计数变化会立即失效。响应只包含 `success/kind/time`，不包含学号、IP、错误详情、`run_id` 等查询日志上下文。
   若文件扫描到的历史总量大于 Redis 聚合值（例如聚合键丢失或部分不可用），
   公开「已受理」统计会取文件历史结果，避免因重建容器导致计数倒退。
-  响应只包含 `success/kind/time`，不包含学号、IP、错误详情、`run_id` 等查询日志上下文。
 
 ### 管理后台
 
@@ -204,9 +206,10 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   宿主机 CPU/内存/负载/磁盘 I/O/网络、日志文件存储增长和应用近 5 分钟负载；
   编排内存按 format-service、查询代理、前端入口和编排内 Redis 四个 cgroup 聚合，宿主 cgroup
   不可读时按进程 RSS 估算并在界面标注；
-  并发与限流配置；同时返回 `dependencies` 与 `degradations`，对编排 Redis、查询代理、
-  查询代理 Redis、学校服务和 LLM 展示状态与降级说明。后台 UI 每 5 秒刷新并绘制近三分钟
-  CPU 趋势（每 2 秒采样一次）。
+  后台资源采样默认每 `RESOURCE_MONITOR_INTERVAL_SECONDS=5` 秒一次，保留
+  `RESOURCE_MONITOR_HISTORY_SIZE=90` 个样本；并返回 `dependencies` 与 `degradations`，对编排 Redis、查询代理、
+  查询代理 Redis、学校服务和 LLM 展示状态与降级说明。后台 UI 每 5 秒刷新并绘制
+  近期 CPU 趋势。
 - 管理端是单实例运维视图：读取当前副本文件和本地进程指标；Redis 仅在无文件通道时作
   历史降级源。生产多副本应继续把 stdout 交给集中平台聚合分析。
 - `GET /metrics` 输出 Prometheus 文本指标（请求状态/耗时、LLM 成功/失败、PDF 缓存命中、
@@ -258,6 +261,8 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   会话/缓存/限流/短码，恢复后自动切回 Redis；期间 `/health` 标记 `degraded`。
 - 异步任务使用 Redis 排队和去重；`JOB_PENDING_LIMIT` 限制全局排队，worker 使用查询、LLM
   和 PDF 独立槽位，避免 500 个任务同时穿透到学校、模型或 CPU。
+- 编排内 Redis 限制 `maxmemory=112mb` 并使用 `volatile-lru`，优先淘汰带 TTL 的临时状态；
+  使用外部 Redis 时需自行配置内存上限和淘汰策略。
 - 前端 Nginx 使用多 worker 与 4096 连接，静态响应压缩/短缓存；`/run` 与任务轮询响应不缓存。
 
 ## 当前目标
