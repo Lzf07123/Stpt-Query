@@ -15,7 +15,7 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=62">
+  <link rel="stylesheet" href="/style.css?v=67">
 </head>
 <body>
   <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
@@ -50,6 +50,10 @@
           <button class="seg-btn admin-nav-btn" id="tabLogs" data-tab="logs" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v15H4z"/><path d="M8 9h8M8 13h8M8 17h4"/></svg>
             <span>查询日志</span>
+          </button>
+          <button class="seg-btn admin-nav-btn" id="tabNotices" data-tab="notices" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+            <span>通知管理</span>
           </button>
         </nav>
         <div class="admin-head-actions">
@@ -149,6 +153,69 @@
           <h2 class="section-title">服务组件</h2>
           <dl id="serviceList" class="service-list"></dl>
           <label class="field-check live-check"><input id="autoMetrics" type="checkbox" checked> 每 5 秒采集</label>
+        </div>
+      </section>
+
+      <section class="panel" id="noticesPanel" hidden aria-labelledby="noticeManageTitle">
+        <form class="card filter-card" id="noticeForm">
+          <div class="section-caption" id="noticeManageTitle">新建通知</div>
+          <div class="notice-create-grid">
+            <label class="notice-content-label">通知内容
+              <input class="input" id="noticeContent" maxlength="120" required placeholder="例如：本周六 09:00 系统维护">
+            </label>
+            <div class="filter-control">
+              <span class="field-label">级别</span>
+              <div class="segmented notice-level" aria-label="通知级别">
+                <button type="button" class="seg-btn active" data-level="info">普通</button>
+                <button type="button" class="seg-btn" data-level="warning">重要</button>
+              </div>
+              <input type="hidden" id="noticeLevel" value="info">
+            </div>
+          </div>
+          <div class="notice-create-actions">
+            <button class="btn btn-primary" type="submit" id="noticePublish">发布</button>
+            <button class="btn btn-ghost" type="button" id="noticeSaveDraft">存草稿</button>
+            <button class="btn btn-ghost hidden" type="button" id="noticeCancelEdit">取消编辑</button>
+          </div>
+          <output class="notice notice-info hidden" id="noticeMessage" role="status"></output>
+        </form>
+
+        <form class="card filter-card" id="noticeFilter">
+          <div class="filter-grid">
+            <label>关键字<input class="input" id="noticeKeyword" maxlength="100" placeholder="搜索通知内容"></label>
+            <div class="filter-control">
+              <span class="field-label">状态</span>
+              <div class="segmented notice-status-filter" aria-label="通知状态筛选">
+                <button type="button" class="seg-btn active" data-status="">全部</button>
+                <button type="button" class="seg-btn" data-status="draft">草稿</button>
+                <button type="button" class="seg-btn" data-status="active">已发布</button>
+                <button type="button" class="seg-btn" data-status="archived">已下线</button>
+              </div>
+              <input type="hidden" id="noticeStatusFilter" value="">
+            </div>
+          </div>
+        </form>
+
+        <div class="stat-row">
+          <article class="card metric-card stat-card"><span>通知总数</span><strong id="noticeTotal">—</strong></article>
+          <article class="card metric-card stat-card"><span>存储状态</span><strong id="noticeStorage">—</strong></article>
+        </div>
+
+        <div class="card table-card">
+          <div class="table-scroll notice-table-scroll">
+            <table>
+              <caption class="sr-only">通知管理列表</caption>
+              <thead><tr><th>内容</th><th>级别</th><th>状态</th><th>发布时间</th><th>下线时间</th><th>更新时间</th><th>操作</th></tr></thead>
+              <tbody id="noticesBody"><tr><td colspan="7" class="empty-cell">暂无通知</td></tr></tbody>
+            </table>
+          </div>
+          <div class="pagination">
+            <div class="pagination-nav">
+              <button class="btn secondary-btn" id="noticePrevPage" type="button">上一页</button>
+              <span id="noticePageInfo">第 1 页</span>
+              <button class="btn secondary-btn" id="noticeNextPage" type="button">下一页</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -284,6 +351,6 @@
   <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=16" defer></script>
+  <script src="/admin.js?v=17" defer></script>
 </body>
 </html>

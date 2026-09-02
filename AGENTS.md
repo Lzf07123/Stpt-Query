@@ -27,7 +27,7 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 
 1. **三容器边界不变**：查询代理源码自包含在 `get-infomation-service/`；禁止把查询代理再复制到其他服务目录，也不允许绕过本仓库恢复兄弟仓库构建依赖。
 2. **默认唯一对外入口**：默认编排只有 `frontend` 映射宿主端口；`format-service` 与 `get-infomation-service` 不得在默认拓扑暴露宿主端口。开发/验收可显式加载 `compose.direct-*.yml` 直连，默认绑定宿主回环地址；公网直连必须先补 TLS、防火墙、访问控制与安全验收。查询代理默认仅挂 `internal` 网络。
-3. **编排层无状态**：`format-service` 不落盘业务状态；PDF 以 Base64 内联返回，不引入文件存储/PV。
+3. **编排层无状态**：`format-service` 不落盘查询业务状态；PDF 以 Base64 内联返回。唯一例外是全站通知运营配置：共享 JSONL 文件作为权威存储，Redis 仅作恢复副本，对应专用共享卷。
 4. **令牌安全**：固定 `API_TOKEN`（前端与后端共用）；nginx 反代时注入 `Authorization`；页面不得持有令牌；日志与响应不得输出密码/session/token。
 5. **单一事实来源**：提示词只在 `prompts.py`、异常规则只在 `classifier.py`、渲染逻辑只在 `render.py`、环境变量文档只在 `.env.example`，禁止重复实现。
 6. **命名连字符**：服务、目录、镜像一律连字符（`format-service`、`frontend`、`get-infomation-service`）。
@@ -58,7 +58,7 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 # 1. 编排配置合法
 docker compose config --quiet
 
-# 2. 单元测试（当前基线 129 个用例，全部通过）
+# 2. 单元测试（当前基线 141 个用例，全部通过）
 docker build -q -t format-service:test format-service
 docker run --rm -v "$PWD":/app -w /app format-service:test \
   sh -c "pip install -q pytest pytest-asyncio requests redis && python -m pytest -q"

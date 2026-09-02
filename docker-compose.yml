@@ -89,6 +89,7 @@ services:
       - /tmp:size=64m,mode=1777
     volumes:
       - format-query-logs:/var/log/edu-query
+      - format-notice-fallback:/var/lib/edu-query/notices
       - /proc:/host/proc:ro
       - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
     networks:
@@ -137,6 +138,11 @@ services:
       - HISTORY_SYNC_INTERVAL_SECONDS=${HISTORY_SYNC_INTERVAL_SECONDS:-60}
       - FILE_LOG_MAX_BYTES=${FILE_LOG_MAX_BYTES:-52428800}
       - FILE_LOG_BACKUP_COUNT=${FILE_LOG_BACKUP_COUNT:-7}
+      # 全站通知的共享降级文件；Redis 只是热备份，权威数据仍在文件
+      - NOTICE_FALLBACK_PATH=${NOTICE_FALLBACK_PATH:-/var/lib/edu-query/notices/notices.jsonl}
+      - NOTICE_ACTIVE_MAX=${NOTICE_ACTIVE_MAX:-10}
+      - NOTICE_HISTORY_MAX=${NOTICE_HISTORY_MAX:-500}
+      - NOTICE_COMPACT_AFTER=${NOTICE_COMPACT_AFTER:-2000}
       - TZ=${TZ:-Asia/Shanghai}
       - HOST_PROC_ROOT=/host/proc
       - HOST_CGROUP_ROOT=/host/sys/fs/cgroup
@@ -243,6 +249,10 @@ volumes:
   # 查询日志文件通道；业务编排仍无状态，日志随具名持久卷跨容器/守护进程重启保留
   format-query-logs:
     name: edu-query-app_format-query-logs-persistent
+    driver: local
+  # 全站通知运营配置的共享降级文件；属用户确认的无状态规则例外
+  format-notice-fallback:
+    name: edu-query-app_format-notice-fallback
     driver: local
   redis-data:
     name: edu-query-app_redis-data-persistent

@@ -136,6 +136,44 @@ def test_service_status_scans_all_instance_directories(tmp_path):
     assert [item["kind"] for item in body["results"]] == ["grades", "login_error"]
 
 
+def test_service_status_reconciles_aggregate_with_file_history(tmp_path):
+    path = tmp_path / "instance-a" / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    for index in range(3):
+        writer.write_raw({
+            "event": "query", "time": f"2026-08-28T10:0{index}:00+08:00",
+            "run_id": f"run-{index}", "username": "2023000001",
+            "success": index != 0, "kind": "grades",
+        })
+
+    class FixedAggregateRedis:
+        def __init__(self):
+            self.data = {}
+
+        async def hgetall(self, key):
+            return dict(self.data.get(key, {}))
+
+        async def aclose(self):
+            return None
+
+    redis = FixedAggregateRedis()
+    app = create_app(_cfg(tmp_path, file_log_path=str(path), redis_url="redis://redis:6379/0"))
+    app.state.redis = redis
+
+    with TestClient(app) as client:
+        redis.data["gw:v2:service-status:accepted"] = {"total": "1", "success": "1"}
+        stale_aggregate = client.get("/service-status", headers=HEADERS).json()
+        redis.data["gw:v2:service-status:accepted"] = {
+            "total": "105", "success": "80",
+        }
+        larger_aggregate = client.get("/service-status", headers=HEADERS).json()
+
+    assert stale_aggregate["accepted_total"] == 3
+    assert stale_aggregate["accepted_success"] == 2
+    assert larger_aggregate["accepted_total"] == 105
+    assert larger_aggregate["accepted_success"] == 80
+
+
 class FakePipeline:
     def __init__(self, redis):
         self.redis = redis
