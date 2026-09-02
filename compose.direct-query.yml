@@ -1,0 +1,11 @@
+# Optional override: expose get-infomation-service directly. Load it explicitly;
+# the default production topology still exposes only frontend.
+services:
+  get-infomation-service:
+    ports:
+      - "${QUERY_DIRECT_HOST:-127.0.0.1}:${QUERY_DIRECT_PORT:-18766}:8766"
+    environment:
+      # A directly reachable proxy must not accept credentials in query strings
+      # and must protect login/status behind its Bearer token.
+      - JWXT_ALLOW_GET_CREDENTIALS=0
+      - JWXT_PROTECT_LOGIN_STATUS=1

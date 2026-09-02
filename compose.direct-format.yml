@@ -1,0 +1,12 @@
+# Optional override: expose format-service directly. Load it explicitly;
+# the default production topology still exposes only frontend.
+services:
+  format-service:
+    # A single host port cannot serve multiple replicas without a load balancer.
+    deploy:
+      replicas: 1
+    ports:
+      - "${FORMAT_DIRECT_HOST:-127.0.0.1}:${FORMAT_DIRECT_PORT:-18080}:8000"
+    environment:
+      # Direct uvicorn clients are not trusted reverse proxies by default.
+      - TRUST_PROXY=false
