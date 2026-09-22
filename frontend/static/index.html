@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=67">
+  <link rel="stylesheet" href="/style.css?v=77">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
   <script src="/notice.js?v=5" defer></script>
@@ -201,6 +201,7 @@
         <div id="resultHtml" class="markdown-body hidden"></div>
         <pre id="result" class="hidden"></pre>
         <div id="pdfActions" class="pdf-actions hidden"></div>
+        <div id="calendarBlock" class="calendar-block hidden" aria-live="polite"></div>
       </div>
     </div>
 
@@ -210,14 +211,14 @@
   </div>
 
   <footer class="site-footer">
-    <div class="site-footer-inner" id="siteFooterInner"></div>
+    <div class="site-footer-row">
+      <div class="site-footer-inner" id="siteFooterInner"></div>
+      <span aria-hidden="true">·</span>
+      <button type="button" class="site-footer-action" id="calendarEntry" aria-haspopup="dialog">
+        <span aria-hidden="true">📅</span> 网络日历订阅
+      </button>
+    </div>
   </footer>
-
-  <a class="back-to-top" href="#main" aria-label="返回顶部">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>
-    </svg>
-  </a>
 
   <div id="toastWrap" class="toast-viewport"></div>
   <div id="noticeHistoryModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="noticeHistoryTitle">
@@ -229,6 +230,81 @@
       <div id="noticeHistoryList" class="notice-history-list" aria-live="polite"></div>
       <div class="modal-footer">
         <button type="button" class="btn btn-ghost" id="noticeHistoryDismiss">关闭</button>
+      </div>
+    </div>
+  </div>
+  <div id="calendarModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="calendarTitle">
+    <div class="modal-panel calendar-panel">
+      <div class="calendar-head">
+        <h2 id="calendarTitle">网络日历订阅</h2>
+        <button type="button" id="calendarClose" class="modal-close" aria-label="关闭网络日历面板">&times;</button>
+      </div>
+      <div class="calendar-body">
+        <section class="calendar-section">
+          <h3 class="calendar-section-title">当前状态</h3>
+          <div id="calendarState" class="calendar-state" data-state="none" aria-live="polite"></div>
+          <div id="calendarUrlBox" class="calendar-url-row hidden">
+            <input id="calendarUrl" class="input" readonly aria-label="订阅地址">
+            <button type="button" class="btn btn-ghost" id="calendarReveal">显示</button>
+            <button type="button" class="btn btn-ghost" id="calendarCopy">复制</button>
+          </div>
+        </section>
+
+        <section class="calendar-section">
+          <h3 class="calendar-section-title">账号与学期</h3>
+          <div class="calendar-grid">
+            <label class="calendar-field"><span class="field-label">学号</span>
+              <input id="calendarUsername" class="input" inputmode="numeric" maxlength="10" placeholder="10 位数字学号" autocomplete="off">
+            </label>
+            <label class="calendar-field"><span class="field-label">密码</span>
+              <input id="calendarPassword" class="input" type="password" maxlength="256" placeholder="教务系统密码" autocomplete="current-password">
+            </label>
+          </div>
+          <div class="calendar-field">
+            <span class="field-label">学期</span>
+            <div class="dropdown" id="calendarSemesterDropdown">
+              <button type="button" class="dropdown-trigger" id="calendarSemesterTrigger"
+                      aria-haspopup="listbox" aria-expanded="false">默认当前学期</button>
+              <div class="dropdown-menu hidden" id="calendarSemesterMenu" role="listbox">
+                <button type="button" class="dropdown-item" data-value="">默认当前学期</button>
+              </div>
+              <input type="hidden" id="calendarSemester" value="">
+            </div>
+          </div>
+          <div class="calendar-actions">
+            <button type="button" class="btn btn-primary" id="calendarCheck">查询该学号是否已开启</button>
+            <button type="button" class="btn btn-ghost" id="calendarUseForm">复用查询表单</button>
+          </div>
+        </section>
+
+        <section class="calendar-section">
+          <h3 class="calendar-section-title">刷新策略</h3>
+          <div class="calendar-field">
+            <div class="segmented" id="calendarIntervalGroup" role="group" aria-label="刷新间隔">
+              <button type="button" class="seg-btn" data-interval="21600">6 小时</button>
+              <button type="button" class="seg-btn active" data-interval="43200">12 小时</button>
+              <button type="button" class="seg-btn" data-interval="86400">24 小时</button>
+            </div>
+            <input type="hidden" id="calendarInterval" value="43200">
+          </div>
+          <p class="calendar-hint">服务端按所选间隔重新抓取课表；日历软件自身的拉取频率由客户端决定（Apple 日历较及时，Google/Outlook 通常数小时到一天）。</p>
+        </section>
+
+        <section class="calendar-section">
+          <h3 class="calendar-section-title">操作</h3>
+          <div class="calendar-actions" id="calendarEnableRow">
+            <button type="button" class="btn btn-primary" id="calendarEnable">一键开启订阅</button>
+          </div>
+          <div class="calendar-actions calendar-actions--equal" id="calendarManageRow">
+            <button type="button" class="btn btn-ghost" id="calendarRefreshNow">立即刷新</button>
+            <button type="button" class="btn btn-ghost" id="calendarRotate">轮换地址</button>
+            <button type="button" class="btn btn-ghost danger" id="calendarStop">关闭订阅</button>
+          </div>
+          <p id="calendarNote" class="calendar-note">关闭订阅会立即删除加密凭据与课表快照并让地址失效；已同步到手机/日历软件的事件需在客户端自行删除。</p>
+        </section>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" id="calendarDismiss">关闭面板</button>
       </div>
     </div>
   </div>
@@ -1560,6 +1636,11 @@
       layout.classList.add("has-result");
       resultCard.classList.remove("fade-in");
       resultCard.classList.add("fade-out");
+      if (body && typeof body === "object" && body.meta) {
+        calendarShowResultBlock(body.meta);
+      } else if (calendarEls.block) {
+        calendarEls.block.classList.add("hidden");
+      }
       resultTimer = setTimeout(function () {
         const markdown = extractMarkdownValue(body);
         if (markdown !== null) {
@@ -1958,6 +2039,303 @@
       if (!form) return;
       if (typeof form.requestSubmit === "function") form.requestSubmit();
       else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+    });
+
+
+    // ===== 网络日历订阅（页脚入口 + 结果区区块共用一套状态）=====
+    var calendarEls = {
+      entry: document.getElementById("calendarEntry"),
+      modal: document.getElementById("calendarModal"),
+      close: document.getElementById("calendarClose"),
+      dismiss: document.getElementById("calendarDismiss"),
+      username: document.getElementById("calendarUsername"),
+      password: document.getElementById("calendarPassword"),
+      semester: document.getElementById("calendarSemester"),
+      interval: document.getElementById("calendarInterval"),
+      check: document.getElementById("calendarCheck"),
+      useForm: document.getElementById("calendarUseForm"),
+      state: document.getElementById("calendarState"),
+      urlBox: document.getElementById("calendarUrlBox"),
+      url: document.getElementById("calendarUrl"),
+      reveal: document.getElementById("calendarReveal"),
+      copy: document.getElementById("calendarCopy"),
+      enable: document.getElementById("calendarEnable"),
+      refresh: document.getElementById("calendarRefreshNow"),
+      rotate: document.getElementById("calendarRotate"),
+      stop: document.getElementById("calendarStop"),
+      block: document.getElementById("calendarBlock")
+    };
+    var calendarState = { state: "", feedUrl: "", verifiedToken: "", semester: "" };
+    // 学期下拉：直接复用首页查询的同一份学期选项（克隆菜单项，避免两处维护）
+    (function syncCalendarSemesterOptions() {
+      var source = document.getElementById("semestersMenu");
+      var target = document.getElementById("calendarSemesterMenu");
+      if (!source || !target) return;
+      var clone = source.cloneNode(true);
+      clone.removeAttribute("id");
+      target.innerHTML = clone.innerHTML;
+    })();
+    var calendarSemesterDropdown = initDropdown(
+      "calendarSemesterTrigger", "calendarSemesterMenu", "calendarSemester", "默认当前学期");
+
+    function calendarSyncSemester(value) {
+      if (value) calendarEls.semester.value = value;
+      calendarSemesterDropdown.sync();
+    }
+    var calendarConfig = null;
+    var calendarUrlVisible = false;
+
+    function calendarMaskUrl(url) {
+      if (!url) return "";
+      var i = url.lastIndexOf("/");
+      if (i < 0) return "••••••";
+      return url.slice(0, i + 1) + "••••••••.ics";
+    }
+
+    function calendarFill(fill) {
+      if (!fill) return;
+      if (!calendarEls.username.value) calendarEls.username.value = usernameInput.value.trim();
+      if (!calendarEls.password.value) calendarEls.password.value = passwordInput.value;
+      if (!calendarEls.semester.value) {
+        calendarEls.semester.value = semestersInput.value || (calendarConfig && calendarConfig.default_semester) || "";
+      }
+    }
+
+    async function calendarLoadConfig() {
+      if (calendarConfig) return calendarConfig;
+      try {
+        var resp = await fetch("/api/v1/calendars/config", { headers: authHeaders() });
+        if (resp.ok) calendarConfig = await resp.json();
+      } catch (e) { /* 面板仍可工作，仅缺少默认学期 */ }
+      return calendarConfig;
+    }
+
+    function calendarRender() {
+      var st = calendarState.state || "";
+      var labels = { active: "已开启", reauth_needed: "订阅用的是旧密码，需重新授权",
+                     none: "该学号当前学期未开启", locked: "订阅已暂停", expired: "订阅已失效" };
+      var text = st ? (labels[st] || st) : "尚未查询状态";
+      if (st === "active" || st === "reauth_needed") {
+        text += " · 每 " + Math.round((calendarState.refreshInterval || 43200) / 3600) + " 小时自动刷新";
+        if (calendarState.lastRefreshAt) text += " · 上次刷新 " + calendarState.lastRefreshAt;
+      }
+      var inferred = calendarConfig && calendarConfig.inferred_periods && calendarConfig.inferred_periods.length
+        ? "（第 " + calendarConfig.inferred_periods.join("、") + " 节时间为推算值，待学校官方确认）" : "";
+      calendarEls.state.textContent = text + inferred;
+      calendarEls.state.dataset.state = st || "none";
+      var hasUrl = Boolean(calendarState.feedUrl);
+      calendarEls.urlBox.classList.toggle("hidden", !hasUrl);
+      if (hasUrl) {
+        calendarEls.url.value = calendarUrlVisible ? calendarState.feedUrl : calendarMaskUrl(calendarState.feedUrl);
+        calendarEls.reveal.textContent = calendarUrlVisible ? "隐藏" : "显示";
+      }
+      var isEnabled = st === "active" || st === "reauth_needed";
+      var enableRow = document.getElementById("calendarEnableRow");
+      var manageRow = document.getElementById("calendarManageRow");
+      if (enableRow) enableRow.classList.toggle("hidden", isEnabled);
+      if (manageRow) manageRow.classList.toggle("hidden", !isEnabled);
+      calendarEls.enable.textContent = st === "reauth_needed" ? "用当前密码重新授权" : "一键开启订阅";
+      calendarEls.rotate.classList.toggle("hidden", !hasUrl);
+      calendarEls.refresh.classList.toggle("hidden", !hasUrl);
+      if (calendarEls.block && !calendarEls.block.classList.contains("hidden")) {
+        calendarEls.block.textContent = "📅 网络日历订阅：" + text +
+          (hasUrl ? " · 已生成订阅地址，可在下方订阅面板中复制或关闭。" : " · 可一键开启。");
+      }
+    }
+
+    async function calendarRequest(path, body, method) {
+      var resp = await fetch(path, {
+        method: method || "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+        body: body ? JSON.stringify(body) : undefined
+      });
+      var data = null;
+      try { data = await resp.json(); } catch (e) { data = null; }
+      if (!resp.ok) {
+        var detail = (data && (data.detail || data.code)) || ("HTTP " + resp.status);
+        throw new Error(detail);
+      }
+      return data || {};
+    }
+
+    function calendarPayload() {
+      return {
+        username: (calendarEls.username.value || "").trim(),
+        password: calendarEls.password.value,
+        semester: (calendarEls.semester.value || "").trim(),
+        verified_token: calendarState.verifiedToken || null
+      };
+    }
+
+    function calendarGuard() {
+      var payload = calendarPayload();
+      if (!/^\d{10}$/.test(payload.username)) { calendarEls.state.textContent = "学号必须为 10 位数字"; return null; }
+      if (!payload.password) { calendarEls.state.textContent = "请填写教务系统密码"; return null; }
+      if (!payload.semester) {
+        var fallback = calendarConfig && calendarConfig.default_semester;
+        if (fallback) {
+          calendarSyncSemester(fallback);
+          payload.semester = fallback;
+        } else {
+          calendarEls.state.textContent = "正在加载学期列表，请稍后再试";
+          calendarLoadConfig();
+          return null;
+        }
+      }
+      return payload;
+    }
+
+    function calendarSyncInterval(seconds) {
+      if (!seconds || !calendarEls.interval) return;
+      calendarEls.interval.value = String(seconds);
+      document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (item) {
+        item.classList.toggle("active", Number(item.dataset.interval) === Number(seconds));
+      });
+    }
+
+    function calendarApply(data) {
+      calendarState.state = data.state || "";
+      calendarState.feedUrl = data.feed_url || "";
+      calendarState.semester = data.semester || calendarState.semester;
+      calendarState.refreshInterval = data.refresh_interval;
+      calendarState.lastRefreshAt = data.last_refresh_at;
+      if (data.verified_token) calendarState.verifiedToken = data.verified_token;
+      if (data.refresh_interval) calendarSyncInterval(data.refresh_interval);
+      if (data.semester) calendarSyncSemester(data.semester);
+      calendarRender();
+    }
+
+    async function calendarCheck() {
+      var payload = calendarGuard(); if (!payload) return;
+      calendarEls.state.textContent = "查询中…";
+      try { calendarApply(await calendarRequest("/api/v1/calendars/status", payload)); }
+      catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    async function calendarEnable() {
+      var payload = calendarGuard(); if (!payload) return;
+      payload.refresh_interval = Number(calendarEls.interval.value || 43200);
+      payload.reauthorize = calendarState.state === "reauth_needed";
+      calendarEls.state.textContent = "开启中（需要登录学校并生成首份课表）…";
+      try {
+        var data = await calendarRequest("/api/v1/calendars", payload);
+        calendarState.state = "active";
+        calendarState.feedUrl = data.feed_url || "";
+        calendarState.semester = data.semester || payload.semester;
+        calendarState.refreshInterval = data.refresh_interval;
+        calendarRender();
+      } catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    async function calendarRefreshNow() {
+      var payload = calendarGuard(); if (!payload) return;
+      calendarEls.state.textContent = "刷新中…";
+      try {
+        var data = await calendarRequest("/api/v1/calendars/refresh", payload);
+        calendarEls.state.textContent = data.skipped
+          ? ("距上次刷新过近，稍后再试（可于 " + (data.next_allowed_at || "") + " 后）")
+          : ("已刷新" + (data.changed ? "，课表有更新" : "，课表无变化"));
+      } catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    async function calendarRotate() {
+      var payload = calendarGuard(); if (!payload) return;
+      if (!window.confirm("轮换后旧订阅地址立即失效，需要在日历软件中重新添加。继续？")) return;
+      try {
+        var data = await calendarRequest("/api/v1/calendars/rotate", payload);
+        calendarState.feedUrl = data.feed_url || "";
+        calendarUrlVisible = true;
+        calendarRender();
+      } catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    async function calendarStop() {
+      var payload = calendarGuard(); if (!payload) return;
+      if (!window.confirm("关闭后将立即删除加密凭据与课表快照，订阅地址失效；已同步到日历软件的事件需在客户端自行删除。确认关闭？")) return;
+      try {
+        await calendarRequest("/api/v1/calendars", payload, "DELETE");
+        calendarState.state = "none"; calendarState.feedUrl = ""; calendarUrlVisible = false;
+        calendarRender();
+        calendarEls.state.textContent = "订阅已关闭，凭据与快照已删除";
+      } catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    function calendarCopy() {
+      if (!calendarState.feedUrl) return;
+      navigator.clipboard.writeText(calendarState.feedUrl).then(function () {
+        calendarEls.copy.textContent = "已复制";
+        window.setTimeout(function () { calendarEls.copy.textContent = "复制"; }, 1200);
+      }).catch(function () { calendarEls.state.textContent = "复制失败，请点「显示」后手动复制"; });
+    }
+
+    function calendarOpen() {
+      calendarFill(true);
+      calendarLoadConfig().then(function (cfg) {
+        if (!calendarEls.semester.value && cfg && cfg.default_semester) {
+          calendarSyncSemester(cfg.default_semester);
+        }
+      });
+      calendarEls.modal.classList.remove("hidden");
+      calendarRender();
+      if (!calendarState.state) calendarEls.username.focus();
+    }
+
+    function calendarClosePanel() { calendarEls.modal.classList.add("hidden"); }
+
+    function calendarShowResultBlock(meta) {
+      if (!calendarEls.block) return;
+      var info = meta && meta.calendar;
+      if (!info) { calendarEls.block.classList.add("hidden"); return; }
+      calendarState.state = info.state || "";
+      calendarState.feedUrl = info.feed_url || "";
+      calendarState.verifiedToken = info.verified_token || "";
+      calendarState.semester = info.semester || "";
+      calendarState.refreshInterval = info.refresh_interval;
+      calendarState.lastRefreshAt = info.last_refresh_at;
+      calendarEls.block.classList.remove("hidden");
+      calendarEls.block.textContent = "";
+      if (info.refresh_interval) calendarSyncInterval(info.refresh_interval);
+      if (info.semester) calendarSyncSemester(info.semester);
+      var text = document.createElement("span");
+      text.className = "calendar-block-text";
+      var label = info.state === "active" ? "已开启网络日历订阅"
+        : (info.state === "reauth_needed" ? "订阅存在但用的是旧密码，可重新授权" : "尚未开启网络日历订阅");
+      text.textContent = "📅 " + label + "（" + (info.semester || "") + "）";
+      var open = document.createElement("button");
+      open.type = "button"; open.className = "btn btn-ghost"; open.textContent = "打开订阅面板";
+      open.addEventListener("click", calendarOpen);
+      calendarEls.block.appendChild(text);
+      calendarEls.block.appendChild(open);
+    }
+
+    if (calendarEls.entry) calendarEls.entry.addEventListener("click", calendarOpen);
+    if (calendarEls.close) calendarEls.close.addEventListener("click", calendarClosePanel);
+    if (calendarEls.dismiss) calendarEls.dismiss.addEventListener("click", calendarClosePanel);
+    if (calendarEls.modal) calendarEls.modal.addEventListener("click", function (event) {
+      if (event.target === calendarEls.modal) calendarClosePanel();
+    });
+    if (calendarEls.useForm) calendarEls.useForm.addEventListener("click", function () {
+      calendarEls.username.value = usernameInput.value.trim();
+      calendarEls.password.value = passwordInput.value;
+      calendarSyncSemester(semestersInput.value || (calendarConfig && calendarConfig.default_semester) || "");
+      calendarEls.state.textContent = "已复用查询表单中的学号与密码（仅保存在当前页面内存）";
+    });
+    document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (button) {
+      button.addEventListener("click", function () {
+        document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (item) {
+          item.classList.toggle("active", item === button);
+        });
+        if (calendarEls.interval) calendarEls.interval.value = button.dataset.interval;
+      });
+    });
+    if (calendarEls.check) calendarEls.check.addEventListener("click", calendarCheck);
+    if (calendarEls.enable) calendarEls.enable.addEventListener("click", calendarEnable);
+    if (calendarEls.refresh) calendarEls.refresh.addEventListener("click", calendarRefreshNow);
+    if (calendarEls.rotate) calendarEls.rotate.addEventListener("click", calendarRotate);
+    if (calendarEls.stop) calendarEls.stop.addEventListener("click", calendarStop);
+    if (calendarEls.copy) calendarEls.copy.addEventListener("click", calendarCopy);
+    if (calendarEls.reveal) calendarEls.reveal.addEventListener("click", function () {
+      calendarUrlVisible = !calendarUrlVisible; calendarRender();
     });
 
     sanitizeStoredHistory();

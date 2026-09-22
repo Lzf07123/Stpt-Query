@@ -10,6 +10,13 @@
     loginForm: $("loginForm"), tokenInput: $("adminToken"),
     loginMessage: $("loginMessage"), app: $("adminApp"), logout: $("logoutBtn"),
     tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), tabNotices: $("tabNotices"),
+    tabCalendars: $("tabCalendars"), calendarsPanel: $("calendarsPanel"),
+    calendarsBody: $("calendarsBody"), calendarQuery: $("calendarQuery"),
+    calendarSemesterFilter: $("calendarSemesterFilter"),
+    calendarStateFilter: $("calendarStateFilter"), calendarSearch: $("calendarSearch"),
+    calendarReload: $("calendarReload"), calendarTotal: $("calendarTotal"),
+    calendarActive: $("calendarActive"), calendarReauth: $("calendarReauth"),
+    calendarPaused: $("calendarPaused"), calendarMessage: $("calendarMessage"),
     logsPanel: $("logsPanel"), noticesPanel: $("noticesPanel"),
     metricsPanel: $("metricsPanel"), filter: $("logFilter"), exportBtn: $("exportBtn"),
     filterToggle: $("filterToggle"),
@@ -75,6 +82,26 @@
     } catch (e) {}
   }
 
+  function errorDetail(payload, status) {
+    // FastAPI 校验错误（422）的 detail 是对象数组，直接 String() 会得到 [object Object]
+    var detail = payload && payload.detail;
+    if (typeof detail === "string" && detail) return detail;
+    if (Array.isArray(detail)) {
+      var parts = detail.map(function (item) {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          var loc = Array.isArray(item.loc)
+            ? item.loc.filter(function (part) { return part !== "body"; }).join(".") : "";
+          return (loc ? loc + "：" : "") + (item.msg || JSON.stringify(item));
+        }
+        return String(item);
+      }).filter(function (text) { return text; });
+      if (parts.length) return parts.join("；");
+    }
+    if (detail && typeof detail === "object") return JSON.stringify(detail);
+    return "请求失败（HTTP " + status + "）";
+  }
+
   async function request(path, options) {
     options = options || {};
     var response;
@@ -97,7 +124,7 @@
     if (!response.ok) {
       if (response.status === 404 && !(payload && payload.detail)) throw new Error("凭据无效");
       if (response.status === 401 || response.status === 403) throw new Error("凭据无效");
-      throw new Error(payload && payload.detail ? String(payload.detail) : "请求失败");
+      throw new Error(errorDetail(payload, response.status));
     }
     return payload;
   }
@@ -265,11 +292,12 @@
       "redis": "Redis（可选）"
     };
     var services = stack.services || {};
-    elements.stackServices.innerHTML = Object.keys(names).map(function (key) {
+    // 行由后端分桶决定（默认 app/frontend，配置 Redis 时才含 redis）
+    elements.stackServices.innerHTML = Object.keys(services).map(function (key) {
       var service = services[key] || {};
       var state = service.memory_bytes == null ? "muted" : "success";
       return '<div class="stack-service">' +
-        '<span>' + names[key] + '</span>' +
+        '<span>' + (names[key] || key) + '</span>' +
         '<strong>' + (service.memory_bytes == null ? "—" : formatBytes(service.memory_bytes)) + '</strong>' +
         '<small>' + (service.process_count || 0) + ' 进程</small>' +
         '<i class="badge badge-' + state + '">' + (service.source === "cgroup" ? "实测" : service.source === "process_rss" ? "估算" : "缺失") + '</i>' +
@@ -542,17 +570,120 @@
   function setActiveTab(tab, reload) {
     var isMetrics = tab === "metrics";
     var isNotices = tab === "notices";
+    var isCalendars = tab === "calendars";
+    var isLogs = !isMetrics && !isNotices && !isCalendars;
     elements.tabMetrics.classList.toggle("active", isMetrics);
-    elements.tabLogs.classList.toggle("active", !isMetrics && !isNotices);
+    elements.tabLogs.classList.toggle("active", isLogs);
     elements.tabNotices.classList.toggle("active", isNotices);
+    elements.tabCalendars.classList.toggle("active", isCalendars);
     elements.tabMetrics.setAttribute("aria-current", isMetrics ? "page" : "false");
-    elements.tabLogs.setAttribute("aria-current", !isMetrics && !isNotices ? "page" : "false");
+    elements.tabLogs.setAttribute("aria-current", isLogs ? "page" : "false");
     elements.tabNotices.setAttribute("aria-current", isNotices ? "page" : "false");
+    elements.tabCalendars.setAttribute("aria-current", isCalendars ? "page" : "false");
     elements.metricsPanel.hidden = !isMetrics;
     elements.noticesPanel.hidden = !isNotices;
-    elements.logsPanel.hidden = isMetrics || isNotices;
+    elements.calendarsPanel.hidden = !isCalendars;
+    elements.logsPanel.hidden = !isLogs;
     if (isMetrics && reload !== false) loadMetrics().catch(function () {});
     if (isNotices) loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
+    if (isCalendars) loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
+  }
+
+  function showCalendarMessage(text, kind) {
+    if (!elements.calendarMessage) return;
+    elements.calendarMessage.textContent = text || "";
+    elements.calendarMessage.classList.toggle("hidden", !text);
+    elements.calendarMessage.classList.toggle("notice-warning", kind === "error");
+  }
+
+  function calendarStateLabel(value) {
+    return { active: "正常", reauth_needed: "需重新授权", degraded: "上游异常",
+             locked: "已暂停" }[value] || value || "—";
+  }
+
+  async function loadCalendars() {
+    var username = elements.calendarQuery.value.trim();
+    if (username && !/^\d{10}$/.test(username)) {
+      showCalendarMessage("学号需为 10 位数字", "error");
+      return;
+    }
+    var params = [];
+    if (elements.calendarQuery.value.trim()) params.push("username=" + encodeURIComponent(elements.calendarQuery.value.trim()));
+    if (elements.calendarSemesterFilter.value.trim()) params.push("semester=" + encodeURIComponent(elements.calendarSemesterFilter.value.trim()));
+    if (elements.calendarStateFilter.value) params.push("state=" + encodeURIComponent(elements.calendarStateFilter.value));
+    params.push("size=20");
+    var payload = await request("calendars" + (params.length ? "?" + params.join("&") : ""));
+    renderCalendars(payload);
+  }
+
+  function renderCalendars(payload) {
+    var items = payload.items || [];
+    var stats = payload.stats || {};
+    var states = stats.states || {};
+    if (elements.calendarTotal) elements.calendarTotal.textContent = stats.total == null ? "—" : stats.total;
+    if (elements.calendarActive) elements.calendarActive.textContent = states.active == null ? "0" : states.active;
+    if (elements.calendarReauth) elements.calendarReauth.textContent = states.reauth_needed == null ? "0" : states.reauth_needed;
+    if (elements.calendarPaused) elements.calendarPaused.textContent = stats.paused == null ? "0" : stats.paused;
+    elements.calendarsBody.innerHTML = "";
+    if (!items.length) {
+      elements.calendarsBody.innerHTML = '<tr><td colspan="8" class="empty-cell">暂无订阅</td></tr>';
+      return;
+    }
+    items.forEach(function (item) {
+      var row = document.createElement("tr");
+      var cells = [
+        item.username || "—", item.semester || "—", null,
+        Math.round((item.refresh_interval || 0) / 3600) + " 小时",
+        item.last_refresh_at || "—",
+        String(item.fail_count == null ? 0 : item.fail_count),
+        item.feed_url_masked || "—"
+      ];
+      cells.forEach(function (value, index) {
+        var td = document.createElement("td");
+        if (index === 2) {
+          var badge = document.createElement("span");
+          badge.className = "calendar-badge calendar-badge--" + (item.state || "active");
+          badge.textContent = calendarStateLabel(item.state);
+          td.appendChild(badge);
+        } else {
+          td.textContent = value;
+        }
+        if (index === 0) td.className = "notice-content";
+        row.appendChild(td);
+      });
+      var actions = document.createElement("td");
+      actions.className = "calendar-actions-cell";
+      [["refresh", "刷新"], ["pause", "暂停"], ["resume", "恢复"], ["rotate", "轮换"], ["delete", "删除"]].forEach(function (pair) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn btn-ghost" + (pair[0] === "delete" ? " danger" : "");
+        button.textContent = pair[1];
+        button.dataset.action = pair[0];
+        button.dataset.id = item.id;
+        actions.appendChild(button);
+      });
+      row.appendChild(actions);
+      elements.calendarsBody.appendChild(row);
+    });
+  }
+
+  async function calendarAction(action, id) {
+    if (action === "refresh") await request("calendars/" + id + "/refresh", { method: "POST" });
+    else if (action === "pause") await request("calendars/" + id + "/pause?hours=24", { method: "POST" });
+    else if (action === "resume") await request("calendars/" + id + "/resume", { method: "POST" });
+    else if (action === "rotate") {
+      if (!window.confirm("轮换后原订阅地址立即失效，需在日历软件中重新添加。继续？")) return;
+      var rotated = await request("calendars/" + id + "/rotate", { method: "POST" });
+      if (rotated && rotated.feed_url) {
+        showCalendarMessage("已轮换订阅地址，请在用户端重新添加（后台不展示完整地址）");
+        loadCalendars().catch(function () {});
+        return;
+      }
+    } else if (action === "delete") {
+      if (!window.confirm("将彻底删除该订阅的加密凭据与课表快照，且不可恢复。确认删除？")) return;
+      await request("calendars/" + id, { method: "DELETE" });
+    }
+    await loadCalendars();
   }
 
   function stopTimers() {
@@ -1040,7 +1171,29 @@
     elements.logout.addEventListener("click", function () {
       setToken(""); stopTimers(); location.reload();
     });
-    [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"]].forEach(function (pair) {
+    elements.calendarFilter = $("calendarFilter");
+    if (elements.calendarFilter) {
+      elements.calendarFilter.addEventListener("submit", function (event) {
+        event.preventDefault();
+        loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
+      });
+    }
+    if (elements.calendarReload) {
+      elements.calendarReload.addEventListener("click", function () {
+        loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
+      });
+    }
+    if (elements.calendarsBody) {
+      elements.calendarsBody.addEventListener("click", function (event) {
+        var button = event.target.closest("button[data-action]");
+        if (!button) return;
+        button.disabled = true;
+        calendarAction(button.dataset.action, button.dataset.id).catch(function (error) {
+          showCalendarMessage(error.message, "error");
+        }).finally(function () { button.disabled = false; });
+      });
+    }
+    [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"], ["tabCalendars", "calendars"]].forEach(function (pair) {
       $(pair[0]).addEventListener("click", function () {
         setActiveTab(pair[1]);
       });

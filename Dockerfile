@@ -25,10 +25,13 @@ RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p -m 700 /var/log/edu-query \
     && mkdir -p -m 700 /var/lib/edu-query/notices \
+    && mkdir -p -m 700 /var/lib/edu-query/calendar \
     && mkdir -p -m 700 /var/log/jwxt \
     && chown -R 10001:10001 /var/log/edu-query /var/lib/edu-query /var/log/jwxt
 
 COPY app ./app
+# 节次时间表与学期基准（config/calendar.json）：非机密，随镜像发布
+COPY config ./config
 RUN chown -R 10001:10001 /app
 
 EXPOSE 8000

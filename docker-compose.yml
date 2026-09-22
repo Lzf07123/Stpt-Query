@@ -24,6 +24,7 @@ services:
     volumes:
       - app-query-logs:/var/log/edu-query
       - app-notice-fallback:/var/lib/edu-query/notices
+      - app-calendar:/var/lib/edu-query/calendar
       - /proc:/host/proc:ro
       - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
     networks:
@@ -116,6 +117,19 @@ services:
       - JWXT_TRUST_PROXY=0
       - JWXT_LOG_FILE=
       - JWXT_DNS_FALLBACK_IPS=${JWXT_DNS_FALLBACK_IPS:-}
+      # ---- 网络日历订阅（可选）----
+      - CALENDAR_ENABLED=${CALENDAR_ENABLED:-false}
+      - CALENDAR_MASTER_KEY=${CALENDAR_MASTER_KEY:-}
+      - CALENDAR_DB_PATH=${CALENDAR_DB_PATH:-/var/lib/edu-query/calendar/calendar.db}
+      - CALENDAR_CONFIG_PATH=${CALENDAR_CONFIG_PATH:-config/calendar.json}
+      - CALENDAR_PUBLIC_BASE_URL=${CALENDAR_PUBLIC_BASE_URL:-${PUBLIC_BASE_URL:-http://127.0.0.1:8000}}
+      - CALENDAR_DEFAULT_REFRESH_SECONDS=${CALENDAR_DEFAULT_REFRESH_SECONDS:-43200}
+      - CALENDAR_MIN_REFRESH_SECONDS=${CALENDAR_MIN_REFRESH_SECONDS:-3600}
+      - CALENDAR_MAX_FAILURES=${CALENDAR_MAX_FAILURES:-3}
+      - CALENDAR_PAUSE_HOURS=${CALENDAR_PAUSE_HOURS:-24}
+      - CALENDAR_MAX_PER_OWNER=${CALENDAR_MAX_PER_OWNER:-5}
+      - CALENDAR_TTL_DAYS=${CALENDAR_TTL_DAYS:-210}
+      - CALENDAR_SCHEDULER_INTERVAL_SECONDS=${CALENDAR_SCHEDULER_INTERVAL_SECONDS:-60}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
       interval: 30s
@@ -179,4 +193,8 @@ volumes:
   # 全站通知运营配置的共享降级文件；属用户确认的无状态规则例外
   app-notice-fallback:
     name: edu-query-app_format-notice-fallback
+    driver: local
+  # 日历订阅权威库（SQLite）+ 加密凭据；单实例部署
+  app-calendar:
+    name: edu-query-app_calendar
     driver: local
