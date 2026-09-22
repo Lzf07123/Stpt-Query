@@ -180,8 +180,9 @@ qwen3-vl-flash 复验居中无多余占位）。
 **全屏结果与公开链接（2026-08-26 补充）**：查询后返回结果占满全屏（隐藏表单、单列全宽、
 `min-height:min(72vh,880px)`）+「返回查询」按钮（实测点击后表单恢复、聚焦学号）；免密登录
 `/jump/go` 与课表下载 `/get_schedule/export` 链接改为公网入口地址（compose 注入
-`JWXT_PUBLIC_URL=${PUBLIC_BASE_URL}`），nginx 放行两路径并反代到 format-service，
-format-service 新增白名单透传端点（经 internal 网络原样转发上游 HTML/文件响应）；
+`JWXT_PUBLIC_URL=${PUBLIC_BASE_URL}`），nginx 放行两路径并反代到 app，
+由 app 内的白名单透传端点原样转发上游 HTML/文件响应（2026-09-22 单体化后为同进程处理，
+不再有 format-service 容器、internal 网络与服务间令牌）；
 真实凭据实测跳转链接变为 `http://127.0.0.1:8000/jump/go?code=..` 且浏览器可打开桥接页，
 无效下载码透传返回上游友好错误；新增 3 个透传用例（30/30 通过）。
 

@@ -187,10 +187,12 @@ networks:
 
 volumes:
   # 查询日志文件通道；业务编排仍无状态，日志随具名持久卷跨容器/守护进程重启保留
+  # 卷名沿用单体化前的 format 前缀：改名等于换卷，会丢既有日志，故保留
   app-query-logs:
     name: edu-query-app_format-query-logs-persistent
     driver: local
   # 全站通知运营配置的共享降级文件；属用户确认的无状态规则例外
+  # 卷名同样保留历史 format 前缀，理由同上（既有通知与历史不可丢）
   app-notice-fallback:
     name: edu-query-app_format-notice-fallback
     driver: local

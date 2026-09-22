@@ -50,10 +50,12 @@ stay in process memory.
 | Service stdout | Docker logging driver | Configure the host logging driver | Ship to centralized logs; do not store credentials |
 | Built images | Local Docker/registry | Prune superseded tags after a release | Keep release tags, not a rolling `latest` tag |
 
-The backup script performs an RDB `SAVE`, copies `dump.rdb` out of the
-container, compresses it, and removes backups older than
-`REDIS_BACKUP_RETENTION_DAYS`. It only applies to an external/self-hosted Redis;
-there is no Redis container in the default topology.
+`scripts/backup-redis.sh` targets the optional **external** Redis: it runs
+`redis-cli -u "$REDIS_URL" SAVE`, pulls the snapshot with
+`redis-cli --rdb <file>`, compresses it, and removes backups older than
+`REDIS_BACKUP_RETENTION_DAYS` (14 days by default). It needs `redis-cli` on the
+host that runs the script. The default topology ships no Redis container, so
+leave `REDIS_URL` empty unless async jobs or multiple replicas are required.
 
 ## Launch Checklist
 
