@@ -10,6 +10,13 @@
     loginForm: $("loginForm"), tokenInput: $("adminToken"),
     loginMessage: $("loginMessage"), app: $("adminApp"), logout: $("logoutBtn"),
     tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), tabNotices: $("tabNotices"),
+    tabCalendars: $("tabCalendars"), calendarsPanel: $("calendarsPanel"),
+    calendarsBody: $("calendarsBody"), calendarQuery: $("calendarQuery"),
+    calendarSemesterFilter: $("calendarSemesterFilter"),
+    calendarStateFilter: $("calendarStateFilter"), calendarSearch: $("calendarSearch"),
+    calendarReload: $("calendarReload"), calendarTotal: $("calendarTotal"),
+    calendarActive: $("calendarActive"), calendarReauth: $("calendarReauth"),
+    calendarPaused: $("calendarPaused"), calendarMessage: $("calendarMessage"),
     logsPanel: $("logsPanel"), noticesPanel: $("noticesPanel"),
     metricsPanel: $("metricsPanel"), filter: $("logFilter"), exportBtn: $("exportBtn"),
     filterToggle: $("filterToggle"),
@@ -542,17 +549,108 @@
   function setActiveTab(tab, reload) {
     var isMetrics = tab === "metrics";
     var isNotices = tab === "notices";
+    var isCalendars = tab === "calendars";
+    var isLogs = !isMetrics && !isNotices && !isCalendars;
     elements.tabMetrics.classList.toggle("active", isMetrics);
-    elements.tabLogs.classList.toggle("active", !isMetrics && !isNotices);
+    elements.tabLogs.classList.toggle("active", isLogs);
     elements.tabNotices.classList.toggle("active", isNotices);
+    elements.tabCalendars.classList.toggle("active", isCalendars);
     elements.tabMetrics.setAttribute("aria-current", isMetrics ? "page" : "false");
-    elements.tabLogs.setAttribute("aria-current", !isMetrics && !isNotices ? "page" : "false");
+    elements.tabLogs.setAttribute("aria-current", isLogs ? "page" : "false");
     elements.tabNotices.setAttribute("aria-current", isNotices ? "page" : "false");
+    elements.tabCalendars.setAttribute("aria-current", isCalendars ? "page" : "false");
     elements.metricsPanel.hidden = !isMetrics;
     elements.noticesPanel.hidden = !isNotices;
-    elements.logsPanel.hidden = isMetrics || isNotices;
+    elements.calendarsPanel.hidden = !isCalendars;
+    elements.logsPanel.hidden = !isLogs;
     if (isMetrics && reload !== false) loadMetrics().catch(function () {});
     if (isNotices) loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
+    if (isCalendars) loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
+  }
+
+  function showCalendarMessage(text, kind) {
+    if (!elements.calendarMessage) return;
+    elements.calendarMessage.textContent = text || "";
+    elements.calendarMessage.classList.toggle("hidden", !text);
+    elements.calendarMessage.classList.toggle("notice-warning", kind === "error");
+  }
+
+  function calendarStateLabel(value) {
+    return { active: "正常", reauth_needed: "需重新授权", degraded: "上游异常",
+             locked: "已暂停" }[value] || value || "—";
+  }
+
+  async function loadCalendars() {
+    var params = [];
+    if (elements.calendarQuery.value.trim()) params.push("username=" + encodeURIComponent(elements.calendarQuery.value.trim()));
+    if (elements.calendarSemesterFilter.value.trim()) params.push("semester=" + encodeURIComponent(elements.calendarSemesterFilter.value.trim()));
+    if (elements.calendarStateFilter.value) params.push("state=" + encodeURIComponent(elements.calendarStateFilter.value));
+    params.push("size=20");
+    var payload = await request("calendars" + (params.length ? "?" + params.join("&") : ""));
+    renderCalendars(payload);
+  }
+
+  function renderCalendars(payload) {
+    var items = payload.items || [];
+    var stats = payload.stats || {};
+    var states = stats.states || {};
+    if (elements.calendarTotal) elements.calendarTotal.textContent = stats.total == null ? "—" : stats.total;
+    if (elements.calendarActive) elements.calendarActive.textContent = states.active == null ? "0" : states.active;
+    if (elements.calendarReauth) elements.calendarReauth.textContent = states.reauth_needed == null ? "0" : states.reauth_needed;
+    if (elements.calendarPaused) elements.calendarPaused.textContent = stats.paused == null ? "0" : stats.paused;
+    elements.calendarsBody.innerHTML = "";
+    if (!items.length) {
+      elements.calendarsBody.innerHTML = '<tr><td colspan="8" class="empty-cell">暂无订阅</td></tr>';
+      return;
+    }
+    items.forEach(function (item) {
+      var row = document.createElement("tr");
+      var cells = [
+        item.username || "—", item.semester || "—",
+        calendarStateLabel(item.state),
+        Math.round((item.refresh_interval || 0) / 3600) + " 小时",
+        item.last_refresh_at || "—",
+        String(item.fail_count == null ? 0 : item.fail_count),
+        item.feed_url_masked || "—"
+      ];
+      cells.forEach(function (value, index) {
+        var td = document.createElement("td");
+        td.textContent = value;
+        if (index === 0) td.className = "notice-content";
+        row.appendChild(td);
+      });
+      var actions = document.createElement("td");
+      [["refresh", "刷新"], ["pause", "暂停"], ["resume", "恢复"], ["rotate", "轮换"], ["delete", "删除"]].forEach(function (pair) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn btn-ghost" + (pair[0] === "delete" ? " danger" : "");
+        button.textContent = pair[1];
+        button.dataset.action = pair[0];
+        button.dataset.id = item.id;
+        actions.appendChild(button);
+      });
+      row.appendChild(actions);
+      elements.calendarsBody.appendChild(row);
+    });
+  }
+
+  async function calendarAction(action, id) {
+    if (action === "refresh") await request("calendars/" + id + "/refresh", { method: "POST" });
+    else if (action === "pause") await request("calendars/" + id + "/pause?hours=24", { method: "POST" });
+    else if (action === "resume") await request("calendars/" + id + "/resume", { method: "POST" });
+    else if (action === "rotate") {
+      if (!window.confirm("轮换后原订阅地址立即失效，需在日历软件中重新添加。继续？")) return;
+      var rotated = await request("calendars/" + id + "/rotate", { method: "POST" });
+      if (rotated && rotated.feed_url) {
+        showCalendarMessage("已轮换订阅地址，请在用户端重新添加（后台不展示完整地址）");
+        loadCalendars().catch(function () {});
+        return;
+      }
+    } else if (action === "delete") {
+      if (!window.confirm("将彻底删除该订阅的加密凭据与课表快照，且不可恢复。确认删除？")) return;
+      await request("calendars/" + id, { method: "DELETE" });
+    }
+    await loadCalendars();
   }
 
   function stopTimers() {
@@ -1040,7 +1138,29 @@
     elements.logout.addEventListener("click", function () {
       setToken(""); stopTimers(); location.reload();
     });
-    [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"]].forEach(function (pair) {
+    elements.calendarFilter = $("calendarFilter");
+    if (elements.calendarFilter) {
+      elements.calendarFilter.addEventListener("submit", function (event) {
+        event.preventDefault();
+        loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
+      });
+    }
+    if (elements.calendarReload) {
+      elements.calendarReload.addEventListener("click", function () {
+        loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
+      });
+    }
+    if (elements.calendarsBody) {
+      elements.calendarsBody.addEventListener("click", function (event) {
+        var button = event.target.closest("button[data-action]");
+        if (!button) return;
+        button.disabled = true;
+        calendarAction(button.dataset.action, button.dataset.id).catch(function (error) {
+          showCalendarMessage(error.message, "error");
+        }).finally(function () { button.disabled = false; });
+      });
+    }
+    [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"], ["tabCalendars", "calendars"]].forEach(function (pair) {
       $(pair[0]).addEventListener("click", function () {
         setActiveTab(pair[1]);
       });

@@ -51,6 +51,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v15H4z"/><path d="M8 9h8M8 13h8M8 17h4"/></svg>
             <span>查询日志</span>
           </button>
+          <button class="seg-btn admin-nav-btn" id="tabCalendars" data-tab="calendars" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
+            <span>网络日历</span>
+          </button>
           <button class="seg-btn admin-nav-btn" id="tabNotices" data-tab="notices" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
             <span>通知管理</span>
@@ -219,6 +223,53 @@
         </div>
       </section>
 
+      <section class="panel" id="calendarsPanel" hidden aria-labelledby="calendarManageTitle">
+        <form class="card filter-card" id="calendarFilter">
+          <div class="section-caption" id="calendarManageTitle">网络日历订阅</div>
+          <div class="filter-grid">
+            <label>学号<input class="input" id="calendarQuery" inputmode="numeric" maxlength="10" placeholder="10 位学号精确查询"></label>
+            <label>学期<input class="input" id="calendarSemesterFilter" maxlength="16" placeholder="如 2026-2027-1"></label>
+            <label>状态
+              <select class="input" id="calendarStateFilter">
+                <option value="">全部</option>
+                <option value="active">正常</option>
+                <option value="reauth_needed">需重新授权</option>
+                <option value="degraded">上游异常</option>
+                <option value="locked">已暂停</option>
+              </select>
+            </label>
+            <div class="filter-control">
+              <span class="field-label">&nbsp;</span>
+              <button class="btn btn-primary" type="submit" id="calendarSearch">查询</button>
+            </div>
+          </div>
+          <output class="notice notice-info hidden" id="calendarMessage" role="status"></output>
+        </form>
+
+        <div class="stat-row">
+          <article class="card metric-card stat-card"><span>订阅总数</span><strong id="calendarTotal">—</strong></article>
+          <article class="card metric-card stat-card"><span>正常</span><strong id="calendarActive">—</strong></article>
+          <article class="card metric-card stat-card"><span>需重新授权</span><strong id="calendarReauth">—</strong></article>
+          <article class="card metric-card stat-card"><span>已暂停</span><strong id="calendarPaused">—</strong></article>
+        </div>
+
+        <div class="card table-card">
+          <div class="table-scroll notice-table-scroll">
+            <table>
+              <caption class="sr-only">网络日历订阅列表</caption>
+              <thead><tr><th>学号</th><th>学期</th><th>状态</th><th>刷新间隔</th><th>最后刷新</th><th>失败</th><th>订阅地址</th><th>操作</th></tr></thead>
+              <tbody id="calendarsBody"><tr><td colspan="8" class="empty-cell">加载中</td></tr></tbody>
+            </table>
+          </div>
+          <div class="pagination">
+            <div class="pagination-nav">
+              <button class="btn secondary-btn" id="calendarReload" type="button">刷新列表</button>
+              <span id="calendarPageInfo">仅显示最近 20 条</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" id="logsPanel" hidden>
         <form class="card filter-card logs-primary" id="logFilter">
           <div class="filter-grid">
@@ -351,6 +402,6 @@
   <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=18" defer></script>
+  <script src="/admin.js?v=19" defer></script>
 </body>
 </html>

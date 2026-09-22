@@ -74,7 +74,7 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=18" in page
+    assert "/admin.js?v=19" in page
 
 
 def test_homepage_notice_bar_and_history_are_external_scripts():
