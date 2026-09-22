@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=72">
+  <link rel="stylesheet" href="/style.css?v=73">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
   <script src="/notice.js?v=5" defer></script>
@@ -201,7 +201,7 @@
         <div id="resultHtml" class="markdown-body hidden"></div>
         <pre id="result" class="hidden"></pre>
         <div id="pdfActions" class="pdf-actions hidden"></div>
-        <div id="calendarBlock" class="notice hidden" aria-live="polite"></div>
+        <div id="calendarBlock" class="calendar-block hidden" aria-live="polite"></div>
       </div>
     </div>
 
@@ -234,46 +234,48 @@
     </div>
   </div>
   <div id="calendarModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="calendarTitle">
-    <div class="modal-panel notice-history-panel">
-      <div class="notice-history-head">
+    <div class="modal-panel calendar-panel">
+      <div class="calendar-head">
         <h2 id="calendarTitle">网络日历订阅</h2>
         <button type="button" id="calendarClose" class="modal-close" aria-label="关闭网络日历面板">&times;</button>
       </div>
-      <div class="notice-history-list">
-        <p id="calendarHint">用学号与密码查询该账号是否已开启订阅。开启后可用手机/电脑日历直接订阅课表，服务端按间隔自动刷新。</p>
-        <label class="input-wrap"><span>学号</span>
-          <input id="calendarUsername" class="input" inputmode="numeric" maxlength="10" placeholder="10 位数字学号" autocomplete="off">
-        </label>
-        <label class="input-wrap"><span>密码</span>
-          <input id="calendarPassword" class="input" type="password" maxlength="256" placeholder="教务系统密码" autocomplete="current-password">
-        </label>
-        <label class="input-wrap"><span>学期</span>
-          <input id="calendarSemester" class="input" maxlength="16" placeholder="2026-2027-1">
-        </label>
-        <label class="input-wrap"><span>刷新间隔</span>
-          <select id="calendarInterval" class="input">
-            <option value="21600">每 6 小时</option>
-            <option value="43200" selected>每 12 小时</option>
-            <option value="86400">每 24 小时</option>
-          </select>
-        </label>
-        <div class="pdf-actions">
+      <div class="calendar-body">
+        <p id="calendarHint" class="calendar-hint">用学号与密码查询该账号是否已开启订阅。开启后可用手机/电脑日历直接订阅课表，服务端按间隔自动刷新。</p>
+        <div class="calendar-grid">
+          <label class="calendar-field"><span>学号</span>
+            <input id="calendarUsername" class="input" inputmode="numeric" maxlength="10" placeholder="10 位数字学号" autocomplete="off">
+          </label>
+          <label class="calendar-field"><span>密码</span>
+            <input id="calendarPassword" class="input" type="password" maxlength="256" placeholder="教务系统密码" autocomplete="current-password">
+          </label>
+          <label class="calendar-field"><span>学期</span>
+            <input id="calendarSemester" class="input" maxlength="16" placeholder="2026-2027-1">
+          </label>
+          <label class="calendar-field"><span>刷新间隔</span>
+            <select id="calendarInterval" class="input">
+              <option value="21600">每 6 小时</option>
+              <option value="43200" selected>每 12 小时</option>
+              <option value="86400">每 24 小时</option>
+            </select>
+          </label>
+        </div>
+        <div class="calendar-actions">
           <button type="button" class="btn btn-primary" id="calendarCheck">查询该学号是否已开启</button>
           <button type="button" class="btn btn-ghost" id="calendarUseForm">复用查询表单的学号密码</button>
         </div>
-        <div id="calendarState" class="notice" aria-live="polite"></div>
-        <div id="calendarUrlBox" class="pdf-actions hidden">
+        <div id="calendarState" class="calendar-state" data-state="none" aria-live="polite"></div>
+        <div id="calendarUrlBox" class="calendar-url-row hidden">
           <input id="calendarUrl" class="input" readonly aria-label="订阅地址">
           <button type="button" class="btn btn-ghost" id="calendarReveal">显示</button>
           <button type="button" class="btn btn-ghost" id="calendarCopy">复制</button>
         </div>
-        <div class="pdf-actions">
+        <div class="calendar-actions">
           <button type="button" class="btn btn-ghost" id="calendarEnable">一键开启订阅</button>
           <button type="button" class="btn btn-ghost" id="calendarRefreshNow">立即刷新</button>
           <button type="button" class="btn btn-ghost" id="calendarRotate">轮换地址</button>
           <button type="button" class="btn btn-ghost" id="calendarStop">关闭订阅</button>
         </div>
-        <p id="calendarNote">关闭订阅会立即删除加密凭据与课表快照并让地址失效；已同步到手机/日历软件的事件需在客户端自行删除。</p>
+        <p id="calendarNote" class="calendar-note">关闭订阅会立即删除加密凭据与课表快照并让地址失效；已同步到手机/日历软件的事件需在客户端自行删除。</p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-ghost" id="calendarDismiss">关闭面板</button>
@@ -2078,6 +2080,7 @@
       var inferred = calendarConfig && calendarConfig.inferred_periods && calendarConfig.inferred_periods.length
         ? "（第 " + calendarConfig.inferred_periods.join("、") + " 节时间为推算值，待学校官方确认）" : "";
       calendarEls.state.textContent = text + inferred;
+      calendarEls.state.dataset.state = st || "none";
       var hasUrl = Boolean(calendarState.feedUrl);
       calendarEls.urlBox.classList.toggle("hidden", !hasUrl);
       if (hasUrl) {
@@ -2222,6 +2225,7 @@
       calendarEls.block.classList.remove("hidden");
       calendarEls.block.textContent = "";
       var text = document.createElement("span");
+      text.className = "calendar-block-text";
       var label = info.state === "active" ? "已开启网络日历订阅"
         : (info.state === "reauth_needed" ? "订阅存在但用的是旧密码，可重新授权" : "尚未开启网络日历订阅");
       text.textContent = "📅 " + label + "（" + (info.semester || "") + "）";

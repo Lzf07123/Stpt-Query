@@ -606,8 +606,7 @@
     items.forEach(function (item) {
       var row = document.createElement("tr");
       var cells = [
-        item.username || "—", item.semester || "—",
-        calendarStateLabel(item.state),
+        item.username || "—", item.semester || "—", null,
         Math.round((item.refresh_interval || 0) / 3600) + " 小时",
         item.last_refresh_at || "—",
         String(item.fail_count == null ? 0 : item.fail_count),
@@ -615,11 +614,19 @@
       ];
       cells.forEach(function (value, index) {
         var td = document.createElement("td");
-        td.textContent = value;
+        if (index === 2) {
+          var badge = document.createElement("span");
+          badge.className = "calendar-badge calendar-badge--" + (item.state || "active");
+          badge.textContent = calendarStateLabel(item.state);
+          td.appendChild(badge);
+        } else {
+          td.textContent = value;
+        }
         if (index === 0) td.className = "notice-content";
         row.appendChild(td);
       });
       var actions = document.createElement("td");
+      actions.className = "calendar-actions-cell";
       [["refresh", "刷新"], ["pause", "暂停"], ["resume", "恢复"], ["rotate", "轮换"], ["delete", "删除"]].forEach(function (pair) {
         var button = document.createElement("button");
         button.type = "button";

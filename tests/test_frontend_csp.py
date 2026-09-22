@@ -74,7 +74,7 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=19" in page
+    assert "/admin.js?v=20" in page
 
 
 def test_homepage_notice_bar_and_history_are_external_scripts():
@@ -84,7 +84,7 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=5"' in index
-    assert 'href="/style.css?v=72"' in index
+    assert 'href="/style.css?v=73"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
