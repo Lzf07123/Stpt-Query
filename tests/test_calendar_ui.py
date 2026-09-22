@@ -73,3 +73,25 @@ def test_calendar_panel_reuses_semester_dropdown():
     assert "calendarSemesterMenu" in page
     assert 'getElementById("semestersMenu")' in page      # 选项从首页菜单克隆
     assert 'class="calendar-section-title"' in page       # 分区布局
+
+
+def test_calendar_panel_is_responsive():
+    """弹窗必须是小屏可用的三段式：头部/底部固定、内容区滚动、按钮不溢出。"""
+    css = _read("frontend/src/app.css")
+    start = css.index(".calendar-panel {")
+    panel = css[start:css.index("}", start)]
+    assert "flex-direction: column" in panel          # 头部 + 内容 + 底部三段式
+    assert "max-height: min(90dvh" in panel           # 高度受视口约束
+    assert "overflow: hidden" in panel
+
+    body_start = css.index(".calendar-body {")
+    body = css[body_start:css.index("}", body_start)]
+    assert "overflow-y: auto" in body                 # 内容区自身滚动
+    assert "min-height: 0" in body                    # flex 子项允许收缩
+
+    assert "@media (max-width: 560px)" in css
+    small = css[css.index("@media (max-width: 560px)"):]
+    small = small[:small.index("@media (max-width: 400px)")]
+    assert ".calendar-actions .btn," in small         # 小屏按钮整行
+    assert ".calendar-url-row .input" in small        # 地址行换行
+    assert ".calendar-panel .modal-footer .btn" in small   # 底部操作按钮铺满

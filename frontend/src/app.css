@@ -234,17 +234,30 @@
 
   /* ---------- 网络日历订阅（页脚入口 / 结果区区块 / 面板） ---------- */
   .calendar-panel {
-    display: grid;
-    gap: 14px;
+    /* 三段式：头部固定 + 内容区滚动 + 底部操作栏固定，保证小屏也能看到「关闭面板」 */
+    display: flex;
+    flex-direction: column;
     width: 560px;
     max-width: min(94vw, 560px);
-    max-height: min(88dvh, 760px);
-    padding: 22px 20px 0;
-    overflow-y: auto;
+    max-height: min(90dvh, 760px);
+    padding: 0;
+    overflow: hidden;
+  }
+  .calendar-head {
+    padding: 18px 20px 0;
   }
   .calendar-body {
     display: grid;
     gap: 16px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 14px 20px 18px;
+  }
+  .calendar-panel .modal-footer {
+    margin: 0;
+    border-top: 1px solid var(--color-border);
   }
   .calendar-section {
     display: grid;
@@ -288,6 +301,37 @@
   }
   .calendar-field .input { width: 100%; }
   .calendar-field .segmented { width: 100%; }
+  @media (max-width: 560px) {
+    .calendar-panel {
+      width: 100%;
+      max-width: min(96vw, 560px);
+      max-height: min(88dvh, 720px);
+    }
+    .calendar-head { padding: 16px 16px 0; }
+    .calendar-body { padding: 12px 16px 16px; }
+    /* 小屏按钮整行显示，避免 flex-basis + 最小宽度导致横向溢出/被裁切 */
+    .calendar-actions .btn,
+    .calendar-actions .btn-primary {
+      flex: 1 1 100%;
+    }
+    .calendar-actions--equal .btn {
+      min-width: 0;
+    }
+    .calendar-url-row .input {
+      flex: 1 1 100%;
+    }
+    .calendar-url-row .btn {
+      flex: 1 1 0;
+    }
+    .calendar-panel .modal-footer .btn {
+      width: 100%;
+    }
+  }
+  @media (max-width: 400px) {
+    .calendar-actions { gap: 6px; }
+    .calendar-section + .calendar-section { padding-top: 10px; }
+  }
+
   .calendar-field .seg-btn { min-height: 36px; padding: 6px 8px; font-size: 12px; }
   .calendar-actions {
     display: flex;
