@@ -82,6 +82,26 @@
     } catch (e) {}
   }
 
+  function errorDetail(payload, status) {
+    // FastAPI 校验错误（422）的 detail 是对象数组，直接 String() 会得到 [object Object]
+    var detail = payload && payload.detail;
+    if (typeof detail === "string" && detail) return detail;
+    if (Array.isArray(detail)) {
+      var parts = detail.map(function (item) {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          var loc = Array.isArray(item.loc)
+            ? item.loc.filter(function (part) { return part !== "body"; }).join(".") : "";
+          return (loc ? loc + "：" : "") + (item.msg || JSON.stringify(item));
+        }
+        return String(item);
+      }).filter(function (text) { return text; });
+      if (parts.length) return parts.join("；");
+    }
+    if (detail && typeof detail === "object") return JSON.stringify(detail);
+    return "请求失败（HTTP " + status + "）";
+  }
+
   async function request(path, options) {
     options = options || {};
     var response;
@@ -104,7 +124,7 @@
     if (!response.ok) {
       if (response.status === 404 && !(payload && payload.detail)) throw new Error("凭据无效");
       if (response.status === 401 || response.status === 403) throw new Error("凭据无效");
-      throw new Error(payload && payload.detail ? String(payload.detail) : "请求失败");
+      throw new Error(errorDetail(payload, response.status));
     }
     return payload;
   }
@@ -581,6 +601,11 @@
   }
 
   async function loadCalendars() {
+    var username = elements.calendarQuery.value.trim();
+    if (username && !/^\d{10}$/.test(username)) {
+      showCalendarMessage("学号需为 10 位数字", "error");
+      return;
+    }
     var params = [];
     if (elements.calendarQuery.value.trim()) params.push("username=" + encodeURIComponent(elements.calendarQuery.value.trim()));
     if (elements.calendarSemesterFilter.value.trim()) params.push("semester=" + encodeURIComponent(elements.calendarSemesterFilter.value.trim()));

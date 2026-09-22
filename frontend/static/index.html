@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=74">
+  <link rel="stylesheet" href="/style.css?v=75">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
   <script src="/notice.js?v=5" defer></script>
@@ -240,43 +240,66 @@
         <button type="button" id="calendarClose" class="modal-close" aria-label="关闭网络日历面板">&times;</button>
       </div>
       <div class="calendar-body">
-        <p id="calendarHint" class="calendar-hint">用学号与密码查询该账号是否已开启订阅。开启后可用手机/电脑日历直接订阅课表，服务端按间隔自动刷新。</p>
-        <div class="calendar-grid">
-          <label class="calendar-field"><span class="field-label">学号</span>
-            <input id="calendarUsername" class="input" inputmode="numeric" maxlength="10" placeholder="10 位数字学号" autocomplete="off">
-          </label>
-          <label class="calendar-field"><span class="field-label">密码</span>
-            <input id="calendarPassword" class="input" type="password" maxlength="256" placeholder="教务系统密码" autocomplete="current-password">
-          </label>
-          <label class="calendar-field"><span class="field-label">学期</span>
-            <input id="calendarSemester" class="input" maxlength="16" placeholder="2026-2027-1">
-          </label>
-          <label class="calendar-field"><span class="field-label">刷新间隔</span>
+        <section class="calendar-section">
+          <h3 class="calendar-section-title">当前状态</h3>
+          <div id="calendarState" class="calendar-state" data-state="none" aria-live="polite"></div>
+          <div id="calendarUrlBox" class="calendar-url-row hidden">
+            <input id="calendarUrl" class="input" readonly aria-label="订阅地址">
+            <button type="button" class="btn btn-ghost" id="calendarReveal">显示</button>
+            <button type="button" class="btn btn-ghost" id="calendarCopy">复制</button>
+          </div>
+        </section>
+
+        <section class="calendar-section">
+          <h3 class="calendar-section-title">账号与学期</h3>
+          <div class="calendar-grid">
+            <label class="calendar-field"><span class="field-label">学号</span>
+              <input id="calendarUsername" class="input" inputmode="numeric" maxlength="10" placeholder="10 位数字学号" autocomplete="off">
+            </label>
+            <label class="calendar-field"><span class="field-label">密码</span>
+              <input id="calendarPassword" class="input" type="password" maxlength="256" placeholder="教务系统密码" autocomplete="current-password">
+            </label>
+          </div>
+          <div class="calendar-field">
+            <span class="field-label">学期</span>
+            <div class="dropdown" id="calendarSemesterDropdown">
+              <button type="button" class="dropdown-trigger" id="calendarSemesterTrigger"
+                      aria-haspopup="listbox" aria-expanded="false">默认当前学期</button>
+              <div class="dropdown-menu hidden" id="calendarSemesterMenu" role="listbox">
+                <button type="button" class="dropdown-item" data-value="">默认当前学期</button>
+              </div>
+              <input type="hidden" id="calendarSemester" value="">
+            </div>
+          </div>
+          <div class="calendar-actions">
+            <button type="button" class="btn btn-primary" id="calendarCheck">查询该学号是否已开启</button>
+            <button type="button" class="btn btn-ghost" id="calendarUseForm">复用查询表单</button>
+          </div>
+        </section>
+
+        <section class="calendar-section">
+          <h3 class="calendar-section-title">刷新策略</h3>
+          <div class="calendar-field">
             <div class="segmented" id="calendarIntervalGroup" role="group" aria-label="刷新间隔">
               <button type="button" class="seg-btn" data-interval="21600">6 小时</button>
               <button type="button" class="seg-btn active" data-interval="43200">12 小时</button>
               <button type="button" class="seg-btn" data-interval="86400">24 小时</button>
             </div>
             <input type="hidden" id="calendarInterval" value="43200">
-          </label>
-        </div>
-        <div class="calendar-actions">
-          <button type="button" class="btn btn-primary" id="calendarCheck">查询该学号是否已开启</button>
-          <button type="button" class="btn btn-ghost" id="calendarUseForm">复用查询表单的学号密码</button>
-        </div>
-        <div id="calendarState" class="calendar-state" data-state="none" aria-live="polite"></div>
-        <div id="calendarUrlBox" class="calendar-url-row hidden">
-          <input id="calendarUrl" class="input" readonly aria-label="订阅地址">
-          <button type="button" class="btn btn-ghost" id="calendarReveal">显示</button>
-          <button type="button" class="btn btn-ghost" id="calendarCopy">复制</button>
-        </div>
-        <div class="calendar-actions">
-          <button type="button" class="btn btn-ghost" id="calendarEnable">一键开启订阅</button>
-          <button type="button" class="btn btn-ghost" id="calendarRefreshNow">立即刷新</button>
-          <button type="button" class="btn btn-ghost" id="calendarRotate">轮换地址</button>
-          <button type="button" class="btn btn-ghost" id="calendarStop">关闭订阅</button>
-        </div>
-        <p id="calendarNote" class="calendar-note">关闭订阅会立即删除加密凭据与课表快照并让地址失效；已同步到手机/日历软件的事件需在客户端自行删除。</p>
+          </div>
+          <p class="calendar-hint">服务端按所选间隔重新抓取课表；日历软件自身的拉取频率由客户端决定（Apple 日历较及时，Google/Outlook 通常数小时到一天）。</p>
+        </section>
+
+        <section class="calendar-section">
+          <h3 class="calendar-section-title">操作</h3>
+          <div class="calendar-actions">
+            <button type="button" class="btn btn-primary" id="calendarEnable">一键开启订阅</button>
+            <button type="button" class="btn btn-ghost" id="calendarRefreshNow">立即刷新</button>
+            <button type="button" class="btn btn-ghost" id="calendarRotate">轮换地址</button>
+            <button type="button" class="btn btn-ghost" id="calendarStop">关闭订阅</button>
+          </div>
+          <p id="calendarNote" class="calendar-note">关闭订阅会立即删除加密凭据与课表快照并让地址失效；已同步到手机/日历软件的事件需在客户端自行删除。</p>
+        </section>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-ghost" id="calendarDismiss">关闭面板</button>
@@ -2041,6 +2064,22 @@
       block: document.getElementById("calendarBlock")
     };
     var calendarState = { state: "", feedUrl: "", verifiedToken: "", semester: "" };
+    // 学期下拉：直接复用首页查询的同一份学期选项（克隆菜单项，避免两处维护）
+    (function syncCalendarSemesterOptions() {
+      var source = document.getElementById("semestersMenu");
+      var target = document.getElementById("calendarSemesterMenu");
+      if (!source || !target) return;
+      var clone = source.cloneNode(true);
+      clone.removeAttribute("id");
+      target.innerHTML = clone.innerHTML;
+    })();
+    var calendarSemesterDropdown = initDropdown(
+      "calendarSemesterTrigger", "calendarSemesterMenu", "calendarSemester", "默认当前学期");
+
+    function calendarSyncSemester(value) {
+      if (value) calendarEls.semester.value = value;
+      calendarSemesterDropdown.sync();
+    }
     var calendarConfig = null;
     var calendarUrlVisible = false;
 
@@ -2126,7 +2165,17 @@
       var payload = calendarPayload();
       if (!/^\d{10}$/.test(payload.username)) { calendarEls.state.textContent = "学号必须为 10 位数字"; return null; }
       if (!payload.password) { calendarEls.state.textContent = "请填写教务系统密码"; return null; }
-      if (!payload.semester) { calendarEls.state.textContent = "请填写学期，例如 2026-2027-1"; return null; }
+      if (!payload.semester) {
+        var fallback = calendarConfig && calendarConfig.default_semester;
+        if (fallback) {
+          calendarSyncSemester(fallback);
+          payload.semester = fallback;
+        } else {
+          calendarEls.state.textContent = "正在加载学期列表，请稍后再试";
+          calendarLoadConfig();
+          return null;
+        }
+      }
       return payload;
     }
 
@@ -2146,6 +2195,7 @@
       calendarState.lastRefreshAt = data.last_refresh_at;
       if (data.verified_token) calendarState.verifiedToken = data.verified_token;
       if (data.refresh_interval) calendarSyncInterval(data.refresh_interval);
+      if (data.semester) calendarSyncSemester(data.semester);
       calendarRender();
     }
 
@@ -2214,7 +2264,11 @@
 
     function calendarOpen() {
       calendarFill(true);
-      calendarLoadConfig();
+      calendarLoadConfig().then(function (cfg) {
+        if (!calendarEls.semester.value && cfg && cfg.default_semester) {
+          calendarSyncSemester(cfg.default_semester);
+        }
+      });
       calendarEls.modal.classList.remove("hidden");
       calendarRender();
       if (!calendarState.state) calendarEls.username.focus();
@@ -2235,6 +2289,7 @@
       calendarEls.block.classList.remove("hidden");
       calendarEls.block.textContent = "";
       if (info.refresh_interval) calendarSyncInterval(info.refresh_interval);
+      if (info.semester) calendarSyncSemester(info.semester);
       var text = document.createElement("span");
       text.className = "calendar-block-text";
       var label = info.state === "active" ? "已开启网络日历订阅"
@@ -2256,7 +2311,7 @@
     if (calendarEls.useForm) calendarEls.useForm.addEventListener("click", function () {
       calendarEls.username.value = usernameInput.value.trim();
       calendarEls.password.value = passwordInput.value;
-      calendarEls.semester.value = semestersInput.value || (calendarConfig && calendarConfig.default_semester) || "";
+      calendarSyncSemester(semestersInput.value || (calendarConfig && calendarConfig.default_semester) || "");
       calendarEls.state.textContent = "已复用查询表单中的学号与密码（仅保存在当前页面内存）";
     });
     document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (button) {
