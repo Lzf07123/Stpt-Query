@@ -1437,9 +1437,17 @@
        来源：实例化项目实测——全局 a{color:primary} 泄漏导致备案文字呈青色，已修复回写。 */
   .site-footer {
     @apply relative mt-auto border-t border-border/60 bg-surface/60 backdrop-blur;
+    /* 整行布局：版权（brand.ts 驱动）与功能入口（如网络日历）同排居中；
+       窄屏自动换行、保持 gap-y-1，不产生横向滚动或独占一行的畸变 */
+    @apply mx-auto flex min-h-14 max-w-7xl flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-5 text-xs text-muted lg:px-8;
   }
   .site-footer-inner {
-    @apply mx-auto flex min-h-14 max-w-7xl flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-5 text-xs text-muted lg:px-8;
+    /* 作为整行中的一项参与排版：尺寸/内边距/最大宽度统一由 .site-footer 提供 */
+    @apply flex min-h-0 max-w-none flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted;
+  }
+  /* 页脚功能入口：与页脚链接同一视觉语言（muted → hover foreground） */
+  .site-footer-action {
+    @apply inline-flex shrink-0 cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-xs text-muted transition-colors duration-200 hover:text-foreground focus-visible:text-foreground;
   }
   .site-footer a {
     @apply text-muted transition-colors duration-200 hover:text-foreground;
