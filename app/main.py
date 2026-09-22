@@ -1687,8 +1687,12 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
 
     if calendar_service is not None:
         app.state.calendar_service = calendar_service
+        async def _calendar_rate_limit(request: Request) -> None:
+            """日历接口复用 /run 的按 IP 限流（Redis 可用时走 Redis，否则内存桶）。"""
+            await _check_rate_limit(_client_ip(request))
+
         app.include_router(build_calendar_router(calendar_service, _require_auth,
-                                                 _require_admin))
+                                                 _require_admin, _calendar_rate_limit))
 
     return app
 

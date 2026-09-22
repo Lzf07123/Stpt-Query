@@ -81,7 +81,9 @@ class CalendarCrypto:
 
     @staticmethod
     def compare(left: str, right: str) -> bool:
-        return hmac.compare_digest(str(left or ""), str(right or ""))
+        """常量时间比较；先编码为 UTF-8，避免非 ASCII 密码触发 TypeError。"""
+        return hmac.compare_digest(str(left or "").encode("utf-8"),
+                                   str(right or "").encode("utf-8"))
 
     # ---- 短时验证令牌（查询成功后签发，证明当前密码刚被学校接受）----
     def issue_verify_token(self, owner_hash: str, now: Optional[float] = None) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import secrets
 from datetime import date, datetime, timedelta
 
@@ -11,6 +12,7 @@ import pytest
 from app.calendar.config import CalendarConfigError, load_config
 from app.calendar.crypto import CalendarCrypto, CalendarCryptoError
 from app.calendar.ics import build_events, render, weekly_runs
+from app.calendar.qr import QrPayloadError, qr_matrix, webcal_url
 from app.calendar.rules import (ScheduleDataError, contiguous_runs,
                                 occurrence_dates, parse_period_numbers,
                                 parse_weeks, resolve_periods)
@@ -342,3 +344,107 @@ def test_admin_views_never_expose_secrets(store, crypto, config):
     assert "…" in item["feed_url_masked"]
     stats = service.store.stats()
     assert stats["total"] == 1 and stats["states"]["active"] == 1
+
+
+# ---------------- 订阅二维码（本地生成，不经第三方） ----------------
+def test_webcal_url_only_accepts_http_sources():
+    url = webcal_url("https://example.com/cal/" + "A" * 43 + ".ics")
+    assert url.startswith("webcal://") and url.endswith(".ics")
+    assert webcal_url("HTTP://example.com/x.ics").startswith("webcal://")
+    with pytest.raises(QrPayloadError):
+        webcal_url("ftp://example.com/x.ics")
+    with pytest.raises(QrPayloadError):
+        webcal_url("")
+
+
+def test_qr_matrix_follows_qr_standard_structure():
+    matrix = qr_matrix(webcal_url("https://example.com/cal/" + "A" * 43 + ".ics"))
+    size = matrix["size"]
+    rows = matrix["rows"]
+    assert matrix["ecc"] == "M" and matrix["quiet_zone"] == 4
+    assert size == 17 + 4 * matrix["version"]          # 版本与尺寸必须自洽
+    assert len(rows) == size and all(len(row) == size for row in rows)
+    assert set("".join(rows)) <= {"0", "1"}
+    # 三个定位图案（7×7：外框实心、内圈留白、3×3 实心）
+    for row0, col0 in ((0, 0), (0, size - 7), (size - 7, 0)):
+        assert rows[row0][col0:col0 + 7] == "1111111"
+        assert rows[row0 + 1][col0:col0 + 7] == "1000001"
+        assert rows[row0 + 2][col0:col0 + 7] == "1011101"
+        assert rows[row0 + 4][col0:col0 + 7] == "1011101"
+        assert rows[row0 + 6][col0:col0 + 7] == "1111111"
+    # 时序图案：第 6 行与第 6 列在定位图案之间黑白交替
+    expected_timing = "".join("1" if index % 2 == 0 else "0" for index in range(8, size - 8))
+    assert rows[6][8:size - 8] == expected_timing
+    assert "".join(row[6] for row in rows)[8:size - 8] == expected_timing
+    # 同一内容必须稳定（前端刷新/多次生成不影响扫码）
+    assert qr_matrix(webcal_url("https://example.com/cal/" + "A" * 43 + ".ics")) == matrix
+
+
+def test_qr_matrix_rejects_bad_payload():
+    with pytest.raises(QrPayloadError):
+        qr_matrix("")
+    with pytest.raises(QrPayloadError):
+        qr_matrix("x" * 1201)
+
+
+def test_qr_requires_registered_owner_and_returns_webcal_matrix(store, crypto, config):
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    created = _run(service.create("2023000001", "pw", "2026-2027-1"))
+
+    # 未订阅的学期：404，且不碰学校
+    with pytest.raises(CalendarError) as missing:
+        service.qr("2023000001", "pw", "2026-2027-2")
+    assert missing.value.status_code == 404 and school.calls == 1
+
+    # 密码不符且无短时令牌：401，仍然零学校流量
+    with pytest.raises(CalendarAuthError):
+        service.qr("2023000001", "wrong", "2026-2027-1")
+    assert school.calls == 1
+
+    # L2（本地密码命中）：返回 webcal 矩阵，等价于对订阅地址编码
+    result = service.qr("2023000001", "pw", "2026-2027-1")
+    assert result["scheme"] == "webcal"
+    expected = qr_matrix(webcal_url(created["feed_url"]))
+    assert result["rows"] == expected["rows"] and result["size"] == expected["size"]
+
+    # 响应体只含模块矩阵：不得带订阅令牌或密码明文
+    body = json.dumps(result, ensure_ascii=False)
+    feed_token = created["feed_url"].rsplit("/", 1)[-1][:-4]
+    assert feed_token not in body and "pw" not in body
+
+    # L1（课表查询刚签发的短时令牌）同样可生成，且零学校流量
+    verify = service.issue_verify_token("2023000001")
+    assert service.qr("2023000001", "whatever", "2026-2027-1", verify)["rows"] == expected["rows"]
+    assert school.calls == 1
+
+
+def test_refresh_interval_and_pause_recovery(store, crypto, config):
+    """ICS 必须宣传订阅自己的刷新间隔；成功刷新必须清除失败暂停。"""
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school, max_failures=1, pause_hours=24)
+    created = _run(service.create("2023000001", "pw", "2026-2027-1", refresh_interval=21600))
+    record = store.get_by_owner_semester(crypto.owner_hash("2023000001"), "2026-2027-1")
+    feed_token = created["feed_url"].rsplit("/", 1)[-1][:-4]
+    assert b"REFRESH-INTERVAL;VALUE=DURATION:PT6H" in service.feed(feed_token)["body"]
+
+    school.error = CalendarAuthError()
+    assert _run(service.refresh_record(record)) == "credential_error"
+    assert store.get_by_id(record["id"])["paused_until"]
+
+    school.error = None
+    assert _run(service.refresh_record(store.get_by_id(record["id"]))) == "ok"
+    assert not store.get_by_id(record["id"])["paused_until"]
+
+
+def test_if_none_match_uses_weak_comparison():
+    """RFC 9110：If-None-Match 走弱比较，并支持 * 与多值列表（日历客户端会这样发）。"""
+    from app.calendar.routes import _etag_matches
+
+    etag = 'W/"abc123"'
+    assert _etag_matches(etag, etag)
+    assert _etag_matches('"abc123"', etag)                  # 强形式与弱标签弱相等
+    assert _etag_matches("*", etag)
+    assert _etag_matches('"other", W/"abc123"', etag)
+    assert not _etag_matches("", etag)
+    assert not _etag_matches('W/"another"', etag)
