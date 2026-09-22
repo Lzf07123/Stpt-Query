@@ -176,11 +176,9 @@ def test_admin_metrics_reports_snapshot_and_service_status(tmp_path):
         assert set(stack) >= {
             "memory_bytes", "limit_bytes", "source", "discovered_services", "expected_services", "services",
         }
-        assert stack["expected_services"] == 4
-        assert stack["services"]["format-service"]["source"] == "cgroup"
-        assert set(stack["services"]) == {
-            "format-service", "get-infomation-service", "frontend", "redis",
-        }
+        assert stack["expected_services"] == 3
+        assert stack["services"]["app"]["source"] == "cgroup"
+        assert set(stack["services"]) == {"app", "frontend", "redis"}
         assert set(body) >= {"generated_at", "application", "services"}
         assert body["application"]["window_seconds"] == 300
         assert body["application"]["requests"] == 0
@@ -204,7 +202,7 @@ def test_orchestration_memory_includes_redis(tmp_path, monkeypatch):
     assert metrics._classify_orchestration_process("redis-server *:6379") == "redis"
     result = metrics._orchestration_memory()
 
-    assert result["expected_services"] == 4
+    assert result["expected_services"] == 3
     assert result["discovered_services"] == 1
     assert result["services"]["redis"] == {
         "memory_bytes": redis_memory,
@@ -213,5 +211,5 @@ def test_orchestration_memory_includes_redis(tmp_path, monkeypatch):
         "source": "cgroup",
     }
     assert result["memory_bytes"] == redis_memory
-    # format-service 样本缺失时，聚合上限不可知；Redis 自身上限必须仍可见
+    # 单体应用样本缺失时，聚合上限不可知；Redis 自身上限必须仍可见
     assert result["limit_bytes"] is None

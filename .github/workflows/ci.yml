@@ -19,11 +19,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build test image
-        run: docker build -q -t format-service:test format-service
+        run: docker build -q -t edu-query-app:test .
       - name: Run pytest
         run: |
-          docker run --rm -v "$PWD":/app -w /app format-service:test \
-            sh -c "pip install -q pytest pytest-asyncio requests redis && python -m pytest -q"
+          docker run --rm -v "$PWD":/app -w /app edu-query-app:test \
+            sh -c "pip install -q pytest pytest-asyncio && python -m pytest -q"
 
   frontend:
     runs-on: ubuntu-latest
@@ -41,7 +41,7 @@ jobs:
         working-directory: frontend
         run: npm run build
       - name: Verify CSP
-        run: docker build -q -t format-service:csp format-service && docker run --rm -v "$PWD":/app -w /app format-service:csp sh -c "pip install -q pytest && python -m pytest -q tests/test_frontend_csp.py tests/test_security.py::test_inline_script_hashes_are_covered_by_csp"
+        run: docker build -q -t edu-query-app:test . && docker run --rm -v "$PWD":/app -w /app edu-query-app:test sh -c "pip install -q pytest && python -m pytest -q tests/test_frontend_csp.py tests/test_security.py::test_inline_script_hashes_are_covered_by_csp"
 
   audit:
     runs-on: ubuntu-latest
@@ -54,8 +54,7 @@ jobs:
         run: python -m pip install pip-audit
       - name: Audit Python dependencies
         run: |
-          pip-audit -r format-service/requirements.txt
-          pip-audit -r get-infomation-service/requirements.txt
+          pip-audit -r requirements.txt
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -70,4 +69,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build all service images
-        run: APP_IMAGE_TAG=${{ github.sha }} docker compose build get-infomation-service format-service frontend
+        run: APP_IMAGE_TAG=${{ github.sha }} docker compose build app frontend

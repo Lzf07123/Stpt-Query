@@ -73,9 +73,9 @@ class RuntimeMetrics:
     @staticmethod
     def _counter_meta(name: str) -> tuple[str, str]:
         descriptions = {
-            "edu_query_requests_total": "HTTP requests processed by format-service",
+            "edu_query_requests_total": "HTTP requests processed by edu-query-app",
             "edu_query_llm_requests_total": "LLM analysis calls by result",
-            "edu_query_pdf_cache_total": "Schedule PDF cache results seen by format-service",
+            "edu_query_pdf_cache_total": "Schedule PDF cache results seen by edu-query-app",
             "edu_query_concurrency_wait_seconds": "Time spent waiting for concurrency slots",
             "edu_query_request_duration_seconds": "HTTP request duration in seconds",
         }

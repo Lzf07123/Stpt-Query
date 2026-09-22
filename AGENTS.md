@@ -4,19 +4,18 @@
 
 ## 一、项目是什么
 
-edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写为三容器编排服务，不再依赖 Dify：
+edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写为**单体应用 + 边缘代理**，不再依赖 Dify：
 
-- **get-infomation-service（查询代理）**：源码自包含于本仓库同名目录，负责学校统一认证登录、免密跳转、成绩/课表原始查询。
-- **format-service（格式化后端）**：本仓库维护，负责编排固定工作流、成绩/课表 Markdown 渲染、成绩分析 LLM、异常分类与 PDF。
-- **frontend（前端）**：Nginx 托管原 dify-workflow-api 页面，是默认唯一对外入口，反向代理 `/run`、`/service-status`、`/health*` 并注入网关令牌。
+- **app（单体应用）**：`app/` 包内的单一 Python 应用，包含学校统一认证登录、免密跳转、成绩/课表原始查询（内嵌查询代理，以 ASGI 方式同进程调用）、固定工作流编排、Markdown 渲染、成绩分析 LLM、异常分类与 PDF。
+- **frontend（前端）**：Nginx 托管原 dify-workflow-api 页面，是默认唯一对外入口，反向代理 `/run`、`/service-status`、`/health*`、`/notices*` 并注入网关令牌。
 
 ## 二、事实来源
 
 动手前先读以下文件，禁止用猜测代替调查：
 
 - `README.md`：架构、契约与使用方式。
-- `docker-compose.yml`：三容器、端口与网络的唯一事实（仅 frontend 暴露宿主端口）。
-- `format-service/app/`：编排与渲染代码事实。
+- `docker-compose.yml`：两容器（app + frontend）、端口与网络的唯一事实（仅 frontend 暴露宿主端口）。
+- `app/`：单体应用代码事实（编排、渲染、内嵌查询代理 `app/jwxt_*.py`）。
 - `frontend/`：页面与 nginx 模板事实。
 - `design-system/edu-query-app/`：项目内品牌方案（BRAND/MASTER），前端视觉决策的唯一事实来源。
 - `tests/`：行为契约（渲染、分类、编排、HTTP、查询日志、安全与过载保护）。
@@ -25,14 +24,15 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 
 ## 三、硬性规则
 
-1. **三容器边界不变**：查询代理源码自包含在 `get-infomation-service/`；禁止把查询代理再复制到其他服务目录，也不允许绕过本仓库恢复兄弟仓库构建依赖。
-2. **默认唯一对外入口**：默认编排只有 `frontend` 映射宿主端口；`format-service` 与 `get-infomation-service` 不得在默认拓扑暴露宿主端口。开发/验收可显式加载 `compose.direct-*.yml` 直连，默认绑定宿主回环地址；公网直连必须先补 TLS、防火墙、访问控制与安全验收。查询代理默认仅挂 `internal` 网络。
-3. **编排层无状态**：`format-service` 不落盘查询业务状态；PDF 以 Base64 内联返回。唯一例外是全站通知运营配置：共享 JSONL 文件作为权威存储，Redis 仅作恢复副本，对应专用共享卷。
+1. **单体应用边界**：查询代理与编排合并为 `app/` 单一应用（整体搬迁、不得残留副本）；查询代理以进程内 ASGI 方式调用，禁止新增跨服务 HTTP 调用或绕过本仓库恢复兄弟仓库构建依赖。
+2. **默认唯一对外入口**：默认编排只有 `frontend` 映射宿主端口，`app` 只在 `web` 网络内暴露 8000；内嵌查询代理无独立端口、无内部网络。需要直连应用容器时，自行编写 override 文件并把端口绑定到宿主回环地址，公网直连必须先补 TLS、防火墙、访问控制与安全验收。
+3. **应用持久状态仅两项**：①全站通知运营配置（JSONL 权威存储 + 可选 Redis 恢复副本）；②日历订阅（数据落本地库，学校凭据仅以 AES-GCM 密文存储）。其余查询业务状态不落盘，PDF 以 Base64 内联返回。两项持久状态均要求单实例部署并纳入备份。
 4. **令牌安全**：固定 `API_TOKEN`（前端与后端共用）；nginx 反代时注入 `Authorization`；页面不得持有令牌；日志与响应不得输出密码/session/token。
 5. **单一事实来源**：提示词只在 `prompts.py`、异常规则只在 `classifier.py`、渲染逻辑只在 `render.py`、环境变量文档只在 `.env.example`，禁止重复实现。
-6. **命名连字符**：服务、目录、镜像一律连字符（`format-service`、`frontend`、`get-infomation-service`）。
+6. **命名连字符**：服务与镜像一律连字符（`app`、`frontend`、`edu-query-app`）；Python 内部模块沿用 `app/jwxt_*.py` 既有命名。
 7. **完成 = 验证 + 文档**：声称完成前跑第五节验证命令并保留输出；涉及结构/契约变更时同步 README 与 `.env.example`。
 8. **不做破坏性操作**：不执行 `rm -rf`、force push、删除他人提交；不动未提交的改动。
+9. **日历订阅 URL 属长期密钥**：禁止出现在日志、记忆库、提交信息与通知中；服务端只存 token 哈希 + 加密副本，必须支持轮换、撤销与到期，`/cal/` 关闭访问日志。
 
 ## 四、多 Agents 协作规范
 
@@ -58,10 +58,10 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 # 1. 编排配置合法
 docker compose config --quiet
 
-# 2. 单元测试（当前基线 141 个用例，全部通过）
-docker build -q -t format-service:test format-service
-docker run --rm -v "$PWD":/app -w /app format-service:test \
-  sh -c "pip install -q pytest pytest-asyncio requests redis && python -m pytest -q"
+# 2. 单元测试（当前基线 153 个用例，全部通过）
+docker build -q -t edu-query-app:test .
+docker run --rm -v "$PWD":/app -w /app edu-query-app:test \
+  sh -c "pip install -q pytest pytest-asyncio && python -m pytest -q"
 
 # 2b. 前端令牌构建（改动 frontend/src/ 或 brand.js 后必须重编译）
 cd frontend && npm install && npm run build && cd ..
@@ -69,7 +69,7 @@ cd frontend && npm install && npm run build && cd ..
 # frontend/templates/default.conf.template 中 script-src 对应内联脚本的
 # SHA-256 哈希（否则 CSP 拦截脚本，查询页无法使用）。
 
-# 3. 三容器端到端冒烟（需 Docker daemon）
+# 3. 两容器端到端冒烟（需 Docker daemon）
 API_TOKEN=smoke-token AUTO_ROTATE_TOKEN=false docker compose up -d --build
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/
 curl -s http://127.0.0.1:8000/health/ready

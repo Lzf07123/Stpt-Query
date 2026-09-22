@@ -52,7 +52,7 @@ server {
 
     # 管理端浏览器凭据必须原样透传；这里禁止服务端注入公共网关令牌。
     location ^~ /admin/api/ {
-        proxy_pass http://format-service:8000/admin/api/;
+        proxy_pass http://app:8000/admin/api/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -71,7 +71,7 @@ server {
         access_log off;
         # 桥接页是一次性内联脚本；精确哈希避免继承静态站点 CSP 后脚本被拦截。
         add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-OH8gUQ7Q9SYCDbphqBc7Cs4B7CWHxFl43qPdr39Enns='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
-        proxy_pass http://format-service:8000;
+        proxy_pass http://app:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -93,7 +93,7 @@ server {
 
     location = /get_schedule/export {
         access_log off;
-        proxy_pass http://format-service:8000;
+        proxy_pass http://app:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -114,7 +114,7 @@ server {
 
     # 反向代理到格式化后端；令牌由服务端注入，外部请求无需携带
     location ~ ^/(run(?:/jobs(?:/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])?)?|v1/workflows/run|service-status|notices(?:/active|/history)|health(/.*)?|jump(/.*)?|get_schedule/export)$ {
-        proxy_pass http://format-service:8000;
+        proxy_pass http://app:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;

@@ -49,15 +49,21 @@ class ServiceClient(Protocol):
 
 
 class HTTPServiceClient:
-    """httpx 实现：调用 get-infomation-service，附加 Bearer 令牌。"""
+    """httpx 实现：调用查询代理并附加 Bearer 令牌。
 
-    def __init__(self, base_url: str, api_token: str = "", timeout: float = 60.0) -> None:
+    单体模式下由调用方传入 ASGITransport，请求在同一进程内完成，不经过网络；
+    显式配置上游地址时保持原有 HTTP 行为。
+    """
+
+    def __init__(self, base_url: str, api_token: str = "", timeout: float = 60.0,
+                 transport: Optional[httpx.AsyncBaseTransport] = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_token = api_token
         self.timeout = timeout
         self.client = httpx.AsyncClient(
             timeout=timeout,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            transport=transport,
         )
 
     async def aclose(self) -> None:

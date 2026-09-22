@@ -72,8 +72,9 @@ def test_admin_orchestration_distribution_includes_redis():
     script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
     page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
 
-    assert '"redis": "编排 Redis"' in script
-    assert "/admin.js?v=17" in page
+    assert '"app": "单体应用"' in script
+    assert '"redis": "Redis（可选）"' in script
+    assert "/admin.js?v=18" in page
 
 
 def test_homepage_notice_bar_and_history_are_external_scripts():

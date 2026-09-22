@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import jwxt_http
-from jwxt_http import Handler
-from jwxt_state import KeyedLocks, SessionStore, TTLCache
-from rtf_pdf import PdfConversionError
+from app import jwxt_http
+from app.jwxt_http import Handler
+from app.jwxt_state import KeyedLocks, SessionStore, TTLCache
+from app.rtf_pdf import PdfConversionError
 
 
 PDF_METRICS = {"pdf_wait_ms": 1, "pdf_convert_ms": 2}

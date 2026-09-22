@@ -23,8 +23,8 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import jwxt_core as _core_mod
-from jwxt_core import (
+from app import jwxt_core as _core_mod
+from app.jwxt_core import (
     ALLOW_GET_CREDENTIALS, BASE, CORS_ORIGIN, DNS_FALLBACK_IPS, IDLE_TIMEOUT,
     JUMP_CODE_TTL, KNOWN_PATHS, LIMIT_CONCURRENCY, LOG, LOGIN_REUSE,
     LOGIN_LOCK_TIMEOUT, LOGIN_REUSE_MAX_AGE, LOGIN_REUSE_PROBE, MAX_BODY, MAX_SEMESTERS,
@@ -44,14 +44,14 @@ from jwxt_core import (
     dump_cookies, dump_session_cookies, dump_portal, load_cookies,
     _DaemonPool, _upstream_executor, setup_logging, set_trace_id, trace_id,
 )
-from jwxt_state import (
+from app.jwxt_state import (
     ServerState, SessionStore, BodyTooLarge, KeyedLocks, ConcurrencyLimiter,
     RateLimiter, TTLCache, ShortCodeStore, JumpCodeStore, _restore_portal,
     _ensure_warmed, _session_j, query_with_session, with_session_j,
     _probe_session, _warm_background, _jump_target, _fetch_tgt, mint_st,
     probe_school, deep_check, _health_probe_loop, health_payload, _metrics_text,
 )
-from rtf_pdf import PDF_TIMEOUT, PdfConversionError, rtf_to_pdf_detailed
+from app.rtf_pdf import PDF_TIMEOUT, PdfConversionError, rtf_to_pdf_detailed
 
 SCHEDULE_PDF_LOCK_TIMEOUT = max(5, PDF_TIMEOUT + 45)
 
@@ -66,7 +66,7 @@ def _redis_module():
         return _REDIS_MODULE
     with _REDIS_IMPORT_LOCK:
         if _REDIS_MODULE is None:
-            import jwxt_redis as module
+            from app import jwxt_redis as module
             _REDIS_MODULE = module
     return _REDIS_MODULE
 

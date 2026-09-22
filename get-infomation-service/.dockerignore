@@ -1,5 +1,0 @@
-__pycache__/
-*.pyc
-.jwxt_sessions.json
-*.log
-.env

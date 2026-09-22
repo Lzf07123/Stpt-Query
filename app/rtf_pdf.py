@@ -18,7 +18,7 @@ import time
 from collections import deque
 from contextlib import contextmanager
 
-from jwxt_core import LOG, _env
+from app.jwxt_core import LOG, _env
 
 
 class PdfConversionError(RuntimeError):

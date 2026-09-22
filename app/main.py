@@ -37,6 +37,8 @@ from .metrics import ResourceMonitor
 from .notices import (NoticeCreate, NoticeError, NoticeStore,
                       NoticeUpdate)
 from .pipeline import HTTPServiceClient, Pipeline, ServiceError
+from .jwxt_core import load_config as _load_jwxt_config
+from .jwxt_http import make_app as _make_jwxt_app
 from .querylog import JSONLFileWriter, log_query, sanitize_entry
 from .runtime_metrics import RuntimeMetrics
 from .schema import (JobSubmissionResponse, JobStatusResponse, QueryResult,
@@ -51,7 +53,9 @@ class Settings(BaseSettings):
     environment: str = "development"
     api_token: str = ""
     auto_rotate_token: bool = True
-    service_base_url: str = "https://school.lizf.cn"
+    # 留空 = 单体模式：查询代理以内嵌 ASGI 应用运行在同一进程内；
+    # 显式配置地址则回退为 HTTP 调用（测试与过渡期直连使用）
+    service_base_url: str = ""
     service_api_token: str = ""
     service_timeout: float = 60.0
     request_timeout: float = 100.0
@@ -370,7 +374,21 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         temperature=cfg.llm_temperature, max_tokens=cfg.llm_max_tokens,
         timeout=cfg.llm_timeout, enable_thinking=cfg.llm_enable_thinking,
         system_prompt=cfg.llm_system_prompt)
-    service = HTTPServiceClient(cfg.service_base_url, cfg.service_api_token, cfg.service_timeout)
+    internal_jwxt_app: Optional[FastAPI] = None
+    upstream_transport: Optional[httpx.AsyncBaseTransport] = None
+    if cfg.service_base_url.strip():
+        service_base_url = cfg.service_base_url.rstrip("/")
+        service_api_token = cfg.service_api_token
+    else:
+        # 单体模式：内嵌查询代理，进程内直连，无需网络与内部令牌
+        jwxt_cfg = _load_jwxt_config()
+        jwxt_cfg.token = secrets.token_urlsafe(32)
+        internal_jwxt_app = _make_jwxt_app(jwxt_cfg, start_background=True)
+        service_base_url = "http://jwxt.internal"
+        service_api_token = jwxt_cfg.token
+        upstream_transport = httpx.ASGITransport(app=internal_jwxt_app)
+    service = HTTPServiceClient(service_base_url, service_api_token,
+                                cfg.service_timeout, transport=upstream_transport)
     llm_slots = asyncio.Semaphore(max(1, cfg.llm_concurrency))
     pdf_slots = asyncio.Semaphore(max(1, cfg.pdf_concurrency))
     login_slots = asyncio.Semaphore(max(1, min(8, cfg.global_concurrency)))
@@ -390,6 +408,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         timeout=cfg.service_timeout,
         limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
         follow_redirects=False,
+        transport=upstream_transport,
     )
 
     async def _shutdown() -> None:
@@ -425,7 +444,12 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         await _startup()
         try:
-            yield
+            if internal_jwxt_app is None:
+                yield
+            else:
+                # 内嵌查询代理的 lifespan：拉起健康巡检与缓存清理线程
+                async with internal_jwxt_app.router.lifespan_context(internal_jwxt_app):
+                    yield
         finally:
             await _shutdown()
 
@@ -439,6 +463,8 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.pipeline = pipeline
+    # 单体模式下内嵌的查询代理应用（HTTP 兼容模式为 None），供诊断与测试使用
+    app.state.embedded_jwxt_app = internal_jwxt_app
     app.state.api_token = api_token
     app.state.rate_limit = max(1, cfg.rate_limit)
     app.state.trust_proxy = bool(cfg.trust_proxy)
@@ -1017,9 +1043,9 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         """ready 探测只关心查询代理可达性，不暴露上游错误详情。"""
         try:
             response = await upstream_client.get(
-                cfg.service_base_url.rstrip("/") + "/health",
-                headers={"Authorization": "Bearer " + cfg.service_api_token}
-                if cfg.service_api_token else {},
+                service_base_url + "/health",
+                headers={"Authorization": "Bearer " + service_api_token}
+                if service_api_token else {},
                 timeout=2.0,
             )
             if response.status_code != 200:
@@ -1106,9 +1132,9 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         school_latency: int | None = None
         try:
             response = await upstream_client.get(
-                cfg.service_base_url.rstrip("/") + "/health",
-                headers={"Authorization": "Bearer " + cfg.service_api_token}
-                if cfg.service_api_token else {},
+                service_base_url + "/health",
+                headers={"Authorization": "Bearer " + service_api_token}
+                if service_api_token else {},
                 timeout=5.0,
             )
             proxy_latency = int((time.perf_counter() - started) * 1000)
@@ -1399,7 +1425,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="not found")
         qs = request.url.query
         try:
-            upstream = await _raw_get(cfg.service_base_url, cfg.service_api_token,
+            upstream = await _raw_get(service_base_url, service_api_token,
                                       path + ("?" + qs if qs else ""),
                                       cfg.service_timeout, upstream_client)
         except httpx.HTTPError as exc:
