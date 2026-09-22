@@ -225,3 +225,34 @@ def test_reachability_classification(tmp_path):
         encoding="utf-8")
     result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_guide_prefers_copy_over_webcal_deeplink():
+    """webcal 深链在部分系统会被当成一次性导入或直接报错：主操作必须是复制地址。"""
+    page = _read("frontend/static/index.html")
+    assert page.count("primary: [copy]") == 7          # 7 个平台（含 unknown）同一策略
+    assert "attempt: true" in page                      # webcal 明确标记为可选尝试
+    assert "导入错误" in page and "新建日历订阅" in page   # 失败回退路径写在界面里
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="需要 node 才能执行前端片段")
+def test_every_platform_plan_uses_copy_as_primary(tmp_path):
+    """在 node 中跑页面同一份 calendarGuideActions，逐平台校验主操作与 webcal 标记。"""
+    page = _read("frontend/static/index.html")
+    source = _extract_function(page, "calendarGuideActions(env, feedUrl)")
+    harness = tmp_path / "guide.mjs"
+    harness.write_text(
+        source + "\nconst platforms = " +
+        json.dumps(["ios", "ipados", "macos", "android", "windows", "linux", "unknown"]) + ";\n"
+        "for (const platform of platforms) {\n"
+        "  const plan = calendarGuideActions({ platform: platform, webview: '' },\n"
+        "    'http://127.0.0.1:8000/cal/x.ics');\n"
+        "  if (plan.primary.length !== 1 || plan.primary[0].kind !== 'copy') {\n"
+        "    console.error(platform, '主操作不是复制订阅地址'); process.exit(1); }\n"
+        "  if (!plan.steps.length || !plan.tip) { console.error(platform, '缺少步骤/提示'); process.exit(1); }\n"
+        "  for (const action of plan.more.filter((item) => item.scheme === 'webcal')) {\n"
+        "    if (action.attempt !== true) { console.error(platform, 'webcal 未标记 attempt'); process.exit(1); }\n"
+        "  }\n"
+        "}\nconsole.log('ok');\n", encoding="utf-8")
+    result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or result.stdout
