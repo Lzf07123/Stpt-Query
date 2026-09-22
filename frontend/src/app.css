@@ -267,6 +267,8 @@
     font-size: 12px;
   }
   .calendar-field .input { width: 100%; }
+  .calendar-field .segmented { width: 100%; }
+  .calendar-field .seg-btn { min-height: 36px; padding: 6px 8px; font-size: 12px; }
   .calendar-actions {
     display: flex;
     flex-wrap: wrap;

@@ -19,7 +19,7 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-CuiBh61aS0QMjNZpnt4If4kDCSmsx4XSZ/OE4EOCZe8=' 'sha256-3RFYJQMS0uQXaFWmuYH5Ob6799lGtTN+5MvnKeDt7VM=' 'sha256-y8JRKoR5pl+X52aZ3ZYKWOSTroVbem8eD1908CUt0to='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-CuiBh61aS0QMjNZpnt4If4kDCSmsx4XSZ/OE4EOCZe8=' 'sha256-V+ghOZ7CXLujMwWaXK/8i+KPWpQRue17hN0mV1ZGRgw=' 'sha256-y8JRKoR5pl+X52aZ3ZYKWOSTroVbem8eD1908CUt0to='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
 
     root /usr/share/nginx/html;
     index index.html;
@@ -43,7 +43,9 @@ server {
     location = /admin {
         root /usr/share/nginx/html;
         try_files /admin.html =404;
-        add_header Cache-Control "no-store" always;
+        # 注意：nginx 的 add_header 会覆盖继承 —— 这里若自建 Cache-Control，
+        # 会连带丢掉 server 级 CSP/安全头，因此用 expires 控制缓存
+        expires epoch;
     }
 
     location = /metrics {
@@ -64,6 +66,9 @@ server {
         proxy_read_timeout 15s;
         client_max_body_size 16k;
         add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     }
 
     # 日历订阅 API：浏览器调用，服务端注入网关令牌（与 /run 同级信任模型）。
@@ -80,6 +85,9 @@ server {
         proxy_read_timeout 180s;
         client_max_body_size 16k;
         add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     }
 
     # 日历订阅源：URL 内含长期密钥，禁止记录访问日志，也不注入网关令牌。

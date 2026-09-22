@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=73">
+  <link rel="stylesheet" href="/style.css?v=74">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
   <script src="/notice.js?v=5" defer></script>
@@ -242,21 +242,22 @@
       <div class="calendar-body">
         <p id="calendarHint" class="calendar-hint">用学号与密码查询该账号是否已开启订阅。开启后可用手机/电脑日历直接订阅课表，服务端按间隔自动刷新。</p>
         <div class="calendar-grid">
-          <label class="calendar-field"><span>学号</span>
+          <label class="calendar-field"><span class="field-label">学号</span>
             <input id="calendarUsername" class="input" inputmode="numeric" maxlength="10" placeholder="10 位数字学号" autocomplete="off">
           </label>
-          <label class="calendar-field"><span>密码</span>
+          <label class="calendar-field"><span class="field-label">密码</span>
             <input id="calendarPassword" class="input" type="password" maxlength="256" placeholder="教务系统密码" autocomplete="current-password">
           </label>
-          <label class="calendar-field"><span>学期</span>
+          <label class="calendar-field"><span class="field-label">学期</span>
             <input id="calendarSemester" class="input" maxlength="16" placeholder="2026-2027-1">
           </label>
-          <label class="calendar-field"><span>刷新间隔</span>
-            <select id="calendarInterval" class="input">
-              <option value="21600">每 6 小时</option>
-              <option value="43200" selected>每 12 小时</option>
-              <option value="86400">每 24 小时</option>
-            </select>
+          <label class="calendar-field"><span class="field-label">刷新间隔</span>
+            <div class="segmented" id="calendarIntervalGroup" role="group" aria-label="刷新间隔">
+              <button type="button" class="seg-btn" data-interval="21600">6 小时</button>
+              <button type="button" class="seg-btn active" data-interval="43200">12 小时</button>
+              <button type="button" class="seg-btn" data-interval="86400">24 小时</button>
+            </div>
+            <input type="hidden" id="calendarInterval" value="43200">
           </label>
         </div>
         <div class="calendar-actions">
@@ -2129,6 +2130,14 @@
       return payload;
     }
 
+    function calendarSyncInterval(seconds) {
+      if (!seconds || !calendarEls.interval) return;
+      calendarEls.interval.value = String(seconds);
+      document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (item) {
+        item.classList.toggle("active", Number(item.dataset.interval) === Number(seconds));
+      });
+    }
+
     function calendarApply(data) {
       calendarState.state = data.state || "";
       calendarState.feedUrl = data.feed_url || "";
@@ -2136,6 +2145,7 @@
       calendarState.refreshInterval = data.refresh_interval;
       calendarState.lastRefreshAt = data.last_refresh_at;
       if (data.verified_token) calendarState.verifiedToken = data.verified_token;
+      if (data.refresh_interval) calendarSyncInterval(data.refresh_interval);
       calendarRender();
     }
 
@@ -2224,6 +2234,7 @@
       calendarState.lastRefreshAt = info.last_refresh_at;
       calendarEls.block.classList.remove("hidden");
       calendarEls.block.textContent = "";
+      if (info.refresh_interval) calendarSyncInterval(info.refresh_interval);
       var text = document.createElement("span");
       text.className = "calendar-block-text";
       var label = info.state === "active" ? "已开启网络日历订阅"
@@ -2247,6 +2258,14 @@
       calendarEls.password.value = passwordInput.value;
       calendarEls.semester.value = semestersInput.value || (calendarConfig && calendarConfig.default_semester) || "";
       calendarEls.state.textContent = "已复用查询表单中的学号与密码（仅保存在当前页面内存）";
+    });
+    document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (button) {
+      button.addEventListener("click", function () {
+        document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (item) {
+          item.classList.toggle("active", item === button);
+        });
+        if (calendarEls.interval) calendarEls.interval.value = button.dataset.interval;
+      });
     });
     if (calendarEls.check) calendarEls.check.addEventListener("click", calendarCheck);
     if (calendarEls.enable) calendarEls.enable.addEventListener("click", calendarEnable);

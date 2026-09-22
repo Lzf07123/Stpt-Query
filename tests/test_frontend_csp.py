@@ -84,7 +84,7 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=5"' in index
-    assert 'href="/style.css?v=73"' in index
+    assert 'href="/style.css?v=74"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -112,3 +112,49 @@ def test_public_notice_routes_are_proxied_by_frontend():
         encoding="utf-8"
     )
     assert "notices(?:/active|/history)" in policy
+
+
+def test_jump_bridge_hash_matches_rendered_page():
+    """/jump/go 桥接页有独立 CSP：其内联脚本哈希必须与渲染结果一致。
+
+    防止批量替换内联脚本哈希时误伤桥接页（历史上发生过一次）。
+    """
+    from app.jwxt_http import Handler
+
+    html = Handler._jump_bridge(None, "code-for-hash-check")
+    script = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
+    digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
+    config = (ROOT / "frontend" / "templates" / "default.conf.template").read_text(encoding="utf-8")
+    bridge_block = config[config.index("location = /jump/go {"):]
+    bridge_block = bridge_block[:bridge_block.index("}")]
+    declared = set(re.findall(r"'(sha256-[A-Za-z0-9+/=]+)'", bridge_block))
+    assert declared == {"sha256-" + digest}
+
+    # 桥接页哈希不得出现在主站 CSP（两处用途不同）
+    main_csp = config[:config.index("location = /jump/go {")]
+    assert "sha256-" + digest not in main_csp
+
+
+def test_locations_with_custom_headers_keep_security_headers():
+    """nginx 的 add_header 不继承：自建响应头的 location 必须显式重复安全头。
+
+    否则该 location 会静默丢失 CSP / X-Content-Type-Options / HSTS 等
+    （历史上 /admin 即因此没有 CSP）。
+    """
+    config = (ROOT / "frontend" / "templates" / "default.conf.template").read_text(encoding="utf-8")
+    # 锚定行首，避免误匹配 Permissions-Policy 里的 "geolocation=()" 等字面量
+    blocks = re.findall(r"(?m)^\s*location[^\n{]*\{[^}]*\}", config)
+    assert len(blocks) >= 5, "未解析到预期的 location 块"
+
+    directive = re.compile(r"(?m)^\s*add_header\s")
+    for block in blocks:
+        head = block.split("{", 1)[0].strip()
+        if not directive.search(block) or "/jump/go" in head:
+            continue
+        assert directive.search(block[:block.index("{")] ) is None  # 仅按块内指令判定
+        assert "add_header X-Content-Type-Options" in block, "该 location 丢失安全头：%s" % head
+        assert "add_header Strict-Transport-Security" in block, "该 location 丢失 HSTS：%s" % head
+
+    admin_block = next(b for b in blocks if b.split("{", 1)[0].strip() == "location = /admin")
+    # 必须保持继承整站安全头（含 CSP）：块内不得出现真正的 add_header 指令
+    assert not re.search(r"(?m)^\s*add_header\s", admin_block)
