@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=75">
+  <link rel="stylesheet" href="/style.css?v=76">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
   <script src="/notice.js?v=5" defer></script>
@@ -292,11 +292,13 @@
 
         <section class="calendar-section">
           <h3 class="calendar-section-title">操作</h3>
-          <div class="calendar-actions">
+          <div class="calendar-actions" id="calendarEnableRow">
             <button type="button" class="btn btn-primary" id="calendarEnable">一键开启订阅</button>
+          </div>
+          <div class="calendar-actions calendar-actions--equal" id="calendarManageRow">
             <button type="button" class="btn btn-ghost" id="calendarRefreshNow">立即刷新</button>
             <button type="button" class="btn btn-ghost" id="calendarRotate">轮换地址</button>
-            <button type="button" class="btn btn-ghost" id="calendarStop">关闭订阅</button>
+            <button type="button" class="btn btn-ghost danger" id="calendarStop">关闭订阅</button>
           </div>
           <p id="calendarNote" class="calendar-note">关闭订阅会立即删除加密凭据与课表快照并让地址失效；已同步到手机/日历软件的事件需在客户端自行删除。</p>
         </section>
@@ -2127,10 +2129,14 @@
         calendarEls.url.value = calendarUrlVisible ? calendarState.feedUrl : calendarMaskUrl(calendarState.feedUrl);
         calendarEls.reveal.textContent = calendarUrlVisible ? "隐藏" : "显示";
       }
-      calendarEls.stop.classList.toggle("hidden", st !== "active" && st !== "reauth_needed");
+      var isEnabled = st === "active" || st === "reauth_needed";
+      var enableRow = document.getElementById("calendarEnableRow");
+      var manageRow = document.getElementById("calendarManageRow");
+      if (enableRow) enableRow.classList.toggle("hidden", isEnabled);
+      if (manageRow) manageRow.classList.toggle("hidden", !isEnabled);
+      calendarEls.enable.textContent = st === "reauth_needed" ? "用当前密码重新授权" : "一键开启订阅";
       calendarEls.rotate.classList.toggle("hidden", !hasUrl);
       calendarEls.refresh.classList.toggle("hidden", !hasUrl);
-      calendarEls.enable.classList.toggle("hidden", st === "active" || st === "reauth_needed");
       if (calendarEls.block && !calendarEls.block.classList.contains("hidden")) {
         calendarEls.block.textContent = "📅 网络日历订阅：" + text +
           (hasUrl ? " · 已生成订阅地址，可在下方订阅面板中复制或关闭。" : " · 可一键开启。");

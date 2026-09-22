@@ -444,6 +444,13 @@
   .btn-ghost {
     @apply text-muted hover:bg-surface-2 hover:text-foreground;
   }
+  /* 危险操作（删除/关闭订阅）：保持 ghost 轻量，仅描边与文字转为警示色 */
+  .btn.danger {
+    @apply border border-destructive/30 text-destructive;
+  }
+  .btn.danger:hover {
+    @apply bg-destructive-soft text-destructive;
+  }
   .btn-danger {
     @apply bg-destructive text-destructive-foreground shadow-sm hover:opacity-90;
   }
@@ -1438,7 +1445,8 @@
   .site-footer {
     /* 常驻视口底部：始终可见，无需滚动到页尾；上边框与背景铺满整宽。
        层级 30：低于站点菜单(40)/弹窗(70)/提示(80)，内容底部由下方 :has 规则预留空间 */
-    @apply fixed inset-x-0 bottom-0 z-30 border-t border-border/60 bg-surface/85 backdrop-blur;
+    /* 不透明：半透明 + backdrop-blur 会让滚动内容透出糊带，视觉上像页面下部的异常阴影 */
+    @apply fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface;
   }
   /* 固定页脚占位：为页面内容预留底部空间，避免被页脚遮挡 */
   body:has(.site-footer) {

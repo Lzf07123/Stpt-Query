@@ -294,6 +294,16 @@
     flex-wrap: wrap;
     gap: 8px;
   }
+  .calendar-actions .btn {
+    flex: 1 1 140px;
+  }
+  .calendar-actions .btn-primary {
+    flex: 2 1 200px;      /* 主操作更宽，形成明确的主次层级 */
+  }
+  .calendar-actions--equal .btn {
+    flex: 1 1 0;
+    min-width: 104px;
+  }
   .calendar-state {
     @apply rounded-xl border border-border bg-surface-2 p-3 text-xs leading-relaxed text-muted;
   }
