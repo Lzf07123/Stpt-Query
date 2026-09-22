@@ -2128,14 +2128,14 @@
 
   /* ---------- 服务状态条 ---------- */
   .service-status {
-    /* 上间距 32px→12px、上下内边距 20px→6px，避免状态条上方出现大片空白 */
-    @apply mt-3 bg-transparent px-5 py-1.5 text-sm;
+    /* 紧贴上方卡片：上间距 4px、上下内边距 4px（原为 mt-8 + p-5 = 52px） */
+    @apply mt-1 bg-transparent px-5 py-1 text-sm;
     max-width: 680px;
     margin-left: auto;
     margin-right: auto;
   }
   .status-title {
-    @apply mb-2 text-center text-xs font-semibold tracking-wide text-muted;
+    @apply mb-1.5 text-center text-xs font-semibold tracking-wide text-muted;
   }
   .status-bar {
     @apply flex h-2.5 gap-0.5 overflow-hidden rounded-full;
