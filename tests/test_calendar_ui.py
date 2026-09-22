@@ -1,7 +1,12 @@
 """日历订阅前端入口守卫：页脚入口、结果区区块、后台标签页与接口路径。"""
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -162,3 +167,61 @@ def test_subscription_guide_resets_mask_and_confirms_third_party():
     assert "link.href" not in button_body                     # 渲染期不把长期密钥写入 DOM
     assert "window.location.href = action.href" in open_body  # 点击后才导航
     assert 'window.open(action.href' in open_body
+
+
+def _extract_function(page: str, signature: str) -> str:
+    """从内联脚本里按大括号配平抽出整个函数（用于在 node 中执行同一份实现）。"""
+    start = page.index("function " + signature)
+    brace = page.index("{", start)
+    depth = 0
+    for index in range(brace, len(page)):
+        char = page[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return page[start:index + 1]
+    raise AssertionError("函数未闭合: " + signature)
+
+
+def test_subscription_guide_warns_when_feed_address_is_not_reachable():
+    page = _read("frontend/static/index.html")
+    assert 'id="calendarGuideReach"' in page
+    assert "function calendarGuideReachability(" in page
+    assert '"loopback"' in page and '"private"' in page
+    assert "PUBLIC_BASE_URL" in page and "同一 Wi-Fi" in page
+    render = page.split("function calendarGuideRender()", 1)[1].split("function calendarOpen", 1)[0]
+    assert "calendarGuideReachability" in render and "guideReach" in render
+    qr = page.split("async function calendarQrShow()", 1)[1].split("function calendarGuideButton", 1)[0]
+    assert "calendarGuideReachability" in qr          # 扫码文案复用同一结论
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="需要 node 才能执行前端片段")
+def test_reachability_classification(tmp_path):
+    """loopback / 内网 / 公网三类必须判定正确（在 node 中直接跑页面里的同一份实现）。"""
+    page = _read("frontend/static/index.html")
+    source = _extract_function(page, "calendarGuideReachability(feedUrl)")
+    cases = [
+        ("http://127.0.0.1:8000/cal/x.ics", "loopback"),
+        ("http://localhost:8000/cal/x.ics", "loopback"),
+        ("http://[::1]:8000/cal/x.ics", "loopback"),
+        ("http://10.19.212.113:8000/cal/x.ics", "private"),
+        ("http://192.168.1.20:8000/cal/x.ics", "private"),
+        ("http://172.16.0.9:8000/cal/x.ics", "private"),
+        ("http://172.32.0.9:8000/cal/x.ics", "public"),
+        ("http://169.254.3.4:8000/cal/x.ics", "private"),
+        ("http://mac.local:8000/cal/x.ics", "private"),
+        ("https://edu.example.edu.cn/cal/x.ics", "public"),
+    ]
+    harness = tmp_path / "reachability.mjs"
+    # 注意：必须用 JSON 数组，Python tuple 的括号在 JS 里是逗号表达式
+    harness.write_text(
+        source + "\nconst cases = " + json.dumps(cases) + ";\n"
+        "for (const [url, want] of cases) {\n"
+        "  const got = calendarGuideReachability(url).kind;\n"
+        "  if (got !== want) { console.error(url + ' => ' + got + ', want ' + want); process.exit(1); }\n"
+        "}\nconsole.log('ok');\n",
+        encoding="utf-8")
+    result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or result.stdout
