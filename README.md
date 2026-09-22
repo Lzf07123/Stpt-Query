@@ -152,9 +152,13 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 
 - **设备/浏览器识别**：区分 iPhone / iPad / Android / macOS / Windows / Linux，并识别微信、QQ、
   钉钉、支付宝、飞书等**内置浏览器**。命中内置浏览器时会提示「在浏览器中打开」，或改用扫码；
-- **一键导入**（本地方式，订阅地址不经第三方服务器）：
-  - Apple 设备 / macOS：`webcal://` 交给系统「日历」并询问是否订阅；
-  - Windows：`webcal://` 交给 Outlook / 系统日历；
+- **手动订阅为主，深链为辅**：面板主操作是「复制订阅地址」，各平台按步骤在日历 App 里
+  「新建日历订阅 / 添加已订阅的日历 / 从 Internet 订阅 / 通过网址添加」粘贴即可；
+  `webcal://` 深链只作为**可选尝试**（部分系统会把它当一次性导入、要求 HTTPS，或对本地/内网地址
+  直接报错「导入错误」，因此不再作为唯一入口）；
+- **一键导入尝试**（本地方式，订阅地址不经第三方服务器）：
+  - Apple 设备 / macOS：`webcal://` 交给系统「日历」并询问是否订阅（失败请改手动订阅）；
+  - Windows：`webcal://` 交给 Outlook / 系统日历（失败请改手动订阅）；
   - Android：Google 日历网页版添加链接（会标注为第三方抓取），
     以及 `navigator.share` 分享 `.ics` 给已安装的日历 App（华为/小米/OPPO/vivo 等）；
   - 通用回退：复制订阅地址、下载 `.ics`（一次性导入，**不会自动更新**）；
