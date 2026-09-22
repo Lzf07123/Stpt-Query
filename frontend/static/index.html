@@ -2116,6 +2116,7 @@
       calendarSemesterDropdown.sync();
     }
     var calendarConfig = null;
+    var calendarUnavailable = false;   // 本次部署未启用网络日历（/config 返回 404）
     var calendarUrlVisible = false;
 
     function calendarMaskUrl(url) {
@@ -2134,12 +2135,36 @@
       }
     }
 
+    function calendarDisableEntry() {
+      // 部署未启用 CALENDAR_ENABLED：日历路由不存在（404），此时不应再露出入口，
+      // 否则用户点开只会看到加载失败（本轮线上日志即为此情况）。
+      calendarUnavailable = true;
+      if (calendarEls.entry) calendarEls.entry.classList.add("hidden");
+      if (calendarEls.block) calendarEls.block.classList.add("hidden");
+      if (calendarEls.modal) calendarEls.modal.classList.add("hidden");
+    }
+
+    function calendarFilterSemesterOptions() {
+      var allowed = (calendarConfig && calendarConfig.semesters) || [];
+      var menu = document.getElementById("calendarSemesterMenu");
+      if (!menu || !allowed.length) return;
+      Array.prototype.forEach.call(menu.querySelectorAll(".dropdown-item"), function (item) {
+        var value = item.getAttribute("data-value") || "";
+        if (value && allowed.indexOf(value) === -1) item.remove();
+      });
+    }
+
     async function calendarLoadConfig() {
       if (calendarConfig) return calendarConfig;
+      if (calendarUnavailable) return null;
       try {
         var resp = await fetch("/api/v1/calendars/config", { headers: authHeaders() });
-        if (resp.ok) calendarConfig = await resp.json();
-      } catch (e) { /* 面板仍可工作，仅缺少默认学期 */ }
+        if (resp.status === 404) { calendarDisableEntry(); return null; }
+        if (resp.ok) {
+          calendarConfig = await resp.json();
+          calendarFilterSemesterOptions();
+        }
+      } catch (e) { /* 网络异常时保持入口可用，仅缺少默认学期 */ }
       return calendarConfig;
     }
 
@@ -2649,6 +2674,7 @@
     }
 
     function calendarOpen() {
+      if (calendarUnavailable) return;
       calendarUrlVisible = false;      // 面板每次打开都回到掩码状态，需显式点「显示」
       calendarFill(true);
       calendarLoadConfig().then(function (cfg) {
@@ -2723,6 +2749,7 @@
       calendarUrlVisible = !calendarUrlVisible; calendarRender();
     });
 
+    calendarLoadConfig();            // 部署未启用日历时隐藏入口（404 探测）
     sanitizeStoredHistory();
     renderServiceStatus();
     renderHistorySelect();
