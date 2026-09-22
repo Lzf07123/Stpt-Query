@@ -1436,8 +1436,17 @@
        必须在页脚以同/更高优先级显式覆盖为 muted。
        来源：实例化项目实测——全局 a{color:primary} 泄漏导致备案文字呈青色，已修复回写。 */
   .site-footer {
-    /* 页脚容器保持整宽（上边框与背景铺满视口），行内布局交给 .site-footer-row */
-    @apply relative mt-auto border-t border-border/60 bg-surface/60 backdrop-blur;
+    /* 常驻视口底部：始终可见，无需滚动到页尾；上边框与背景铺满整宽。
+       层级 30：低于站点菜单(40)/弹窗(70)/提示(80)，内容底部由下方 :has 规则预留空间 */
+    @apply fixed inset-x-0 bottom-0 z-30 border-t border-border/60 bg-surface/85 backdrop-blur;
+  }
+  /* 固定页脚占位：为页面内容预留底部空间，避免被页脚遮挡 */
+  body:has(.site-footer) {
+    padding-bottom: 84px;
+  }
+  @media print {
+    body:has(.site-footer) { padding-bottom: 0; }
+    .site-footer { position: static; }
   }
   .site-footer-inner {
     @apply mx-auto flex min-h-14 max-w-7xl flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-5 text-xs text-muted lg:px-8;
