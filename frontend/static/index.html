@@ -21,7 +21,7 @@
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=68">
+  <link rel="stylesheet" href="/style.css?v=69">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
   <script src="/notice.js?v=5" defer></script>
@@ -211,18 +211,14 @@
   </div>
 
   <footer class="site-footer">
-    <div class="site-footer-inner" id="siteFooterInner"></div>
-    <span aria-hidden="true">·</span>
-    <button type="button" class="site-footer-action" id="calendarEntry" aria-haspopup="dialog">
-      <span aria-hidden="true">📅</span> 网络日历订阅
-    </button>
+    <div class="site-footer-row">
+      <div class="site-footer-inner" id="siteFooterInner"></div>
+      <span aria-hidden="true">·</span>
+      <button type="button" class="site-footer-action" id="calendarEntry" aria-haspopup="dialog">
+        <span aria-hidden="true">📅</span> 网络日历订阅
+      </button>
+    </div>
   </footer>
-
-  <a class="back-to-top" href="#main" aria-label="返回顶部">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>
-    </svg>
-  </a>
 
   <div id="toastWrap" class="toast-viewport"></div>
   <div id="noticeHistoryModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="noticeHistoryTitle">

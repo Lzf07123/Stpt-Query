@@ -1436,14 +1436,20 @@
        必须在页脚以同/更高优先级显式覆盖为 muted。
        来源：实例化项目实测——全局 a{color:primary} 泄漏导致备案文字呈青色，已修复回写。 */
   .site-footer {
+    /* 页脚容器保持整宽（上边框与背景铺满视口），行内布局交给 .site-footer-row */
     @apply relative mt-auto border-t border-border/60 bg-surface/60 backdrop-blur;
-    /* 整行布局：版权（brand.ts 驱动）与功能入口（如网络日历）同排居中；
-       窄屏自动换行、保持 gap-y-1，不产生横向滚动或独占一行的畸变 */
-    @apply mx-auto flex min-h-14 max-w-7xl flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-5 text-xs text-muted lg:px-8;
   }
   .site-footer-inner {
-    /* 作为整行中的一项参与排版：尺寸/内边距/最大宽度统一由 .site-footer 提供 */
-    @apply flex min-h-0 max-w-none flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted;
+    @apply mx-auto flex min-h-14 max-w-7xl flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-5 text-xs text-muted lg:px-8;
+  }
+  /* 页脚整行：版权（brand.ts 驱动）与功能入口（如网络日历）同排居中；
+     窄屏自动换行、保持 gap-y-1，不产生横向滚动或独占一行的畸变 */
+  .site-footer-row {
+    @apply mx-auto flex min-h-14 max-w-7xl flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-5 text-xs text-muted lg:px-8;
+  }
+  /* 仅当内层位于整行容器中时才降级为行内项，独立使用（其他页面）保持原样 */
+  .site-footer-row > .site-footer-inner {
+    @apply mx-0 min-h-0 max-w-none flex-wrap justify-center gap-x-2 gap-y-1 p-0;
   }
   /* 页脚功能入口：与页脚链接同一视觉语言（muted → hover foreground） */
   .site-footer-action {
@@ -2329,41 +2335,6 @@ html { scroll-behavior: smooth; }
   .site-header .brand-name-text { display: none; }
 }
 
-/* ---------- 右侧常驻返回顶部（纯锚点 + CSS 平滑滚动） ---------- */
-.back-to-top {
-  position: fixed;
-  right: 20px;
-  bottom: 24px;
-  z-index: 55;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--eduquery-glass-border-soft);
-  border-radius: 14px;
-  background:
-    var(--eduquery-glass-shine),
-    var(--eduquery-glass-bg-strong);
-  -webkit-backdrop-filter: blur(var(--eduquery-glass-blur)) saturate(var(--eduquery-glass-saturate));
-  backdrop-filter: blur(var(--eduquery-glass-blur)) saturate(var(--eduquery-glass-saturate));
-  color: var(--eduquery-muted);
-  box-shadow: var(--shadow-md),
-    inset 0 1px 0 var(--eduquery-glass-highlight);
-  text-decoration: none;
-  transition: color var(--eduquery-motion-fast) var(--eduquery-ease-out),
-    background-color var(--eduquery-motion-fast) var(--eduquery-ease-out),
-    box-shadow var(--eduquery-motion-base) var(--eduquery-ease-out),
-    transform var(--eduquery-motion-base) var(--eduquery-ease-spring);
-}
-.back-to-top svg { width: 20px; height: 20px; }
-.back-to-top:hover,
-.back-to-top:focus-visible {
-  color: var(--eduquery-primary-hover);
-  background: var(--eduquery-glass-bg-strong);
-  box-shadow: var(--shadow-lg),
-    inset 0 1px 0 var(--eduquery-glass-highlight);
-  transform: translateY(-2px);
-}
 
 /* ---------- 搜索骨架屏 ---------- */
 .search-skeleton { display: flex; flex-direction: column; gap: 4px; padding: 8px 4px; }
@@ -2627,10 +2598,6 @@ html { scroll-behavior: smooth; }
 }
 @media (max-width: 640px) {
   .masonry { column-count: 1; column-gap: 0; }
-  .back-to-top { right: 14px; bottom: 16px; }
-}
-@media print {
-  .back-to-top { display: none !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
