@@ -256,3 +256,17 @@ def test_every_platform_plan_uses_copy_as_primary(tmp_path):
         "}\nconsole.log('ok');\n", encoding="utf-8")
     result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_entry_hides_when_calendar_feature_is_disabled():
+    """部署未开启 CALENDAR_ENABLED 时 /config 返回 404，入口必须自动收起而不是报错。"""
+    page = _read("frontend/static/index.html")
+    assert "function calendarDisableEntry()" in page
+    assert "resp.status === 404" in page
+    body = page.split("function calendarDisableEntry()", 1)[1].split("function ", 1)[0]
+    assert 'calendarEls.entry.classList.add("hidden")' in body
+    assert 'calendarEls.block.classList.add("hidden")' in body
+    init = page.split("sanitizeStoredHistory();", 1)[0]
+    assert "calendarLoadConfig();" in init                  # 页面初始化即探测，不必等用户点击
+    assert "function calendarFilterSemesterOptions()" in page
+    assert "calendarConfig.semesters" in page               # 学期按后端配置过滤
