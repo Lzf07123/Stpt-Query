@@ -176,9 +176,9 @@ def test_admin_metrics_reports_snapshot_and_service_status(tmp_path):
         assert set(stack) >= {
             "memory_bytes", "limit_bytes", "source", "discovered_services", "expected_services", "services",
         }
-        assert stack["expected_services"] == 3
+        assert stack["expected_services"] == 2
         assert stack["services"]["app"]["source"] == "cgroup"
-        assert set(stack["services"]) == {"app", "frontend", "redis"}
+        assert set(stack["services"]) == {"app", "frontend"}
         assert set(body) >= {"generated_at", "application", "services"}
         assert body["application"]["window_seconds"] == 300
         assert body["application"]["requests"] == 0
@@ -200,7 +200,8 @@ def test_orchestration_memory_includes_redis(tmp_path, monkeypatch):
         metrics, "_host_cgroup_values", lambda cgroup_id: (redis_memory, redis_memory))
 
     assert metrics._classify_orchestration_process("redis-server *:6379") == "redis"
-    result = metrics._orchestration_memory()
+    assert metrics._classify_orchestration_process("python main.py") is None  # 旧查询代理入口已移除
+    result = metrics._orchestration_memory(expected=("app", "frontend", "redis"))
 
     assert result["expected_services"] == 3
     assert result["discovered_services"] == 1
@@ -213,3 +214,29 @@ def test_orchestration_memory_includes_redis(tmp_path, monkeypatch):
     assert result["memory_bytes"] == redis_memory
     # 单体应用样本缺失时，聚合上限不可知；Redis 自身上限必须仍可见
     assert result["limit_bytes"] is None
+
+
+def test_orchestration_memory_default_excludes_redis(tmp_path, monkeypatch):
+    """默认单体拓扑（无 Redis）不应把 redis 计入期望服务。"""
+    monkeypatch.setattr(metrics, "_proc_root", lambda: tmp_path)
+    result = metrics._orchestration_memory()
+    assert result["expected_services"] == 2
+    assert set(result["services"]) == {"app", "frontend"}
+    assert result["services"]["frontend"]["process_count"] == 0
+
+
+def test_orchestration_expected_services_follow_redis_config(tmp_path):
+    """资源监控的期望分桶必须跟随部署配置：无 Redis=2，配置外部 Redis=3。"""
+    def stack_for(**overrides):
+        with TestClient(create_app(_settings(tmp_path, **overrides))) as client:
+            payload = client.get("/admin/api/metrics", headers=ADMIN).json()
+        assert payload.get("latest"), payload
+        return payload["latest"]["orchestration"]["memory"]
+
+    single = stack_for()
+    assert single["expected_services"] == 2
+    assert set(single["services"]) == {"app", "frontend"}
+
+    with_redis = stack_for(redis_url="redis://127.0.0.1:6399/0")
+    assert with_redis["expected_services"] == 3
+    assert set(with_redis["services"]) == {"app", "frontend", "redis"}

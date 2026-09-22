@@ -540,6 +540,9 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         log_path=file_log_path,
         interval=cfg.resource_monitor_interval_seconds,
         history_size=cfg.resource_monitor_history_size,
+        # 单体默认只有 app + frontend；配置外部 Redis 时才把它计入期望服务
+        expected_services=("app", "frontend", "redis") if cfg.redis_url.strip()
+        else ("app", "frontend"),
     )
     app.state.resource_monitor = resource_monitor
     app.state.dependency_health = dependency_health

@@ -292,11 +292,12 @@
       "redis": "Redis（可选）"
     };
     var services = stack.services || {};
-    elements.stackServices.innerHTML = Object.keys(names).map(function (key) {
+    // 行由后端分桶决定（默认 app/frontend，配置 Redis 时才含 redis）
+    elements.stackServices.innerHTML = Object.keys(services).map(function (key) {
       var service = services[key] || {};
       var state = service.memory_bytes == null ? "muted" : "success";
       return '<div class="stack-service">' +
-        '<span>' + names[key] + '</span>' +
+        '<span>' + (names[key] || key) + '</span>' +
         '<strong>' + (service.memory_bytes == null ? "—" : formatBytes(service.memory_bytes)) + '</strong>' +
         '<small>' + (service.process_count || 0) + ' 进程</small>' +
         '<i class="badge badge-' + state + '">' + (service.source === "cgroup" ? "实测" : service.source === "process_rss" ? "估算" : "缺失") + '</i>' +

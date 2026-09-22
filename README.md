@@ -246,7 +246,7 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   标签页的 `sessionStorage` 中保留管理员凭据，退出即清除。
 - `GET /admin/api/metrics` 暴露容器 CPU、内存/RSS、日志磁盘、网络累计、运行时长、
   宿主机 CPU/内存/负载/磁盘 I/O/网络、日志文件存储增长和应用近 5 分钟负载；
-  编排内存按单体应用、前端入口（以及可选 Redis）分桶聚合，宿主 cgroup
+  编排内存按单体应用、前端入口分桶聚合（仅配置 `REDIS_URL` 时才追加 Redis 分桶），宿主 cgroup
   不可读时按进程 RSS 估算并在界面标注；
   后台资源采样默认每 `RESOURCE_MONITOR_INTERVAL_SECONDS=5` 秒一次，保留
   `RESOURCE_MONITOR_HISTORY_SIZE=90` 个样本；并返回 `dependencies` 与 `degradations`，对编排 Redis、查询代理、

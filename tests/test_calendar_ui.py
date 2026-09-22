@@ -47,7 +47,7 @@ def test_admin_calendar_tab_and_actions():
     script = _read("frontend/static/admin.js")
     assert 'id="tabCalendars"' in page and 'id="calendarsPanel"' in page
     assert 'id="calendarsBody"' in page and 'id="calendarQuery"' in page
-    assert 'admin.js?v=21' in page
+    assert 'admin.js?v=22' in page
     assert 'request("calendars' in script
     for action in ("/refresh", "/pause", "/resume", "/rotate"):
         assert action in script, action

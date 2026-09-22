@@ -10,7 +10,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Optional
+from typing import Optional, Iterable
 
 
 _CGROUP_ROOT = Path(os.environ.get("CGROUP_ROOT", "/sys/fs/cgroup"))
@@ -95,11 +95,13 @@ def _host_cgroup_values(cgroup_id: str) -> tuple[Optional[int], Optional[int]]:
     return current, limit
 
 
+# 单体拓扑的期望分桶：默认 app + frontend；仅在配置外部 Redis 时追加 redis
+DEFAULT_ORCHESTRATION_SERVICES = ("app", "frontend")
+
+
 def _classify_orchestration_process(command: str) -> Optional[str]:
     normalized = " ".join(command.split())
     if "uvicorn" in normalized and "app.main:app" in normalized:
-        return "app"
-    if normalized.startswith("python") and "main.py" in normalized:
         return "app"
     if normalized.startswith("nginx:") and "master process" in normalized:
         return "frontend"
@@ -108,12 +110,10 @@ def _classify_orchestration_process(command: str) -> Optional[str]:
     return None
 
 
-def _orchestration_memory() -> dict:
-    service_processes: dict[str, list[dict]] = {
-        "app": [],
-        "frontend": [],
-        "redis": [],
-    }
+def _orchestration_memory(expected: Optional[Iterable[str]] = None) -> dict:
+    """按期望分桶聚合编排内存；未启用 Redis 时不再把它计入"期望服务"。"""
+    services_expected = tuple(expected or DEFAULT_ORCHESTRATION_SERVICES)
+    service_processes: dict[str, list[dict]] = {name: [] for name in services_expected}
     proc_root = _proc_root()
     try:
         process_ids = [item.name for item in proc_root.iterdir() if item.name.isdigit()]
@@ -122,7 +122,7 @@ def _orchestration_memory() -> dict:
 
     for pid in process_ids:
         service = _classify_orchestration_process(_process_cmdline(proc_root / pid))
-        if service is None:
+        if service is None or service not in service_processes:
             continue
         cgroup_id = _process_cgroup_id(proc_root / pid)
         rss_bytes = _process_rss_bytes(proc_root / pid)
@@ -335,8 +335,10 @@ class ResourceMonitor:
     """周期采集并保留近三分钟资源样本。"""
 
     def __init__(self, log_path: str = "", interval: float = 2.0,
-                 history_size: int = 150) -> None:
+                 history_size: int = 150,
+                 expected_services: Optional[Iterable[str]] = None) -> None:
         self.log_path = log_path
+        self.expected_services = tuple(expected_services or DEFAULT_ORCHESTRATION_SERVICES)
         self.interval = max(0.5, interval)
         self.samples: deque[dict] = deque(maxlen=max(10, history_size))
         self._lock = Lock()
@@ -458,7 +460,7 @@ class ResourceMonitor:
             },
             "network": _network_totals(),
             "orchestration": {
-                "memory": _orchestration_memory(),
+                "memory": _orchestration_memory(self.expected_services),
             },
             "host": {
                 "source": "host_proc" if host_proc_available else "container_kernel",
