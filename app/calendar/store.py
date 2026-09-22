@@ -182,7 +182,7 @@ class CalendarStore:
     def save_snapshot(self, calendar_id: str, ics_blob: bytes, etag: str, *,
                       changed: bool, status: str, error: str = "",
                       next_refresh_at: Optional[str] = None, fail_count: Optional[int] = None,
-                      paused_until: Optional[str] = None) -> None:
+                      paused_until: Optional[str] = None, clear_pause: bool = False) -> None:
         stamp = now_iso()
         sets = ["ics_blob = ?", "ics_etag = ?", "last_fetch_at = ?", "last_fetch_status = ?",
                 "last_fetch_error = ?", "updated_at = ?", "revision = revision + ?"]
@@ -196,6 +196,9 @@ class CalendarStore:
         if paused_until is not None:
             sets.append("paused_until = ?")
             args.append(paused_until)
+        if clear_pause:
+            # 成功刷新/重新授权必须把暂停状态归零：写 NULL 而不是“不更新该列”
+            sets.append("paused_until = NULL")
         args.append(calendar_id)
         self._exec("UPDATE calendars SET %s WHERE id = ?" % ", ".join(sets), args)
 

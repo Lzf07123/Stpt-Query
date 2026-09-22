@@ -95,3 +95,70 @@ def test_calendar_panel_is_responsive():
     assert ".calendar-actions .btn," in small         # 小屏按钮整行
     assert ".calendar-url-row .input" in small        # 地址行换行
     assert ".calendar-panel .modal-footer .btn" in small   # 底部操作按钮铺满
+
+
+def test_subscription_guide_detects_platform_and_offers_one_tap_import():
+    """订阅指引必须识别设备/内置浏览器并给出按平台的一键导入入口。"""
+    page = _read("frontend/static/index.html")
+    for anchor in ('id="calendarGuideSection"', 'id="calendarGuideDevice"', 'id="calendarGuideWebview"',
+                   'id="calendarGuidePrimary"', 'id="calendarGuideSteps"', 'id="calendarGuideMore"',
+                   'id="calendarGuideTip"', 'id="calendarGuidePrivacy"',
+                   'id="calendarQrButton"', 'id="calendarQrBox"', 'id="calendarQrCanvas"'):
+        assert anchor in page, anchor
+    assert "function calendarDetectGuide()" in page
+    assert "function calendarGuideActions(" in page
+    # 各平台的一键导入目标：系统日历（webcal）、Google、Outlook，以及系统分享
+    assert 'feedUrl.replace(/^https?:\\/\\//i, "webcal://")' in page
+    assert "calendar.google.com/calendar/render?cid=" in page
+    assert "outlook.live.com/calendar/0/addfromweb" in page
+    assert "navigator.canShare" in page
+    # 唤起失败必须回退提示，而不是假装检测成功
+    assert "visibilitychange" in page
+    assert "没有检测到系统打开" in page
+    # 内置浏览器（微信/QQ 等）必须给出「在浏览器中打开」与扫码提示
+    assert "内置浏览器" in page and "在浏览器中打开" in page
+
+
+def test_subscription_guide_keeps_secret_local_and_warns_third_parties():
+    page = _read("frontend/static/index.html")
+    # 第三方日历服务会抓取长期密钥：必须在文案中标注
+    assert "第三方抓取" in page
+    assert "订阅地址即长期密钥" in page
+    # 二维码：本地生成（POST 到自家 API），显式点击才请求，关闭面板即清除
+    assert '"/api/v1/calendars/qr"' in page
+    assert "async function calendarQrShow()" in page
+    close_body = page.split("function calendarClosePanel()", 1)[1].split("}", 1)[0]
+    assert "calendarQrReset" in close_body
+    render_body = page.split("function calendarGuideRender()", 1)[1].split("function calendarOpen", 1)[0]
+    assert "fetch(" not in render_body            # 渲染指引不得自动发起网络请求
+    share_body = page.split("async function calendarShare()", 1)[1].split("function calendarQrReset", 1)[0]
+    assert "fetch(calendarState.feedUrl" in share_body
+    # 订阅地址不得进入本地存储
+    for line in page.splitlines():
+        if "calendarState.feedUrl" in line or "feed_url" in line:
+            assert "localStorage" not in line and "sessionStorage" not in line
+
+
+def test_subscription_guide_styles_exist():
+    css = _read("frontend/src/app.css")
+    for selector in (".calendar-guide-warning {", ".calendar-guide-steps {", ".calendar-guide-more {",
+                     ".calendar-guide-qr-box {"):
+        assert selector in css, selector
+    assert "image-rendering: pixelated" in css
+    # 使用语义令牌，不引入新的硬编码颜色
+    guide = css[css.index(".calendar-guide-warning {"):css.index(".calendar-guide-qr-box {")]
+    assert "#" not in guide
+
+
+def test_subscription_guide_resets_mask_and_confirms_third_party():
+    page = _read("frontend/static/index.html")
+    open_body = page.split("function calendarOpen()", 1)[1].split("function", 1)[0]
+    assert "calendarUrlVisible = false" in open_body          # 打开面板先掩码
+    rotate_body = page.split("async function calendarRotate()", 1)[1].split("async function", 1)[0]
+    assert "calendarUrlVisible = false" in rotate_body        # 轮换后仍先掩码
+    button_body = page.split("function calendarGuideButton(", 1)[1].split("function calendarGuideOpen", 1)[0]
+    open_body = page.split("function calendarGuideOpen(action)", 1)[1].split("function calendarGuideDownload", 1)[0]
+    assert "window.confirm" in open_body                      # 第三方日历服务二次确认
+    assert "link.href" not in button_body                     # 渲染期不把长期密钥写入 DOM
+    assert "window.location.href = action.href" in open_body  # 点击后才导航
+    assert 'window.open(action.href' in open_body

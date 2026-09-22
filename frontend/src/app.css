@@ -385,6 +385,79 @@
   .calendar-inferred {
     color: var(--color-warning);
   }
+  /* ---------- 订阅指引：平台识别 + 一键导入 + 本地二维码 ---------- */
+  .calendar-guide-warning {
+    @apply rounded-xl border border-warning/30 bg-warning-soft p-3 text-xs leading-relaxed text-warning;
+    margin: 0;
+  }
+  .calendar-guide-steps {
+    counter-reset: calendar-guide-step;
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--color-muted);
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+  .calendar-guide-steps li {
+    counter-increment: calendar-guide-step;
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 8px;
+  }
+  .calendar-guide-steps li::before {
+    content: counter(calendar-guide-step);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin-top: 1px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface-2);
+    color: var(--color-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .calendar-guide-more {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .calendar-guide-more .btn {
+    flex: 1 1 150px;
+    min-width: 0;
+  }
+  .calendar-guide-qr {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+  }
+  .calendar-guide-qr-box {
+    display: grid;
+    gap: 8px;
+    justify-items: center;
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface-2);
+  }
+  .calendar-guide-qr-box canvas {
+    /* 纯黑模块由脚本绘制在纯白画布上，这里只约束展示尺寸并保持像素锐利 */
+    width: min(220px, 60vw);
+    height: auto;
+    border-radius: 6px;
+    image-rendering: pixelated;
+  }
+  @media (max-width: 560px) {
+    .calendar-guide-more .btn { flex: 1 1 100%; }
+    .calendar-guide-qr { justify-items: stretch; }
+  }
+
   /* 课表结果区的日历状态行 */
   .calendar-block {
     @apply mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-xs text-muted;

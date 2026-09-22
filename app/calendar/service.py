@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .config import CalendarConfig, CalendarConfigError, Term, load_config
 from .crypto import CalendarCrypto, CalendarCryptoError
 from .ics import build_events, render
+from .qr import QrPayloadError, qr_matrix, webcal_url
 from .rules import ScheduleDataError
 from .store import CalendarStore, now_iso
 
@@ -138,10 +139,12 @@ class CalendarService:
         return (datetime.now().astimezone() + timedelta(days=max(1, int(days)))).isoformat(
             timespec="seconds")
 
-    def _build_ics(self, rows: List[Dict[str, Any]], term: Term, sequence: int) -> Tuple[bytes, str, List[str]]:
+    def _build_ics(self, rows: List[Dict[str, Any]], term: Term, sequence: int,
+                   refresh_seconds: Optional[int] = None) -> Tuple[bytes, str, List[str]]:
+        """生成 ICS；REFRESH-INTERVAL 必须取该订阅自己的刷新间隔而不是全局默认值。"""
         events, anomalies = build_events(rows, term, self.config, self.crypto, sequence)
         text = render(events, calendar_name="我的课表",
-                      refresh_seconds=self.settings.default_refresh)
+                      refresh_seconds=refresh_seconds or self.settings.default_refresh)
         payload = text.encode("utf-8")
         return payload, hashlib.sha256(payload).hexdigest(), anomalies
 
@@ -200,6 +203,31 @@ class CalendarService:
             return ""
         return self.feed_url(token)
 
+    def qr(self, username: str, password: str, semester: str,
+           verified_token: Optional[str] = None) -> Dict[str, Any]:
+        """订阅二维码矩阵：只服务已通过 L1/L2 证明的调用方，且不触发学校流量。
+
+        身份要求与状态查询一致：本地密码比对命中，或持有刚由课表查询签发的短时令牌。
+        不在此走 L3 真实登录，避免用一次扫码动作额外打学校风控。
+        """
+        owner_hash = self.crypto.owner_hash(username)
+        record = self.store.get_by_owner_semester(owner_hash, semester)
+        if record is None:
+            raise CalendarError(404, "未找到该学期的订阅", "not_found")
+        proven = self._password_matches(record, password) or bool(
+            verified_token and self.crypto.check_verify_token(verified_token, owner_hash))
+        if not proven:
+            raise CalendarAuthError("请先用当前密码重新授权，再生成扫码图像")
+        url = self._feed_url_of(record)
+        if not url:
+            raise CalendarError(409, "订阅地址不可用，请先轮换地址", "token_unavailable")
+        try:
+            result = qr_matrix(webcal_url(url))
+        except QrPayloadError as exc:
+            raise CalendarError(500, "二维码生成失败，请改用复制订阅地址", "qr_failed") from exc
+        result["scheme"] = "webcal"
+        return result
+
     def local_state(self, username: str, password: str, semester: str) -> Dict[str, Any]:
         """L1 快路径：课表查询刚成功（密码已被学校接受）时的权威状态判定，零学校流量。"""
         owner_hash = self.crypto.owner_hash(username)
@@ -239,7 +267,7 @@ class CalendarService:
         async with self._lock(owner_hash):
             rows = await self.school.schedule_rows(username, password, semester)
             sequence = int(existing["revision"]) + 1 if existing else 1
-            payload, etag, anomalies = self._build_ics(rows, term, sequence)
+            payload, etag, anomalies = self._build_ics(rows, term, sequence, interval)
             if existing is None:
                 token = self.crypto.new_token()
                 calendar_id = str(uuid.uuid4())
@@ -267,7 +295,7 @@ class CalendarService:
                     self.crypto.encrypt(username, "user|%s" % calendar_id))
             self.store.save_snapshot(calendar_id, payload, etag, changed=True, status="ok",
                                      next_refresh_at=now_iso(interval), fail_count=0,
-                                     paused_until=None)
+                                     clear_pause=True)
             self.store.audit(calendar_id, "reauthorize" if existing else "create", "user", "ok")
         result = {"created": existing is None, "state": "active", "semester": semester,
                   "feed_url": self.feed_url(token), "refresh_interval": interval,
@@ -301,12 +329,13 @@ class CalendarService:
                                                     timespec="seconds"),
                             "state": "active"}
             rows = await self.school.schedule_rows(username, password, semester)
-            payload, etag, anomalies = self._build_ics(rows, term, int(record["revision"]) + 1)
+            payload, etag, anomalies = self._build_ics(rows, term, int(record["revision"]) + 1,
+                                                       int(record["refresh_interval"]))
             changed = etag != (record.get("ics_etag") or "")
             self.store.save_snapshot(record["id"], payload, etag if changed else record.get("ics_etag") or etag,
                                      changed=changed, status="ok",
                                      next_refresh_at=now_iso(int(record["refresh_interval"])),
-                                     fail_count=0, paused_until=None)
+                                     fail_count=0, clear_pause=True)
             self.store.audit(record["id"], "refresh", "user", "ok")
         return {"refreshed": True, "changed": changed, "state": "active",
                 "events_estimated": payload.count(b"BEGIN:VEVENT"),
@@ -347,13 +376,14 @@ class CalendarService:
                                         next_refresh_at=now_iso(backoff), paused_until=None)
                 self.store.audit(record["id"], "refresh", actor, "upstream_error")
                 return "upstream_error"
-            payload, etag, _ = self._build_ics(rows, term, int(record["revision"]) + 1)
+            payload, etag, _ = self._build_ics(rows, term, int(record["revision"]) + 1,
+                                                int(record["refresh_interval"]))
             changed = etag != (record.get("ics_etag") or "")
             self.store.save_snapshot(record["id"], payload,
                                      etag if changed else record.get("ics_etag") or etag,
                                      changed=changed, status="ok",
                                      next_refresh_at=now_iso(int(record["refresh_interval"])),
-                                     fail_count=0, paused_until=None)
+                                     fail_count=0, clear_pause=True)
             self.store.audit(record["id"], "refresh", actor, "ok")
             return "ok"
 

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -33,17 +33,45 @@ class AuthBody(BaseModel):
     verified_token: Optional[str] = Field(default=None, max_length=256)
 
 
+def _etag_matches(header: str, etag: str) -> bool:
+    """RFC 9110 §13.1.2：If-None-Match 使用弱比较，支持 ``*`` 与逗号分隔多值。"""
+    value = str(header or "").strip()
+    if not value:
+        return False
+    if value == "*":
+        return True
+    opaque = lambda tag: tag[2:] if tag.startswith("W/") else tag      # noqa: E731
+    return any(opaque(item.strip()) == opaque(etag)
+               for item in value.split(",") if item.strip())
+
+
 def _error(exc: CalendarError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "code": exc.code})
 
 
 def build_router(service: CalendarService, require_auth: Callable[..., Any],
-                 require_admin: Callable[..., Any]) -> APIRouter:
+                 require_admin: Callable[..., Any],
+                 rate_limit: Optional[Callable[..., Any]] = None) -> APIRouter:
+    """浏览器 API 与 /run 同级信任模型：既要网关令牌，也要过编排层限流。
+
+    日历接口能触发学校登录（L3）或本地密码比对（L2），不加上限等同于给
+    账号密码猜测留一条绕过 /run 限流与学校风控的旁路。
+    """
     router = APIRouter()
+    guarded: List[Any] = [Depends(require_auth)]
+    if rate_limit is not None:
+        guarded.append(Depends(rate_limit))
 
     async def _guard(coro) -> Response:
         try:
             return JSONResponse(content=await coro)
+        except CalendarError as exc:
+            return _error(exc)
+
+    async def _guard_sync(call) -> Response:
+        """同步只读动作（本地编码，无上游 IO）统一走同一套错误映射。"""
+        try:
+            return JSONResponse(content=call())
         except CalendarError as exc:
             return _error(exc)
 
@@ -53,27 +81,33 @@ def build_router(service: CalendarService, require_auth: Callable[..., Any],
         return service.public_config()
 
     # ---------------- 浏览器 API ----------------
-    @router.post("/api/v1/calendars", dependencies=[Depends(require_auth)])
+    @router.post("/api/v1/calendars", dependencies=guarded)
     async def create(body: CreateBody) -> Response:
         return await _guard(service.create(
             body.username, body.password, body.semester, weeks=body.weeks,
             refresh_interval=body.refresh_interval, reauthorize=body.reauthorize))
 
-    @router.post("/api/v1/calendars/status", dependencies=[Depends(require_auth)])
+    @router.post("/api/v1/calendars/status", dependencies=guarded)
     async def status(body: AuthBody) -> Response:
         return await _guard(service.status(body.username, body.password, body.semester,
                                            body.verified_token))
 
-    @router.post("/api/v1/calendars/refresh", dependencies=[Depends(require_auth)])
+    @router.post("/api/v1/calendars/qr", dependencies=guarded)
+    async def qr(body: AuthBody) -> Response:
+        """订阅二维码矩阵：本地生成（webcal:// 指向订阅源），不经过第三方服务。"""
+        return await _guard_sync(lambda: service.qr(body.username, body.password,
+                                                   body.semester, body.verified_token))
+
+    @router.post("/api/v1/calendars/refresh", dependencies=guarded)
     async def refresh(body: AuthBody) -> Response:
         return await _guard(service.refresh(body.username, body.password, body.semester))
 
-    @router.post("/api/v1/calendars/rotate", dependencies=[Depends(require_auth)])
+    @router.post("/api/v1/calendars/rotate", dependencies=guarded)
     async def rotate(body: AuthBody) -> Response:
         return await _guard(service.rotate(body.username, body.password, body.semester,
                                            verified_token=body.verified_token))
 
-    @router.delete("/api/v1/calendars", dependencies=[Depends(require_auth)])
+    @router.delete("/api/v1/calendars", dependencies=guarded)
     async def close(body: AuthBody) -> Response:
         return await _guard(service.close(body.username, body.password, body.semester,
                                           verified_token=body.verified_token))
@@ -93,7 +127,7 @@ def build_router(service: CalendarService, require_auth: Callable[..., Any],
             "X-Robots-Tag": "noindex, nofollow",
             "Content-Disposition": 'inline; filename="schedule.ics"',
         }
-        if request.headers.get("if-none-match") in (etag, data["etag"]):
+        if _etag_matches(request.headers.get("if-none-match", ""), etag):
             return Response(status_code=304, headers=headers)
         if data.get("last_modified"):
             headers["Last-Modified"] = data["last_modified"]

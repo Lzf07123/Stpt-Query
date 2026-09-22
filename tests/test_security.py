@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import logging
 import re
 import redis
 from fastapi.testclient import TestClient
@@ -157,3 +158,59 @@ def test_csp_does_not_allow_inline_styles():
     config = open("frontend/templates/default.conf.template", encoding="utf-8").read()
     assert "'unsafe-inline'" not in config
     assert "style-src 'self';" in config
+
+
+def test_calendar_feed_token_is_redacted_from_access_logs():
+    """订阅源路径即长期密钥：uvicorn 访问日志落盘前必须替换成占位符。"""
+    from app.trace import install_access_log_redaction, redact_feed_paths
+
+    token = "K" * 43
+    line = 'GET /cal/%s.ics HTTP/1.1' % token
+    assert token not in redact_feed_paths(line)
+    assert "[redacted]" in redact_feed_paths(line)
+    # 非订阅路径不受影响
+    assert redact_feed_paths("GET /admin/api/calendars HTTP/1.1") == "GET /admin/api/calendars HTTP/1.1"
+    assert redact_feed_paths("GET /cal/not-a-feed-path HTTP/1.1") == "GET /cal/not-a-feed-path HTTP/1.1"
+
+    install_access_log_redaction()
+    logger = logging.getLogger("uvicorn.access")
+    record = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("10.0.0.9", "GET", "/cal/%s.ics" % token, "1.1", 200), None)
+    for item in logger.filters:
+        item.filter(record)
+    rendered = record.getMessage()
+    assert token not in rendered and "/cal/[redacted].ics" in rendered
+
+
+def test_calendar_api_reuses_orchestration_rate_limit(tmp_path):
+    """日历接口能触发本地密码比对与学校登录，必须与 /run 共用限流。"""
+    cfg = _cfg(rate_limit=1, calendar_enabled=True,
+               calendar_master_key=base64.urlsafe_b64encode(b"c" * 32).decode(),
+               calendar_db_path=str(tmp_path / "calendar.db"))
+    body = {"username": "2023000001", "password": "pw", "semester": "2026-2027-1"}
+    with TestClient(create_app(cfg)) as client:
+        codes = [client.post("/api/v1/calendars/status", headers=HEADERS, json=body).status_code
+                 for _ in range(4)]
+    assert 429 in codes, codes
+
+
+def test_calendar_compare_accepts_non_ascii_credentials():
+    """口令可能含中文/emoji：常量时间比较必须先编码，否则 500。"""
+    digest = hashlib.sha256(b"x").hexdigest()
+    assert digest
+    from app.calendar.crypto import CalendarCrypto
+    assert CalendarCrypto.compare("密码123", "密码123") is True
+    assert CalendarCrypto.compare("密码123", "密码124") is False
+    assert CalendarCrypto.compare("emoji🔐", "emoji🔐") is True
+
+
+def test_calendar_feed_path_is_redacted_in_log_messages():
+    """非 access log 的日志行也不得带订阅源路径。"""
+    from app.trace import _redact_sensitive_log_message, redact_feed_paths
+
+    token = "M" * 43
+    assert token not in redact_feed_paths("fetching /cal/%s.ics failed" % token)
+    rendered = _redact_sensitive_log_message("GET /cal/%s.ics?x=1" % token)
+    assert token not in rendered and "[redacted]" in rendered
