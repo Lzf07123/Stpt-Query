@@ -39,6 +39,12 @@ from .notices import (NoticeCreate, NoticeError, NoticeStore,
 from .pipeline import HTTPServiceClient, Pipeline, ServiceError
 from .jwxt_core import load_config as _load_jwxt_config
 from .jwxt_http import make_app as _make_jwxt_app
+from .calendar.config import CalendarConfigError
+from .calendar.crypto import CalendarCryptoError
+from .calendar.routes import build_router as build_calendar_router
+from .calendar.scheduler import CalendarScheduler
+from .calendar.service import (CalendarService, CalendarSettings,
+                                build_service as build_calendar_service)
 from .querylog import JSONLFileWriter, log_query, sanitize_entry
 from .runtime_metrics import RuntimeMetrics
 from .schema import (JobSubmissionResponse, JobStatusResponse, QueryResult,
@@ -95,6 +101,19 @@ class Settings(BaseSettings):
     notice_active_max: int = 10
     notice_history_max: int = 500
     notice_compact_after: int = 2000
+    # ---- 网络日历订阅（可选；启用需要固定主密钥）----
+    calendar_enabled: bool = False
+    calendar_master_key: str = ""
+    calendar_db_path: str = "/var/lib/edu-query/calendar/calendar.db"
+    calendar_config_path: str = "config/calendar.json"
+    calendar_public_base_url: str = ""
+    calendar_default_refresh_seconds: int = 43200
+    calendar_min_refresh_seconds: int = 3600
+    calendar_max_failures: int = 3
+    calendar_pause_hours: int = 24
+    calendar_max_per_owner: int = 5
+    calendar_ttl_days: int = 210
+    calendar_scheduler_interval_seconds: int = 60
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8",
                                       extra="ignore")
@@ -389,6 +408,25 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         upstream_transport = httpx.ASGITransport(app=internal_jwxt_app)
     service = HTTPServiceClient(service_base_url, service_api_token,
                                 cfg.service_timeout, transport=upstream_transport)
+    # 日历订阅：仅在启用且配置合法时构建；配置非法直接阻止启动（宁可失败，不生成错误日历）
+    calendar_service: Optional[CalendarService] = None
+    if cfg.calendar_enabled:
+        try:
+            calendar_service = build_calendar_service(CalendarSettings(
+                enabled=True,
+                master_key=cfg.calendar_master_key,
+                db_path=cfg.calendar_db_path,
+                config_path=cfg.calendar_config_path,
+                public_base_url=cfg.calendar_public_base_url,
+                default_refresh=cfg.calendar_default_refresh_seconds,
+                min_refresh=cfg.calendar_min_refresh_seconds,
+                max_failures=cfg.calendar_max_failures,
+                pause_hours=cfg.calendar_pause_hours,
+                max_per_owner=cfg.calendar_max_per_owner,
+                ttl_days=cfg.calendar_ttl_days,
+            ), service)
+        except (CalendarConfigError, CalendarCryptoError) as exc:
+            raise RuntimeError("日历订阅配置非法：%s" % exc) from exc
     llm_slots = asyncio.Semaphore(max(1, cfg.llm_concurrency))
     pdf_slots = asyncio.Semaphore(max(1, cfg.pdf_concurrency))
     login_slots = asyncio.Semaphore(max(1, min(8, cfg.global_concurrency)))
@@ -412,6 +450,9 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     )
 
     async def _shutdown() -> None:
+        calendar_task = getattr(app.state, "calendar_scheduler_task", None)
+        if calendar_task is not None:
+            calendar_task.cancel()
         for task in getattr(app.state, "job_worker_tasks", []):
             task.cancel()
         history_sync = getattr(app.state, "history_sync_task", None)
@@ -443,6 +484,14 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await _startup()
+        calendar_stop = asyncio.Event()
+        calendar_scheduler = (
+            CalendarScheduler(calendar_service,
+                              interval=cfg.calendar_scheduler_interval_seconds)
+            if calendar_service is not None else None)
+        if calendar_scheduler is not None:
+            app.state.calendar_scheduler_task = asyncio.create_task(
+                calendar_scheduler.run(calendar_stop))
         try:
             if internal_jwxt_app is None:
                 yield
@@ -451,6 +500,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                 async with internal_jwxt_app.router.lifespan_context(internal_jwxt_app):
                     yield
         finally:
+            calendar_stop.set()
             await _shutdown()
 
     app = FastAPI(
@@ -1019,6 +1069,17 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
                         meta={"elapsed_ms": int(cfg.request_timeout * 1000)})
                 await _record_query_log(_query_log_entry(body, client_ip, started, result,
                                                          result.get("run_id", "")))
+                if (calendar_service is not None and result.get("success")
+                        and str(body.option or "").strip() == "课表"):
+                    try:
+                        semester = (body.semesters or "").strip() or \
+                            calendar_service.default_semester()
+                        if semester:
+                            meta = result.setdefault("meta", {})
+                            meta["calendar"] = calendar_service.local_state(
+                                body.username, body.password, semester)
+                    except Exception as exc:      # 日历状态失败不影响查询结果
+                        LOG.warning("日历状态附带失败：%s", exc.__class__.__name__)
                 return QueryResult(**result)
             finally:
                 query_slots.release()
@@ -1620,6 +1681,11 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         except NoticeError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail)
         return {"deleted": True}
+
+    if calendar_service is not None:
+        app.state.calendar_service = calendar_service
+        app.include_router(build_calendar_router(calendar_service, _require_auth,
+                                                 _require_admin))
 
     return app
 

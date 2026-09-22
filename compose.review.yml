@@ -3,3 +3,5 @@ volumes:
     name: edu-query-review_query-logs-persistent
   app-notice-fallback:
     name: edu-query-review_notice-fallback
+  app-calendar:
+    name: edu-query-review_calendar
