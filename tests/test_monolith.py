@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -59,3 +61,23 @@ def test_internal_query_proxy_routes_are_not_public(mono_app):
     with TestClient(mono_app) as client:
         for path in ("/login", "/get_schedule", "/get_grades"):
             assert client.get(path).status_code == 404
+
+
+def test_no_legacy_multi_service_residue():
+    """单体化边界：不残留旧服务目录，nginx 不反代旧服务，脚本不依赖已删除的 compose redis。"""
+    root = Path(__file__).resolve().parents[1]
+    for name in ("format-service", "get-infomation-service"):
+        assert not (root / name).exists(), "%s 目录应在单体化后删除" % name
+
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    services = compose.split("services:", 1)[1].split("\nnetworks:", 1)[0]
+    assert re.findall(r"^  ([a-z0-9-]+):$", services, re.M) == ["app", "frontend"]
+
+    nginx = (root / "frontend/templates/default.conf.template").read_text(encoding="utf-8")
+    assert "proxy_pass http://format-service" not in nginx
+    assert "proxy_pass http://get-infomation" not in nginx
+    assert "internal" not in nginx or "internal_jwxt" not in nginx   # 不再有 internal 上游网络
+
+    for script in (root / "scripts").glob("*.sh"):
+        body = script.read_text(encoding="utf-8")
+        assert "docker compose exec" not in body, "%s 仍在操作 compose 内服务" % script.name
