@@ -5,8 +5,8 @@ import json
 import requests
 import pytest
 
-import jwxt_state
-from jwxt_core import (
+from app import jwxt_state
+from app.jwxt_core import (
     SessionInvalidError,
     TokenError,
     WarmPendingError,

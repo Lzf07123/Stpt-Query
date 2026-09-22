@@ -1977,7 +1977,7 @@ def apply_config(cfg):
     # 同步按值导入到 jwxt_http / jwxt_state 的可变配置副本，
     # 避免 make_app(自定义配置) 后 HTTP 层仍读到模块导入时的旧值
     try:
-        import jwxt_http as _http_mod
+        from app import jwxt_http as _http_mod
         _http_mod.ALLOW_GET_CREDENTIALS = ALLOW_GET_CREDENTIALS
         _http_mod.PROTECT_LOGIN_STATUS = PROTECT_LOGIN_STATUS
         _http_mod.TRUST_PROXY = TRUST_PROXY

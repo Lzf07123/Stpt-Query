@@ -1,6 +1,6 @@
 # Kubernetes 迁移就绪说明
 
-> 当前项目为小规模部署，使用 Docker Compose 单/多实例即可，不随仓库附带
+> 当前项目为小规模部署，使用 Docker Compose 单实例即可，不随仓库附带
 > `k8s/` 清单。本节说明代码与配置已为未来迁入 Kubernetes 做好了哪些准备，
 > 以及届时需要补充的内容。
 
@@ -8,51 +8,49 @@
 
 | 能力 | 现状 | K8s 对应 |
 |---|---|---|
-| 无状态编排层 | 业务状态在 `get-infomation-service`（Redis 共享）；本服务只落盘查询日志和全站通知配置降级文件。查询编排不落盘业务状态 | 可直接水平扩容；通知需共享 RWX PVC，其余副本可任意调度 |
+| 单一应用 | 编排、渲染、PDF 与内嵌查询代理同进程（`app/`），无跨服务 HTTP 调用 | 一个 Deployment + Service |
+| 业务状态 | 查询会话/缓存/限流在进程内存；持久状态仅两项：查询日志文件、全站通知 JSONL（日历订阅落本地库，见第六节） | 单实例部署；持久卷挂载 |
 | PDF 内联返回 | `pdf_base64` 直接放在响应里，无文件存储 | **无需 PV/PVC** |
 | 环境变量配置 | 全部配置来自 `.env`/环境变量（`Settings`） | ConfigMap + Secret 直接映射 |
-| 固定 API Token | 生产强制 `AUTO_ROTATE_TOKEN=false` + 固定 `API_TOKEN` | Secret 注入，多副本一致 |
-| 管理员后台查询 | `ADMIN_TOKEN` 独立鉴权 `/admin/api/query-logs`、`/admin/api/metrics` | Secret 注入；多副本需统一 Ingress 或逐副本查看 |
-| 存活/就绪探针 | `GET /health/live`、`GET /health/ready` | `livenessProbe` / `readinessProbe` |
-| 优雅退出 | 资源采样任务由应用 shutdown 取消 | 配合 `terminationGracePeriodSeconds` |
-| 异步任务队列 | `POST /run/jobs` + Redis 队列/状态/阶段；每副本 `JOB_WORKERS` 消费 | Redis 中的队列仅保存短期 session 和粗粒度阶段，不保存密码 |
+| 固定 API Token | 生产强制 `AUTO_ROTATE_TOKEN=false` + 固定 `API_TOKEN` | Secret 注入 |
+| 管理员后台查询 | `ADMIN_TOKEN` 独立鉴权 `/admin/api/*` | Secret 注入 |
+| 存活/就绪探针 | `GET /health/live`、`GET /health/ready`（ready 会探测内嵌查询代理） | `livenessProbe` / `readinessProbe` |
+| 优雅退出 | 采样任务与内嵌查询代理后台线程由应用 shutdown 取消 | 配合 `terminationGracePeriodSeconds` |
+| 异步任务队列 | `POST /run/jobs` 需要 `REDIS_URL`；未配置时返回 503，前端回退同步查询 | 需要排队时接托管 Redis |
 | 客户端 IP | `TRUST_PROXY=true` 后按 `X-Forwarded-For` 限流 | Ingress/Service 传递真实 IP |
-| 跨副本限流/状态历史 | format-service 用 `REDIS_URL` 共享固定窗口限流、历史与日志；查询代理用 `JWXT_REDIS_URL` 共享会话与缓存 | 接入托管 Redis（云 Redis / Operator） |
-| 外部依赖降级 | Redis 故障时切本地限流/历史/会话；LLM 故障返回纯表；查询代理故障返回分类错误；后台展示降级提示 | 可避免单个外部依赖导致入口整体不可用 |
-| 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 每副本 WAL + 进程内历史 + Redis（`gw:v2:query-logs`）+ `GET /query-logs`、`GET /service-status` | 服务状态由查询日志派生；采集 stdout 到集中日志；需要本地留存时只给每个 Pod 挂独立 PVC |
-| 全站通知 | 共享 JSONL 文件为权威存储，Redis 为恢复副本；`GET /notices/active`、`GET /notices/history` | 多副本挂同一 `ReadWriteMany` PVC；托管存储不支持 RWX 时改为支持 `flock` 的网络文件系统或外部配置存储 |
+| 外部依赖降级 | 无 Redis 时使用进程内限流/历史/会话；LLM 故障返回纯表；学校不可达返回分类错误 | 单个外部依赖故障不拖垮入口 |
+| 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 本地 JSONL + 进程内历史；`GET /query-logs`、`GET /service-status` | 采集 stdout；需要本地留存时给 Pod 挂独立 PVC |
+| 全站通知 | JSONL 文件为权威存储（可选 Redis 恢复副本） | 单实例用独立 PVC；多副本需 `ReadWriteMany` |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
-## 二、迁入 K8s 时的映射清单（三容器 → 三个 Deployment）
+## 二、迁入 K8s 时的映射清单（两容器 → 两个 Deployment）
 
 | 现状（Compose） | K8s 对象 |
 |---|---|
-| `get-infomation-service` | Deployment + Service（有状态：会话/缓存，多副本需 Redis） |
-| `format-service` | Deployment（查询编排无状态，`replicas>=2`）+ Service + 通知共享 RWX PVC |
+| `app` | Deployment（默认 `replicas: 1`）+ Service + 查询日志/通知 PVC |
 | `frontend` | Deployment + Service + Ingress（终止 HTTPS） |
-| `API_TOKEN` / `LLM_API_KEY` / `SERVICE_API_TOKEN` | Secret |
-| `SERVICE_BASE_URL` / `LLM_*` / `RATE_LIMIT` | ConfigMap / 环境变量 |
-| 内置 redis（后续多副本） | 托管 Redis 或 StatefulSet + PV（生产建议托管，避免会话丢失） |
-| healthcheck | livenessProbe `/health/live`、readinessProbe `/health/ready` |
+| `API_TOKEN` / `ADMIN_TOKEN` / `LLM_API_KEY` | Secret |
+| `LLM_*` / `RATE_LIMIT` / `JWXT_*` | ConfigMap / 环境变量 |
+| 可选外部 Redis | 托管 Redis（仅在需要异步任务或多副本时接入） |
 
-> 无状态要求：`format-service` 与 `frontend` 可任意扩容；`get-infomation-service`
-> 单实例即可，多副本时为其配置 `JWXT_REDIS_URL` 共享状态。Redis 故障时查询代理会
-> 降级为本副本内存状态，健康状态变为 `degraded`，但容器不应退出。
+> **为什么默认单副本**：查询会话、限流桶、短码都在进程内存中，内嵌查询代理因此与
+> 副本绑定。要水平扩容必须同时接入托管 Redis（`REDIS_URL` + `JWXT_REDIS_URL`），
+> 否则同一账号的会话会在副本间漂移。
 
 ## 三、迁入前需要补充的事项（届时再做）
 
-1. **镜像治理**：三个镜像统一语义化 tag + digest，开启镜像扫描与签名。
-2. **资源规格**：`requests/limits`（CPU/内存）、`securityContext.runAsNonRoot`、
-  `readOnlyRootFilesystem`（本服务查询编排无写盘需求；通知挂专用 RWX PVC）。
+1. **镜像治理**：两个镜像统一语义化 tag + digest，开启镜像扫描与签名。
+2. **资源规格**：`requests/limits`（CPU/内存，含 LibreOffice 转换余量）、
+   `securityContext.runAsNonRoot`、`readOnlyRootFilesystem`（写盘仅限挂载的卷与 `/tmp`）。
 3. **探针参数**：liveness 建议 `initialDelaySeconds: 10, periodSeconds: 10`；
-   readiness 建议 `periodSeconds: 10`，开启 `TRUST_PROXY=true` 后限流依赖 Ingress
-   正确传递 `X-Forwarded-For`。
-4. **优雅退出**：`terminationGracePeriodSeconds: 30`（uvicorn 默认在 SIGTERM
-   后完成在途请求）。
-5. **Redis 高可用**：多副本 + 限流/历史共享时用托管 Redis，避免单点。
-6. **可观测**：查询日志已按结构化 JSON 单行输出 stdout（`event/run_id/username/option/success/kind/elapsed_ms`，无密码/session/token），迁入 K8s 后由 Fluentd / Promtail 采集；再接入 Prometheus `/metrics` 指标。
-7. **密钥轮换**：`API_TOKEN`、`LLM_API_KEY`、`SERVICE_API_TOKEN` 按周期轮换。
-8. **过载保护**：format-service 已有全局并发槽位、异步任务队列、LLM/PDF 独立槽位、槽位等待超时和单次编排总预算；副本数仍需结合 `GLOBAL_CONCURRENCY`、`JOB_WORKERS` 与查询代理容量评估。
+   readiness 建议 `periodSeconds: 10`；`TRUST_PROXY=true` 时限流依赖 Ingress 正确传递 `X-Forwarded-For`。
+4. **优雅退出**：`terminationGracePeriodSeconds: 30`（uvicorn 默认在 SIGTERM 后完成在途请求）。
+5. **可选 Redis**：需要异步队列或多副本时接入托管 Redis，避免单点。
+6. **可观测**：查询日志已按结构化 JSON 单行输出 stdout（无密码/session/token），迁入后由
+   Fluentd / Promtail 采集；再接入 Prometheus `/metrics` 指标（边缘已屏蔽该路径）。
+7. **密钥轮换**：`API_TOKEN`、`ADMIN_TOKEN`、`LLM_API_KEY` 按周期轮换。
+8. **过载保护**：已有全局并发槽位、LLM/PDF 独立槽位、槽位等待超时与单次编排总预算；
+   副本数仍需结合 `GLOBAL_CONCURRENCY` 与内嵌查询代理容量评估。
 
 ## 四、示例（仅供未来参考，不在当前仓库落地）
 
@@ -60,35 +58,33 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: format-service
+  name: edu-query-app
 spec:
-  replicas: 2
+  replicas: 1
   selector:
-    matchLabels: { app: format-service }
+    matchLabels: { app: edu-query-app }
   template:
     metadata:
-      labels: { app: format-service }
+      labels: { app: edu-query-app }
     spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: app
-          image: registry.example.com/edu-query-format:0.1.0
+          image: registry.example.com/edu-query-app:1.0.0
           ports: [{ containerPort: 8000 }]
           env:
             - name: ENVIRONMENT
               value: "production"
-            - name: SERVICE_BASE_URL
-              value: "http://get-infomation-service:8766"
-            - name: LLM_BASE_URL
-              value: "https://open.bigmodel.cn/api/paas/v4"
-            - name: LLM_MODEL
-              value: "glm-4.5-flash"
-            - name: LLM_ENABLE_THINKING
-              value: "true"
-            - name: LLM_SYSTEM_PROMPT
-              value: ""
             - name: TRUST_PROXY
               value: "true"
+            - name: PUBLIC_BASE_URL
+              value: "https://example.com"
+            - name: ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: edu-query-secrets, key: admin-token } }
+          volumeMounts:
+            - { name: query-logs, mountPath: /var/log/edu-query }
+            - { name: notices, mountPath: /var/lib/edu-query/notices }
+            - { name: tmp, mountPath: /tmp }
           livenessProbe:
             httpGet: { path: /health/live, port: 8000 }
             initialDelaySeconds: 10
@@ -97,12 +93,26 @@ spec:
             httpGet: { path: /health/ready, port: 8000 }
             periodSeconds: 10
           resources:
-            requests: { cpu: 100m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+            requests: { cpu: 200m, memory: 384Mi }
+            limits: { cpu: "1", memory: 640Mi }
           securityContext:
             runAsNonRoot: true
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
+      volumes:
+        - { name: query-logs, persistentVolumeClaim: { claimName: edu-query-logs } }
+        - { name: notices, persistentVolumeClaim: { claimName: edu-query-notices } }
+        - { name: tmp, emptyDir: { sizeLimit: 256Mi } }
 ```
 
-> 正式迁移时再补充 Service/Ingress/Secret/PDB 与托管 Redis 配置，按上述映射落地即可。
+## 五、Image Pull 与滚动更新注意
+
+- LibreOffice 层较大，建议节点预热镜像或使用私有仓库就近拉取。
+- 单副本部署滚动更新期间会有秒级不可用；需要零中断时先接入 Redis 并扩容到 2 副本。
+
+## 六、日历订阅（Phase B）的额外要求
+
+- 订阅数据落在本地库（SQLite），与内嵌查询代理共享单实例语义；迁入 K8s 时必须挂
+  持久卷，且**保持单副本**，或改为外部数据库 + 独立迁移改造。
+- 托管凭据使用 `CALENDAR_MASTER_KEY`（Secret 注入，禁止自动生成），备份中不得与
+  数据库同一份介质保存。

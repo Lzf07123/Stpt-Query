@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import requests
 
-from jwxt_core import (
+from app.jwxt_core import (
     J, BASE, UA, TIMEOUT, VERIFY_TLS, LOG, UPSTREAM_SEM, JUMP_PAGES,
     LOGIN_REUSE, WARM_WAIT, VERSION, MAX_SESSIONS, JUMP_CODE_TTL, SessionInvalidError,
     TokenError, UpstreamBusyError, LockTimeoutError, LATENCY_BUCKETS_MS, to_webvpn,

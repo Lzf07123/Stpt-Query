@@ -8,10 +8,10 @@ import redis
 from fastapi.testclient import TestClient
 
 from app.main import Settings, create_app
-from jwxt_redis import (
+from app.jwxt_redis import (
     RedisBackend, ResilientRedisSessionStore, ResilientRedisTTLCache,
 )
-from jwxt_state import SessionStore, TTLCache
+from app.jwxt_state import SessionStore, TTLCache
 
 
 def test_redis_backend_stays_available_when_initial_ping_fails():

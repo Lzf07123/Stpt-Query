@@ -1,4 +1,5 @@
-# 基础镜像可用 IMAGE_REGISTRY 环境变量切换镜像站（由 docker compose 传入 BASE_IMAGE）
+# 单体应用镜像：编排 + 渲染 + 查询代理（内嵌 ASGI）同进程运行。
+# 基础镜像可经 IMAGE_REGISTRY 切换镜像加速站（由 docker compose 传入 BASE_IMAGE）
 ARG BASE_IMAGE=python:3.11-slim
 FROM ${BASE_IMAGE}
 
@@ -16,26 +17,25 @@ RUN if [ "${APT_MIRROR}" != "http://deb.debian.org/debian" ]; then \
     && apt-get install -y --no-install-recommends libreoffice-writer fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.txt ./
 # 国内环境可设 PIP_INDEX_URL 指向 PyPI 镜像加速构建期下载
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
 
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /var/log/jwxt \
-    && touch /var/log/jwxt/jwxt-service.log \
-    && chown -R appuser:appuser /app /var/log/jwxt
+    && mkdir -p -m 700 /var/log/edu-query \
+    && mkdir -p -m 700 /var/lib/edu-query/notices \
+    && mkdir -p -m 700 /var/log/jwxt \
+    && chown -R 10001:10001 /var/log/edu-query /var/lib/edu-query /var/log/jwxt
 
-COPY --chown=appuser:appuser main.py jwxt_core.py jwxt_state.py jwxt_http.py jwxt_redis.py rtf_pdf.py .
+COPY app ./app
+RUN chown -R 10001:10001 /app
 
-ENV JWXT_HOST=0.0.0.0 \
-    JWXT_PORT=8766
+EXPOSE 8000
 
-EXPOSE 8766
+USER 10001
 
-USER appuser
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)" || exit 1
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8766/health', timeout=3)" || exit 1
-
-CMD ["python", "main.py"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

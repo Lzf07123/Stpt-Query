@@ -116,19 +116,29 @@ def test_edge_hides_sensitive_query_strings_and_sets_csp():
 def test_query_log_file_uses_persistent_named_volume():
     compose = open("docker-compose.yml", encoding="utf-8").read()
     volume_section = compose.split("\nvolumes:\n", 1)[1]
-    assert "format-query-logs:/var/log/edu-query" in compose
+    assert "app-query-logs:/var/log/edu-query" in compose
     assert "name: edu-query-app_format-query-logs-persistent" in volume_section
     assert "type: tmpfs" not in volume_section
 
 
 def test_runtime_memory_guardrails_are_configured():
     compose = open("docker-compose.yml", encoding="utf-8").read()
-    assert "mem_limit: ${JWXT_MEM_LIMIT:-512m}" in compose
-    assert "mem_limit: ${FORMAT_MEM_LIMIT:-256m}" in compose
+    assert "mem_limit: ${APP_MEM_LIMIT:-640m}" in compose
     assert "mem_limit: ${FRONTEND_MEM_LIMIT:-64m}" in compose
-    assert compose.count("MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}") == 2
+    assert compose.count("MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}") == 1
     nginx = open("frontend/nginx.conf", encoding="utf-8").read()
     assert "worker_processes auto;" in nginx
+
+
+def test_only_frontend_publishes_host_port():
+    """单体拓扑：app 只在 web 网络内暴露端口，唯一宿主映射属于 frontend。"""
+    compose = open("docker-compose.yml", encoding="utf-8").read()
+    app_block = compose.split("  app:", 1)[1].split("  frontend:", 1)[0]
+    frontend_block = compose.split("  frontend:", 1)[1].split("\nnetworks:", 1)[0]
+    assert "ports:" not in app_block
+    assert "expose:" in app_block
+    assert "ports:" in frontend_block
+    assert compose.count("ports:") == 1
 
 
 def test_inline_script_hashes_are_covered_by_csp():

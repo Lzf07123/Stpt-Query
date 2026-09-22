@@ -98,9 +98,9 @@ def _host_cgroup_values(cgroup_id: str) -> tuple[Optional[int], Optional[int]]:
 def _classify_orchestration_process(command: str) -> Optional[str]:
     normalized = " ".join(command.split())
     if "uvicorn" in normalized and "app.main:app" in normalized:
-        return "format-service"
+        return "app"
     if normalized.startswith("python") and "main.py" in normalized:
-        return "get-infomation-service"
+        return "app"
     if normalized.startswith("nginx:") and "master process" in normalized:
         return "frontend"
     if normalized.startswith("redis-server"):
@@ -110,8 +110,7 @@ def _classify_orchestration_process(command: str) -> Optional[str]:
 
 def _orchestration_memory() -> dict:
     service_processes: dict[str, list[dict]] = {
-        "format-service": [],
-        "get-infomation-service": [],
+        "app": [],
         "frontend": [],
         "redis": [],
     }
@@ -139,7 +138,7 @@ def _orchestration_memory() -> dict:
         memory_bytes: Optional[int] = None
         limit_bytes: Optional[int] = None
         source = "unavailable"
-        if service == "format-service":
+        if service == "app":
             current, limit = _cgroup_memory()
             if current is not None:
                 memory_bytes, limit_bytes, source = current, limit, "cgroup"

@@ -260,10 +260,9 @@
     elements.stackMemoryInfo.textContent = stack.memory_bytes == null ? "等待采样"
       : stack.discovered_services + "/" + stack.expected_services + " 服务 · " + (sourceLabels[stack.source] || stack.source);
     var names = {
-      "format-service": "编排后端",
-      "get-infomation-service": "查询代理",
+      "app": "单体应用",
       "frontend": "前端入口",
-      "redis": "编排 Redis"
+      "redis": "Redis（可选）"
     };
     var services = stack.services || {};
     elements.stackServices.innerHTML = Object.keys(names).map(function (key) {

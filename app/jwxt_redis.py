@@ -15,10 +15,10 @@ from functools import wraps
 
 import redis
 
-from jwxt_state import (
+from app.jwxt_state import (
     KeyedLocks, RateLimiter, SessionStore, ShortCodeStore, TTLCache,
 )
-from jwxt_core import (
+from app.jwxt_core import (
     LOG, UPSTREAM_SEM_TIMEOUT, LockTimeoutError, UpstreamBusyError,
 )
 

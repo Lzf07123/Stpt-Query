@@ -9,8 +9,8 @@ import threading
 
 import requests
 
-from jwxt_redis import RedisBackend, RedisSessionStore
-from jwxt_state import RateLimiter, UpstreamBusyError, probe_school
+from app.jwxt_redis import RedisBackend, RedisSessionStore
+from app.jwxt_state import RateLimiter, UpstreamBusyError, probe_school
 
 
 def test_rate_limiter_has_hard_cap_and_obeys_token_semantics():
@@ -79,7 +79,7 @@ def test_redis_session_store_sweep_cleans_local_warm_events():
 
 
 def test_probe_school_closes_fallback_session_on_busy(monkeypatch):
-    import jwxt_state as state
+    from app import jwxt_state as state
 
     sessions = []
 

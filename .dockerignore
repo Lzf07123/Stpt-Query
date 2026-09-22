@@ -1,0 +1,17 @@
+.git
+.gitmodules
+.github
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.venv
+venv
+.env
+docs
+tests
+design-system
+Li-Design
+frontend
+*.md
+.DS_Store

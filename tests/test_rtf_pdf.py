@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-import rtf_pdf
-from rtf_pdf import PdfConversionError, rtf_to_pdf
+from app import rtf_pdf
+from app.rtf_pdf import PdfConversionError, rtf_to_pdf
 
 
 def _fake_popen(pdf_bytes=b"%PDF-1.7\n", returncode=0):
@@ -31,8 +31,8 @@ def test_rtf_to_pdf_uses_writer_exporter_with_isolated_profile(monkeypatch):
         seen["source"] = Path(command[-1]).read_bytes()
         return _fake_popen()(command, **kwargs)
 
-    monkeypatch.setattr("rtf_pdf.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
+    monkeypatch.setattr("app.rtf_pdf.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("app.rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
     pdf = rtf_to_pdf(b"{\\rtf1 document}")
 
     assert pdf == b"%PDF-1.7\n"
@@ -47,7 +47,7 @@ def test_rtf_to_pdf_uses_writer_exporter_with_isolated_profile(monkeypatch):
 
 
 def test_rtf_to_pdf_rejects_empty_and_oversized_input(monkeypatch):
-    monkeypatch.setattr("rtf_pdf.PDF_MAX_INPUT_BYTES", 4)
+    monkeypatch.setattr("app.rtf_pdf.PDF_MAX_INPUT_BYTES", 4)
     with pytest.raises(PdfConversionError, match="为空"):
         rtf_to_pdf(b"")
     with pytest.raises(PdfConversionError, match="过大"):
@@ -55,8 +55,8 @@ def test_rtf_to_pdf_rejects_empty_and_oversized_input(monkeypatch):
 
 
 def test_rtf_to_pdf_rejects_failed_conversion(monkeypatch):
-    monkeypatch.setattr("rtf_pdf.subprocess.Popen", _fake_popen(returncode=1))
-    monkeypatch.setattr("rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
+    monkeypatch.setattr("app.rtf_pdf.subprocess.Popen", _fake_popen(returncode=1))
+    monkeypatch.setattr("app.rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
     with pytest.raises(PdfConversionError, match="转换失败"):
         rtf_to_pdf(b"{\\rtf1 document}")
 
@@ -72,10 +72,10 @@ def test_rtf_to_pdf_kills_timed_out_process_group(monkeypatch):
             return "", ""
 
     killed = []
-    monkeypatch.setattr("rtf_pdf.subprocess.Popen", lambda *args, **kwargs: TimeoutProcess())
-    monkeypatch.setattr("rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
-    monkeypatch.setattr("rtf_pdf.os.killpg", lambda pid, sig: killed.append((pid, sig)))
-    monkeypatch.setattr("rtf_pdf.PDF_TIMEOUT", 1)
+    monkeypatch.setattr("app.rtf_pdf.subprocess.Popen", lambda *args, **kwargs: TimeoutProcess())
+    monkeypatch.setattr("app.rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
+    monkeypatch.setattr("app.rtf_pdf.os.killpg", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr("app.rtf_pdf.PDF_TIMEOUT", 1)
 
     with pytest.raises(PdfConversionError, match="超时"):
         rtf_to_pdf(b"{\\rtf1 document}")
@@ -90,8 +90,8 @@ def test_rtf_to_pdf_reuses_profile_and_reports_metrics(monkeypatch):
         profiles.append(Path(command[1][len(prefix):]))
         return _fake_popen()(command, **kwargs)
 
-    monkeypatch.setattr("rtf_pdf.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
+    monkeypatch.setattr("app.rtf_pdf.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("app.rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
 
     first_pdf, first_metrics = rtf_pdf.rtf_to_pdf_detailed(b"{\\rtf1 first}")
     second_pdf, second_metrics = rtf_pdf.rtf_to_pdf_detailed(b"{\\rtf1 second}")
@@ -113,8 +113,8 @@ def test_rtf_to_pdf_destroys_profile_after_failed_conversion(monkeypatch):
         profiles.append(profile)
         return _fake_popen(returncode=1)(command, **kwargs)
 
-    monkeypatch.setattr("rtf_pdf.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
+    monkeypatch.setattr("app.rtf_pdf.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("app.rtf_pdf.shutil.which", lambda _: "/usr/bin/soffice")
     with pytest.raises(PdfConversionError, match="转换失败"):
         rtf_to_pdf(b"{\\rtf1 document}")
 
@@ -123,7 +123,7 @@ def test_rtf_to_pdf_destroys_profile_after_failed_conversion(monkeypatch):
         profiles.append(Path(command[1][len(prefix):]))
         return _fake_popen()(command, **kwargs)
 
-    monkeypatch.setattr("rtf_pdf.subprocess.Popen", success_popen)
+    monkeypatch.setattr("app.rtf_pdf.subprocess.Popen", success_popen)
     pdf, metrics = rtf_pdf.rtf_to_pdf_detailed(b"{\\rtf1 document}")
 
     assert pdf == b"%PDF-1.7\n"

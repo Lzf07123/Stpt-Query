@@ -1,34 +1,91 @@
 services:
-      # ===== 容器 1：查询代理（本仓库自包含源码）=====
-  # 默认仅挂 internal 内网；显式加载 compose.direct-query.yml 才能直连
-  get-infomation-service:
+  # ===== 容器 1：单体应用（编排 + 渲染 + 分析 + PDF + 内嵌查询代理）=====
+  # 查询代理以内嵌 ASGI 应用在同一进程内运行，不再需要内部网络与内部令牌。
+  # 默认单实例、无 Redis（同步查询 + 内存限流/历史 + JSONL 文件通道）。
+  app:
     build:
-      context: ./get-infomation-service
+      context: .
       args:
         BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
         APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org/debian}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}jwxt-service:${APP_IMAGE_TAG:-1.0.0}
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-app:${APP_IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     read_only: true
-    mem_limit: ${JWXT_MEM_LIMIT:-512m}
+    mem_limit: ${APP_MEM_LIMIT:-640m}
     pids_limit: 128
     tmpfs:
-      - /tmp:size=128m,mode=1777
+      - /tmp:size=256m,mode=1777
       - /var/log/jwxt:size=16m,uid=10001,gid=10001
+    volumes:
+      - app-query-logs:/var/log/edu-query
+      - app-notice-fallback:/var/lib/edu-query/notices
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
     networks:
-      - internal
+      - web
     expose:
-      - "8766"
+      - "8000"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - JWXT_API_TOKEN=${SERVICE_API_TOKEN:-}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - AUTO_ROTATE_TOKEN=${AUTO_ROTATE_TOKEN:-false}
+      - API_TOKEN=${API_TOKEN:-change-me}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      # 留空 = 单体模式（进程内直连查询代理）；显式地址仅用于过渡期或测试直连
+      - SERVICE_BASE_URL=${SERVICE_BASE_URL:-}
+      - SERVICE_TIMEOUT=${SERVICE_TIMEOUT:-60}
+      - RESOURCE_MONITOR_INTERVAL_SECONDS=${RESOURCE_MONITOR_INTERVAL_SECONDS:-5}
+      - RESOURCE_MONITOR_HISTORY_SIZE=${RESOURCE_MONITOR_HISTORY_SIZE:-90}
+      - SERVICE_STATUS_CACHE_SECONDS=${SERVICE_STATUS_CACHE_SECONDS:-3}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-glm-4.5-flash}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
+      - LLM_ENABLE_THINKING=${LLM_ENABLE_THINKING:-true}
+      - LLM_SYSTEM_PROMPT=${LLM_SYSTEM_PROMPT:-}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-60}
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-100}
+      - CONCURRENCY_WAIT_TIMEOUT=${CONCURRENCY_WAIT_TIMEOUT:-2}
+      - GLOBAL_CONCURRENCY=${GLOBAL_CONCURRENCY:-4}
+      - RATE_LIMIT=${RATE_LIMIT:-30}
+      # 默认唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
+      - TRUST_PROXY=${TRUST_PROXY:-true}
+      - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
+      # 单实例默认无 Redis；如需异步任务/多副本，显式配置外部 Redis
+      - REDIS_URL=${REDIS_URL:-}
+      - INSTANCE_ID=${INSTANCE_ID:-}
+      - JOB_WORKERS=${JOB_WORKERS:-2}
+      - JOB_PENDING_LIMIT=${JOB_PENDING_LIMIT:-500}
+      - JOB_RESULT_TTL_SECONDS=${JOB_RESULT_TTL_SECONDS:-900}
+      - JOB_STALE_AFTER_SECONDS=${JOB_STALE_AFTER_SECONDS:-200}
+      - LLM_CONCURRENCY=${LLM_CONCURRENCY:-8}
+      - PDF_CONCURRENCY=${PDF_CONCURRENCY:-2}
+      - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
+      - FILE_LOG_ENABLED=${FILE_LOG_ENABLED:-true}
+      # {instance_id} 会替换成容器唯一实例标识；严禁多副本共享同一轮转 JSONL
+      - FILE_LOG_PATH=${FILE_LOG_PATH:-/var/log/edu-query/{instance_id}/queries.jsonl}
+      - HISTORY_SYNC_INTERVAL_SECONDS=${HISTORY_SYNC_INTERVAL_SECONDS:-60}
+      - FILE_LOG_MAX_BYTES=${FILE_LOG_MAX_BYTES:-52428800}
+      - FILE_LOG_BACKUP_COUNT=${FILE_LOG_BACKUP_COUNT:-7}
+      # 全站通知的共享降级文件；Redis 只是热备份，权威数据仍在文件
+      - NOTICE_FALLBACK_PATH=${NOTICE_FALLBACK_PATH:-/var/lib/edu-query/notices/notices.jsonl}
+      - NOTICE_ACTIVE_MAX=${NOTICE_ACTIVE_MAX:-10}
+      - NOTICE_HISTORY_MAX=${NOTICE_HISTORY_MAX:-500}
+      - NOTICE_COMPACT_AFTER=${NOTICE_COMPACT_AFTER:-2000}
+      - TZ=${TZ:-Asia/Shanghai}
+      - HOST_PROC_ROOT=/host/proc
+      - HOST_CGROUP_ROOT=/host/sys/fs/cgroup
+      # ---- 内嵌查询代理（JWXT_*）----
       # 对外链接（免密登录/课表下载）基准地址：公网入口，浏览器可达
       - JWXT_PUBLIC_URL=${PUBLIC_BASE_URL:-http://127.0.0.1:8000}
-      - JWXT_REDIS_URL=${JWXT_REDIS_URL:-}
       - JWXT_SESSION_TTL_HOURS=${JWXT_SESSION_TTL_HOURS:-1}
       - JWXT_RATE_LIMIT=${JWXT_RATE_LIMIT:-600}
       - JWXT_LOGIN_RATE_LIMIT=${JWXT_LOGIN_RATE_LIMIT:-60}
@@ -55,116 +112,19 @@ services:
       - JWXT_PDF_CONCURRENCY=${JWXT_PDF_CONCURRENCY:-1}
       - JWXT_PDF_MAX_INPUT_MB=${JWXT_PDF_MAX_INPUT_MB:-5}
       - JWXT_SCHEDULE_PDF_PREWARM=${JWXT_SCHEDULE_PDF_PREWARM:-1}
-      - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
+      # 内嵌调用来自本进程，不信任外部 XFF；外部客户端 IP 由编排层限流负责
       - JWXT_TRUST_PROXY=0
       - JWXT_LOG_FILE=
       - JWXT_DNS_FALLBACK_IPS=${JWXT_DNS_FALLBACK_IPS:-}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/health')"]
-      interval: 30s
-      timeout: 5s
-      start_period: 10s
-      retries: 3
-
-  # ===== 容器 2：格式化后端（编排 + 渲染 + 分析 + PDF）=====
-  # 默认同时挂 web 与 internal；显式加载 compose.direct-format.yml 才能直连
-  format-service:
-    build:
-      context: ./format-service
-      args:
-        BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}python:3.11-slim
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-format:${APP_IMAGE_TAG:-1.0.0}
-    restart: unless-stopped
-    deploy:
-      replicas: ${FORMAT_REPLICAS:-2}
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    read_only: true
-    mem_limit: ${FORMAT_MEM_LIMIT:-256m}
-    pids_limit: 64
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    volumes:
-      - format-query-logs:/var/log/edu-query
-      - format-notice-fallback:/var/lib/edu-query/notices
-      - /proc:/host/proc:ro
-      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
-    networks:
-      - web
-      - internal
-    expose:
-      - "8000"
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      - ENVIRONMENT=${ENVIRONMENT:-development}
-      - AUTO_ROTATE_TOKEN=${AUTO_ROTATE_TOKEN:-false}
-      - API_TOKEN=${API_TOKEN:-change-me}
-      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
-      - SERVICE_BASE_URL=${SERVICE_BASE_URL:-http://get-infomation-service:8766}
-      - SERVICE_API_TOKEN=${SERVICE_API_TOKEN:-}
-      - SERVICE_TIMEOUT=${SERVICE_TIMEOUT:-60}
-      - RESOURCE_MONITOR_INTERVAL_SECONDS=${RESOURCE_MONITOR_INTERVAL_SECONDS:-5}
-      - RESOURCE_MONITOR_HISTORY_SIZE=${RESOURCE_MONITOR_HISTORY_SIZE:-90}
-      - SERVICE_STATUS_CACHE_SECONDS=${SERVICE_STATUS_CACHE_SECONDS:-3}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-glm-4.5-flash}
-      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0}
-      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
-      - LLM_TIMEOUT=${LLM_TIMEOUT:-60}
-      - LLM_ENABLE_THINKING=${LLM_ENABLE_THINKING:-true}
-      - LLM_SYSTEM_PROMPT=${LLM_SYSTEM_PROMPT:-}
-      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-100}
-      - CONCURRENCY_WAIT_TIMEOUT=${CONCURRENCY_WAIT_TIMEOUT:-2}
-      - GLOBAL_CONCURRENCY=${GLOBAL_CONCURRENCY:-4}
-      - RATE_LIMIT=${RATE_LIMIT:-30}
-      # 默认唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
-      - TRUST_PROXY=${TRUST_PROXY:-true}
-      - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
-      - REDIS_URL=${REDIS_URL:-}
-      - INSTANCE_ID=${INSTANCE_ID:-}
-      - JOB_WORKERS=${JOB_WORKERS:-2}
-      - JOB_PENDING_LIMIT=${JOB_PENDING_LIMIT:-500}
-      - JOB_RESULT_TTL_SECONDS=${JOB_RESULT_TTL_SECONDS:-900}
-      - JOB_STALE_AFTER_SECONDS=${JOB_STALE_AFTER_SECONDS:-200}
-      - LLM_CONCURRENCY=${LLM_CONCURRENCY:-8}
-      - PDF_CONCURRENCY=${PDF_CONCURRENCY:-2}
-      - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
-      - FILE_LOG_ENABLED=${FILE_LOG_ENABLED:-true}
-      # {instance_id} 会替换成容器唯一实例标识；严禁多副本共享同一轮转 JSONL
-      - FILE_LOG_PATH=${FILE_LOG_PATH:-/var/log/edu-query/{instance_id}/queries.jsonl}
-      - HISTORY_SYNC_INTERVAL_SECONDS=${HISTORY_SYNC_INTERVAL_SECONDS:-60}
-      - FILE_LOG_MAX_BYTES=${FILE_LOG_MAX_BYTES:-52428800}
-      - FILE_LOG_BACKUP_COUNT=${FILE_LOG_BACKUP_COUNT:-7}
-      # 全站通知的共享降级文件；Redis 只是热备份，权威数据仍在文件
-      - NOTICE_FALLBACK_PATH=${NOTICE_FALLBACK_PATH:-/var/lib/edu-query/notices/notices.jsonl}
-      - NOTICE_ACTIVE_MAX=${NOTICE_ACTIVE_MAX:-10}
-      - NOTICE_HISTORY_MAX=${NOTICE_HISTORY_MAX:-500}
-      - NOTICE_COMPACT_AFTER=${NOTICE_COMPACT_AFTER:-2000}
-      - TZ=${TZ:-Asia/Shanghai}
-      - HOST_PROC_ROOT=/host/proc
-      - HOST_CGROUP_ROOT=/host/sys/fs/cgroup
-    depends_on:
-      get-infomation-service:
-        condition: service_healthy
-        required: false
-      redis:
-        condition: service_healthy
-        required: false
-    healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
       interval: 30s
       timeout: 5s
-      start_period: 10s
+      start_period: 15s
       retries: 3
 
-  # ===== 容器 3：前端（默认唯一对外入口）=====
-  # nginx 静态页 + 反代 /run、/service-status、/health* 到格式化后端
+  # ===== 容器 2：前端（默认唯一对外入口）=====
+  # nginx 静态页 + 反代 /run、/service-status、/health*、/notices* 到单体应用
   frontend:
     build:
       context: ./frontend
@@ -185,7 +145,7 @@ services:
     networks:
       - web
     environment:
-      # 与 format-service 共用同一 API_TOKEN，由 nginx 反代时注入 Authorization
+      # 与单体应用共用同一 API_TOKEN，由 nginx 反代时注入 Authorization
       - API_TOKEN=${API_TOKEN:-change-me}
       # 外层反代来源；nginx 仅信任该来源的 XFF 并恢复真实客户端 IP
       - TRUSTED_PROXY_CIDR=${TRUSTED_PROXY_CIDR:-172.16.0.0/12}
@@ -198,7 +158,7 @@ services:
     ports:
       - "${APP_PORT:-8000}:8080"
     depends_on:
-      format-service:
+      app:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
@@ -207,60 +167,16 @@ services:
       start_period: 5s
       retries: 3
 
-  # ===== 可选 Redis：由 .env 的 COMPOSE_PROFILES=redis 启用 =====
-  redis:
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}redis:7-alpine
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    read_only: true
-    user: "999:999"
-    command:
-      - redis-server
-      - --dir
-      - /data
-      - --appendonly
-      - "yes"
-      - --appendfsync
-      - everysec
-      - --maxmemory
-      - 112mb
-      - --maxmemory-policy
-      - volatile-lru
-    mem_limit: 128m
-    pids_limit: 48
-    volumes:
-      - redis-data:/data
-    networks:
-      - internal
-    expose:
-      - "6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    profiles:
-      - redis
-      - async
-
 networks:
-  # 对外边缘网络：nginx ↔ 格式化后端
+  # 边缘网络：nginx ↔ 单体应用（唯一网络；不再有内网分层）
   web: {}
-  # 内部网络：格式化后端 ↔ 查询代理（宿主与前端均不可达）
-  internal: {}
 
 volumes:
   # 查询日志文件通道；业务编排仍无状态，日志随具名持久卷跨容器/守护进程重启保留
-  format-query-logs:
+  app-query-logs:
     name: edu-query-app_format-query-logs-persistent
     driver: local
   # 全站通知运营配置的共享降级文件；属用户确认的无状态规则例外
-  format-notice-fallback:
+  app-notice-fallback:
     name: edu-query-app_format-notice-fallback
-    driver: local
-  redis-data:
-    name: edu-query-app_redis-data-persistent
     driver: local
