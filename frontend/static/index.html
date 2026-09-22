@@ -253,6 +253,7 @@
         <section class="calendar-section hidden" id="calendarGuideSection">
           <h3 class="calendar-section-title">添加到日历</h3>
           <p class="calendar-hint" id="calendarGuideDevice" aria-live="polite"></p>
+          <p class="calendar-guide-warning hidden" id="calendarGuideReach" role="status"></p>
           <p class="calendar-guide-warning hidden" id="calendarGuideWebview" role="status"></p>
           <div class="calendar-actions" id="calendarGuidePrimary"></div>
           <ol class="calendar-guide-steps" id="calendarGuideSteps"></ol>
@@ -2085,6 +2086,7 @@
       block: document.getElementById("calendarBlock"),
       guideSection: document.getElementById("calendarGuideSection"),
       guideDevice: document.getElementById("calendarGuideDevice"),
+      guideReach: document.getElementById("calendarGuideReach"),
       guideWebview: document.getElementById("calendarGuideWebview"),
       guidePrimary: document.getElementById("calendarGuidePrimary"),
       guideSteps: document.getElementById("calendarGuideSteps"),
@@ -2302,7 +2304,7 @@
     }
 
     // ===== 订阅指引：识别当前设备与内置浏览器，给出按平台的一键导入 =====
-    var calendarGuide = { env: null, qrFor: "" };
+    var calendarGuide = { env: null, reach: null, qrFor: "" };
 
     function calendarDetectGuide() {
       var ua = navigator.userAgent || "";
@@ -2340,6 +2342,37 @@
       }
       if (env.webview) env.browserLabel = env.webview + "内置浏览器";
       return env;
+    }
+
+    // 订阅地址可达性：日历客户端是"自己去取"地址，因此 loopback 只有本机可用，
+    // 内网地址只有同一局域网可用 —— 必须在使用前提示，避免扫码/云端订阅静默失败。
+    function calendarGuideReachability(feedUrl) {
+      var host = "";
+      try {
+        host = String(new URL(feedUrl).hostname || "").toLowerCase();
+      } catch (e) {
+        return { kind: "unknown", note: "" };
+      }
+      host = host.replace(/^\[|\]$/g, "");      // IPv6 字面量在 URL 里带方括号
+      var parts = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+      var a = parts ? Number(parts[1]) : -1;
+      var b = parts ? Number(parts[2]) : -1;
+      var isLoopback = host === "localhost" || host === "::1" || host === "0.0.0.0" || a === 127;
+      if (isLoopback) {
+        return { kind: "loopback",
+          note: "当前订阅地址是本机地址（" + host + "）：只有这台电脑能取到课表，手机扫码、" +
+                "其他设备或云端日历（Google/Outlook）都会失败。真机验收请把 PUBLIC_BASE_URL 改为" +
+                "本机局域网地址（如 http://192.168.x.x:8000）或 HTTPS 域名后重启编排。" };
+      }
+      var isPrivate = (a === 10) || (a === 192 && b === 168) ||
+        (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254) ||
+        /\.local$/.test(host) || /^f[cd][0-9a-f]{2}:/.test(host);
+      if (isPrivate) {
+        return { kind: "private",
+          note: "当前订阅地址是内网地址（" + host + "）：手机需连接同一 Wi-Fi 才能取到课表，" +
+                "离开该网络或交给 Google/Outlook 云端抓取会失败；生产请改用 HTTPS 域名。" };
+      }
+      return { kind: "public", note: "" };
     }
 
     // 各平台可用方式：本地方式（webcal / 复制 / 下载 / 分享 / 扫码）不经过第三方服务器；
@@ -2503,8 +2536,11 @@
         var data = await calendarRequest("/api/v1/calendars/qr", payload);
         calendarDrawQr(calendarEls.qrCanvas, data);
         calendarGuide.qrFor = calendarState.feedUrl;
+        var reach = calendarGuide.reach || calendarGuideReachability(calendarState.feedUrl);
         calendarEls.qrStatus.textContent =
-          "用手机相机扫码即可订阅（" + (data.scheme || "webcal") + "://）；二维码包含订阅密钥，请勿截图转发。";
+          "用手机相机扫码即可订阅（" + (data.scheme || "webcal") + "://）；二维码包含订阅密钥，请勿截图转发。" +
+          (reach.kind === "loopback" ? "当前地址仅本机可达，手机扫码会失败（见上方提示）。" :
+           (reach.kind === "private" ? "手机需连接同一 Wi-Fi。" : ""));
       } catch (e) {
         calendarQrReset();
         calendarEls.qrBox.classList.remove("hidden");
@@ -2559,11 +2595,16 @@
         calendarEls.guideSteps.textContent = "";
         calendarEls.guideMore.textContent = "";
         calendarEls.guideWebview.classList.add("hidden");
+        calendarEls.guideReach.classList.add("hidden");
         return;
       }
       var env = calendarDetectGuide();
       calendarGuide.env = env;
       calendarEls.guideDevice.textContent = "已识别：" + env.platformLabel + " · " + env.browserLabel;
+      var reach = calendarGuideReachability(calendarState.feedUrl);
+      calendarGuide.reach = reach;
+      calendarEls.guideReach.textContent = reach.note;
+      calendarEls.guideReach.classList.toggle("hidden", !reach.note);
       var plan = calendarGuideActions(env, calendarState.feedUrl);
       calendarEls.guideWebview.textContent = env.webview
         ? ("当前在" + env.webview + "内置浏览器中打开，可能无法唤起日历 App：点右上角「…」→「在浏览器中打开」，或直接用手机相机扫码。")
