@@ -2128,13 +2128,14 @@
 
   /* ---------- 服务状态条 ---------- */
   .service-status {
-    @apply mt-8 bg-transparent p-5 text-sm;
+    /* 上间距 32px→12px、上下内边距 20px→6px，避免状态条上方出现大片空白 */
+    @apply mt-3 bg-transparent px-5 py-1.5 text-sm;
     max-width: 680px;
     margin-left: auto;
     margin-right: auto;
   }
   .status-title {
-    @apply mb-3 text-center text-xs font-semibold tracking-wide text-muted;
+    @apply mb-2 text-center text-xs font-semibold tracking-wide text-muted;
   }
   .status-bar {
     @apply flex h-2.5 gap-0.5 overflow-hidden rounded-full;
@@ -2239,7 +2240,7 @@ body {
   flex-direction: column;
   min-height: 100dvh;
 }
-/* 页脚贴紧视口最下（site-footer mt-auto），页底留白保持紧凑 */
+/* 页底留白：固定页脚由 body:has(.site-footer) 预留 84px，这里保留一点紧凑余量 */
 body > .page-shell {
   padding-bottom: 16px;
 }
@@ -2249,5 +2250,7 @@ body > .page-shell {
   flex: 1 0 auto;
 }
 .page-shell .wrap {
-  flex: 1 0 auto;
+  /* 页脚已固定，无需再用 flex-grow 把内容撑到视口底部；
+     否则内容较短时会把「服务状态」推到最底部，形成大片空白 */
+  flex: 0 0 auto;
 }
