@@ -52,7 +52,7 @@ def test_admin_calendar_tab_and_actions():
     script = _read("frontend/static/admin.js")
     assert 'id="tabCalendars"' in page and 'id="calendarsPanel"' in page
     assert 'id="calendarsBody"' in page and 'id="calendarQuery"' in page
-    assert 'admin.js?v=22' in page
+    assert 'admin.js?v=23' in page
     assert 'request("calendars' in script
     for action in ("/refresh", "/pause", "/resume", "/rotate"):
         assert action in script, action
@@ -270,3 +270,19 @@ def test_entry_hides_when_calendar_feature_is_disabled():
     assert "calendarLoadConfig();" in init                  # 页面初始化即探测，不必等用户点击
     assert "function calendarFilterSemesterOptions()" in page
     assert "calendarConfig.semesters" in page               # 学期按后端配置过滤
+
+
+def test_admin_calibration_tab_and_endpoints():
+    """后台必须提供校历校准页：节次时间调整 + 第一周定义，并持久化到后台。"""
+    page = _read("frontend/static/admin.html")
+    script = _read("frontend/static/admin.js")
+    assert 'id="tabCalibration"' in page and 'id="calibrationPanel"' in page
+    assert 'id="periodsBody"' in page and 'id="termsBody"' in page
+    assert 'id="periodsForm"' in page and 'id="termsForm"' in page
+    assert 'id="calibrationReset"' in page
+    assert 'request("calendar-config")' in script
+    assert 'request("calendar-config/periods", { method: "PUT"' in script
+    assert 'request("calendar-config/terms", { method: "PUT"' in script
+    assert 'request("calendar-config/reset", { method: "POST"' in script
+    assert "function renderCalibration(" in script
+    assert "第一周周一" in page and "正式上课首日" in page

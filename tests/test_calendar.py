@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from app.calendar.config import CalendarConfigError, load_config
+from app.calendar.config import CalendarConfigError, load_config, load_config_dict
 from app.calendar.crypto import CalendarCrypto, CalendarCryptoError
 from app.calendar.ics import build_events, render, weekly_runs
 from app.calendar.qr import QrPayloadError, qr_matrix, webcal_url
@@ -17,7 +17,8 @@ from app.calendar.rules import (ScheduleDataError, contiguous_runs,
                                 occurrence_dates, parse_period_numbers,
                                 parse_weeks, resolve_periods)
 from app.calendar.service import (CalendarAuthError, CalendarError, CalendarService,
-                                  CalendarSettings, CalendarUpstreamError, SchoolPort)
+                                  CalendarSettings, CalendarUpstreamError, SchoolPort,
+                                  build_service)
 from app.calendar.store import CalendarStore
 
 CONFIG_PATH = "config/calendar.json"
@@ -448,3 +449,69 @@ def test_if_none_match_uses_weak_comparison():
     assert _etag_matches('"other", W/"abc123"', etag)
     assert not _etag_matches("", etag)
     assert not _etag_matches('W/"another"', etag)
+
+
+# ---------------- 后台校准：节次时间 + 第一周定义 ----------------
+def test_config_to_dict_roundtrip(config):
+    again = load_config_dict(config.to_dict())
+    assert again == config
+    assert again.periods[11] == ("20:50", "21:35")
+    assert again.term("2026-2027-1").monday == date(2026, 8, 31)
+
+
+def test_admin_calibration_periods_terms_and_reset(store, crypto, config):
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    assert service.admin_config()["source"] == "file"
+
+    periods = config.to_dict()["periods"]
+    periods["11"] = ["20:50", "21:40"]
+    result = service.admin_update_periods(periods, {"11": "official"})
+    assert result["source"] == "database"
+    assert result["periods"]["11"] == ["20:50", "21:40"]
+    assert result["inferred_periods"] == []
+    assert service.config.periods[11] == ("20:50", "21:40")
+
+    terms = config.to_dict()["terms"]
+    terms["2026-2027-2"] = {"monday": "2027-02-22", "teaching_start": "2027-03-01",
+                            "weeks": 19, "exdates": ["2027-05-01"]}
+    result = service.admin_update_terms(terms)
+    assert result["source"] == "database"
+    assert result["default_semester"] == "2026-2027-2"
+    assert service.config.term("2026-2027-2").weeks == 19
+
+    reset = service.admin_reset_config()
+    assert reset["source"] == "file"
+    assert "2026-2027-2" not in service.config.terms
+    assert service.config.periods[11] == ("20:50", "21:35")
+    assert service.config.inferred_periods() == (11,)
+
+
+def test_admin_calibration_rejects_invalid_config(store, crypto, config):
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+
+    with pytest.raises(CalendarError) as exc:
+        service.admin_update_periods({"1": ["09:00", "08:00"]})
+    assert exc.value.status_code == 422 and exc.value.code == "invalid_calendar_config"
+
+    with pytest.raises(CalendarError) as exc:
+        service.admin_update_terms({"2026-2027-1": {"monday": "2026-08-30", "weeks": 20}})
+    assert exc.value.status_code == 422 and exc.value.code == "invalid_calendar_config"
+
+
+def test_build_service_prefers_database_calibration(tmp_path):
+    settings = CalendarSettings(enabled=True, master_key=KEY, db_path=str(tmp_path / "cal.db"),
+                                config_path=CONFIG_PATH, public_base_url="https://example.com")
+    first = build_service(settings, object())
+    assert first.admin_config()["source"] == "file"
+
+    periods = first.config.to_dict()["periods"]
+    periods["11"] = ["20:50", "21:40"]
+    first.admin_update_periods(periods, {"11": "official"})
+
+    # 模拟重启：同一 SQLite 校准快照优先于文件基线
+    second = build_service(settings, object())
+    assert second.admin_config()["source"] == "database"
+    assert second.config.periods[11] == ("20:50", "21:40")
+    assert second.config.inferred_periods() == ()

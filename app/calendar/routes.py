@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -31,6 +31,15 @@ class AuthBody(BaseModel):
     password: str = Field(..., min_length=1, max_length=256)
     semester: str = Field(..., min_length=4, max_length=16)
     verified_token: Optional[str] = Field(default=None, max_length=256)
+
+
+class PeriodsBody(BaseModel):
+    periods: Dict[str, List[str]]
+    period_source: Optional[Dict[str, str]] = None
+
+
+class TermsBody(BaseModel):
+    terms: Dict[str, Any]
 
 
 def _etag_matches(header: str, etag: str) -> bool:
@@ -174,6 +183,23 @@ def build_router(service: CalendarService, require_auth: Callable[..., Any],
     @router.delete("/admin/api/calendars/{calendar_id}", dependencies=[Depends(require_admin)])
     async def admin_delete(calendar_id: str) -> Response:
         return await _guard_wrap(service.admin_delete(calendar_id))
+
+    # ---------------- 后台配置校准（节次时间 + 第一周定义） ----------------
+    @router.get("/admin/api/calendar-config", dependencies=[Depends(require_admin)])
+    async def admin_calendar_config() -> dict:
+        return service.admin_config()
+
+    @router.put("/admin/api/calendar-config/periods", dependencies=[Depends(require_admin)])
+    async def admin_calendar_periods(body: PeriodsBody) -> Response:
+        return await _guard_wrap(service.admin_update_periods(body.periods, body.period_source))
+
+    @router.put("/admin/api/calendar-config/terms", dependencies=[Depends(require_admin)])
+    async def admin_calendar_terms(body: TermsBody) -> Response:
+        return await _guard_wrap(service.admin_update_terms(body.terms))
+
+    @router.post("/admin/api/calendar-config/reset", dependencies=[Depends(require_admin)])
+    async def admin_calendar_config_reset() -> Response:
+        return await _guard_wrap(service.admin_reset_config())
 
     async def _guard_wrap(value: Any) -> Response:
         try:

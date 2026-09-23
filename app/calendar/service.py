@@ -10,13 +10,15 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from .config import CalendarConfig, CalendarConfigError, Term, load_config
+from .config import (CalendarConfig, CalendarConfigError, Term,
+                     load_config_dict, read_config_payload)
 from .crypto import CalendarCrypto, CalendarCryptoError
 from .ics import build_events, render
 from .qr import QrPayloadError, qr_matrix, webcal_url
@@ -99,11 +101,15 @@ class SchoolPort:
 class CalendarService:
     def __init__(self, settings: CalendarSettings, store: CalendarStore,
                  crypto: CalendarCrypto, config: CalendarConfig,
-                 school: SchoolPort) -> None:
+                 school: SchoolPort, *,
+                 config_payload: Optional[Dict[str, Any]] = None,
+                 config_source: str = "file") -> None:
         self.settings = settings
         self.store = store
         self.crypto = crypto
         self.config = config
+        self._config_payload = dict(config_payload or config.to_dict())
+        self._config_source = config_source if config_source in ("file", "database") else "file"
         self.school = school
         self._locks: Dict[str, asyncio.Lock] = {}
         self._attempt_lock = asyncio.Lock()
@@ -457,6 +463,53 @@ class CalendarService:
             "min_refresh_interval": int(self.settings.min_refresh),
         }
 
+    # ---------------- 后台配置校准（节次时间 + 第一周定义） ----------------
+    def admin_config(self) -> Dict[str, Any]:
+        """返回当前生效配置（文件基线或后台校准快照）与派生信息。"""
+        payload = copy.deepcopy(self._config_payload)
+        payload["source"] = self._config_source
+        payload["default_semester"] = self.default_semester()
+        payload["inferred_periods"] = list(self.config.inferred_periods())
+        return payload
+
+    def _apply_payload(self, payload: Dict[str, Any], source: str) -> None:
+        self.config = load_config_dict(payload)
+        self._config_payload = copy.deepcopy(payload)
+        self._config_source = source
+
+    def _persist_config(self, payload: Dict[str, Any], action: str) -> Dict[str, Any]:
+        try:
+            load_config_dict(payload)
+        except CalendarConfigError as exc:
+            raise CalendarError(422, str(exc), "invalid_calendar_config") from exc
+        self.store.set_config_json(payload)
+        self._apply_payload(payload, "database")
+        self.store.audit(None, "calendar_config_%s" % action, "admin", "ok")
+        return self.admin_config()
+
+    def admin_update_periods(self, periods: Dict[str, Any],
+                             period_source: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """校准节次起止时间（可同时校准每节来源 official/inferred）。"""
+        payload = copy.deepcopy(self._config_payload)
+        payload["periods"] = periods
+        if period_source is not None:
+            payload["period_source"] = period_source
+        return self._persist_config(payload, "periods")
+
+    def admin_update_terms(self, terms: Dict[str, Any]) -> Dict[str, Any]:
+        """校准学期基准（第一周周一、正式上课首日、教学周数、节假日例外）。"""
+        payload = copy.deepcopy(self._config_payload)
+        payload["terms"] = terms
+        return self._persist_config(payload, "terms")
+
+    def admin_reset_config(self) -> Dict[str, Any]:
+        """删除后台校准快照，恢复仓库文件基线。"""
+        self.store.clear_config_json()
+        payload = read_config_payload(self.settings.config_path)
+        self._apply_payload(payload, "file")
+        self.store.audit(None, "calendar_config_reset", "admin", "ok")
+        return self.admin_config()
+
     def admin_view(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """后台视图：显示解密后的学号，但绝不返回密码或完整订阅 URL。"""
         from .store import _admin_state
@@ -545,11 +598,21 @@ class CalendarService:
 
 
 def build_service(settings: CalendarSettings, client: Any) -> Optional[CalendarService]:
-    """按配置构建服务；未启用或配置非法时返回 None（调用方决定是否阻止启动）。"""
+    """按配置构建服务；未启用或配置非法时返回 None（调用方决定是否阻止启动）。
+
+    配置优先级：后台校准快照（SQLite calendar_config）> 仓库文件基线 config/calendar.json。
+    首次启动没有快照时回退文件基线；后台保存校准后快照成为运行时权威配置。
+    """
     if not settings.enabled:
         return None
-    config = load_config(settings.config_path)
     crypto = CalendarCrypto(settings.master_key)
     store = CalendarStore(settings.db_path)
-    return CalendarService(settings, store, crypto, config, SchoolPort(client))
+    stored = store.get_config_json()
+    if stored is not None:
+        payload, source = stored, "database"
+    else:
+        payload, source = read_config_payload(settings.config_path), "file"
+    config = load_config_dict(payload)
+    return CalendarService(settings, store, crypto, config, SchoolPort(client),
+                           config_payload=payload, config_source=source)
 
