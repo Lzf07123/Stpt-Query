@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS calendar_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS calendar_config (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    payload    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -287,6 +292,32 @@ class CalendarStore:
     def audit(self, calendar_id: Optional[str], action: str, actor: str, result: str) -> None:
         self._exec("INSERT INTO calendar_audit (at, calendar_id, action, actor, result)"
                    " VALUES (?,?,?,?,?)", (now_iso(), calendar_id, action, actor, result[:120]))
+
+    # ---------- 配置校准快照（节次时间表 + 学期基准） ----------
+    def get_config_json(self) -> Optional[Dict[str, Any]]:
+        """返回后台校准后的配置快照；未校准则返回 None（回退文件基线）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM calendar_config WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        try:
+            data = json.loads(row["payload"])
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def set_config_json(self, payload: Dict[str, Any]) -> None:
+        """持久化校准后的配置快照（校验通过后由 service 调用）。"""
+        self._exec(
+            "INSERT INTO calendar_config(id, payload, updated_at) VALUES(1, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET payload = excluded.payload,"
+            " updated_at = excluded.updated_at",
+            (json.dumps(payload, ensure_ascii=False, sort_keys=True), now_iso()))
+
+    def clear_config_json(self) -> None:
+        """删除校准快照，恢复文件基线。"""
+        self._exec("DELETE FROM calendar_config WHERE id = 1")
 
     def list_admin(self, *, owner_hash: Optional[str] = None, semester: Optional[str] = None,
                    state: Optional[str] = None, page: int = 1, size: int = 20) -> Dict[str, Any]:

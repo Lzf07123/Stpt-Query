@@ -145,6 +145,7 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | 页脚「📅 网络日历订阅」 | 复用页面上的学号与密码（仅内存，不写 localStorage）查询状态、开启、刷新、轮换、关闭 |
 | 课表结果区 | 查询成功即显示状态；密码刚被学校接受时为零额外登录的权威判定 |
 | 后台「网络日历」标签页 | 列出已开启的学号、状态、刷新间隔与失败次数；支持按学号查询、立即刷新、暂停/恢复、轮换地址、彻底删除（**不展示完整订阅地址**） |
+| 后台「校历校准」标签页 | 校准各节次起止时间与来源（官方确认/推断）、定义每学期第一周（周一、正式上课首日、教学周数、节假日）；保存后持久化到后台数据库并立即生效，可一键恢复仓库默认值 |
 
 ### 添加到日历（设备识别 + 一键导入）
 
@@ -199,11 +200,15 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 
 ### 维护节次与学期
 
-`config/calendar.json` 是节次时间表与学期基准的唯一事实来源（非机密、随仓库版本管理）：
+节次时间表与学期基准采用「文件基线 + 后台校准快照」两层：
 
-- `periods`：每节课的起止时间（第 11 节 20:50–21:35 为推算值，已标注 `inferred`）；
-- `block_codes`：学校时段编码（`1_2`/`3_4`/`5_6`/`7_8`/`9_10`/`11_`）到节次的映射；
-- `terms`：每学期第一周周一、正式上课首日、教学周上限与节假日 `exdates`；
+- **文件基线** `config/calendar.json`（非机密、随仓库版本管理，随镜像发布）提供每学期默认值；
+  - `periods`：每节课的起止时间（第 11 节 20:50–21:35 为推算值，已标注 `inferred`）；
+  - `block_codes`：学校时段编码（`1_2`/`3_4`/`5_6`/`7_8`/`9_10`/`11_`）到节次的映射；
+  - `terms`：每学期第一周周一、正式上课首日、教学周上限与节假日 `exdates`；
+- **后台「校历校准」**：管理员可在 `/admin` 直接校准各节次起止时间与来源、定义每学期第一周，
+  校验通过后写入 SQLite（`calendar_config` 单行快照），**重启后优先于文件基线生效**；
+  「恢复仓库默认值」会删除快照并回退到文件基线；
 - 事件时间按**课程自身节次集合**计算（`第3节` 不会按 3-4 节拉长），正式上课首日之前的实例自动丢弃。
 
 ### 接口
@@ -219,6 +224,10 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | POST | `/api/v1/calendars/qr` | 订阅二维码矩阵（本地生成 `webcal://` 二维码，仅返回模块矩阵，需 L1/L2 证明） |
 | GET | `/cal/{token}.ics` | 日历客户端订阅源（支持 ETag/304，无网关鉴权） |
 | GET/DELETE | `/admin/api/calendars*` | 后台管理（需 `ADMIN_TOKEN`） |
+| GET | `/admin/api/calendar-config` | 当前生效的节次/学期配置（文件基线或后台校准快照） |
+| PUT | `/admin/api/calendar-config/periods` | 校准节次起止时间与来源（需 `ADMIN_TOKEN`） |
+| PUT | `/admin/api/calendar-config/terms` | 校准学期基准/第一周定义（需 `ADMIN_TOKEN`） |
+| POST | `/admin/api/calendar-config/reset` | 恢复仓库文件基线（需 `ADMIN_TOKEN`） |
 
 ## 查询日志与可观测性
 

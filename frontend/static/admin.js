@@ -61,14 +61,22 @@
     hostNetOutMeta: $("hostNetOutMeta"), storageFile: $("storageFile"),
     storageGrowth: $("storageGrowth"), storageBackups: $("storageBackups"),
     storageFree: $("storageFree"), storageTotal: $("storageTotal"), storageState: $("storageState"),
-    storageSource: $("storageSource")
+    storageSource: $("storageSource"),
+    tabCalibration: $("tabCalibration"), calibrationPanel: $("calibrationPanel"),
+    periodsForm: $("periodsForm"), periodsBody: $("periodsBody"),
+    periodAdd: $("periodAdd"), periodsSave: $("periodsSave"), periodsMessage: $("periodsMessage"),
+    termsForm: $("termsForm"), termsBody: $("termsBody"),
+    termAdd: $("termAdd"), termsSave: $("termsSave"), termsMessage: $("termsMessage"),
+    calibrationSource: $("calibrationSource"), calibrationReset: $("calibrationReset"),
+    calibrationReload: $("calibrationReload"), calibrationMessage: $("calibrationMessage"),
   };
 
   var state = {
     logs: [], offset: 0, autoLogsTimer: null, autoMetricsTimer: null,
     detail: null, detailScope: "", relatedLogs: [], relatedRequest: 0,
     metricHistory: [], metricsLoading: false,
-    noticeOffset: 0, noticeLimit: 20, noticeEditingId: ""
+    noticeOffset: 0, noticeLimit: 20, noticeEditingId: "",
+    calibration: null
   };
 
   function getToken() {
@@ -571,22 +579,226 @@
     var isMetrics = tab === "metrics";
     var isNotices = tab === "notices";
     var isCalendars = tab === "calendars";
-    var isLogs = !isMetrics && !isNotices && !isCalendars;
+    var isCalibration = tab === "calibration";
+    var isLogs = !isMetrics && !isNotices && !isCalendars && !isCalibration;
     elements.tabMetrics.classList.toggle("active", isMetrics);
     elements.tabLogs.classList.toggle("active", isLogs);
     elements.tabNotices.classList.toggle("active", isNotices);
     elements.tabCalendars.classList.toggle("active", isCalendars);
+    elements.tabCalibration.classList.toggle("active", isCalibration);
     elements.tabMetrics.setAttribute("aria-current", isMetrics ? "page" : "false");
     elements.tabLogs.setAttribute("aria-current", isLogs ? "page" : "false");
     elements.tabNotices.setAttribute("aria-current", isNotices ? "page" : "false");
     elements.tabCalendars.setAttribute("aria-current", isCalendars ? "page" : "false");
+    elements.tabCalibration.setAttribute("aria-current", isCalibration ? "page" : "false");
     elements.metricsPanel.hidden = !isMetrics;
     elements.noticesPanel.hidden = !isNotices;
     elements.calendarsPanel.hidden = !isCalendars;
+    elements.calibrationPanel.hidden = !isCalibration;
     elements.logsPanel.hidden = !isLogs;
     if (isMetrics && reload !== false) loadMetrics().catch(function () {});
     if (isNotices) loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
     if (isCalendars) loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
+    if (isCalibration) loadCalibration().catch(function (error) { showCalibrationMessage(error.message, "error"); });
+  }
+
+  // ---------------- 校历校准（节次时间 + 第一周定义） ----------------
+  function calibrationCell(text) {
+    var td = document.createElement("td");
+    td.textContent = text || "";
+    return td;
+  }
+
+  function calibrationInput(type, value, attrs) {
+    var td = document.createElement("td");
+    var input = document.createElement("input");
+    input.className = "input";
+    input.type = type || "text";
+    input.value = value == null ? "" : String(value);
+    Object.keys(attrs || {}).forEach(function (key) { input.setAttribute(key, attrs[key]); });
+    td.appendChild(input);
+    return td;
+  }
+
+  function calibrationSourceSelect(number, current) {
+    var select = document.createElement("select");
+    select.className = "select";
+    select.dataset.periodSource = String(number);
+    [["official", "官方确认"], ["inferred", "推断"]].forEach(function (pair) {
+      var option = document.createElement("option");
+      option.value = pair[0];
+      option.textContent = pair[1];
+      if ((current || "official") === pair[0]) option.selected = true;
+      select.appendChild(option);
+    });
+    var td = document.createElement("td");
+    td.appendChild(select);
+    return td;
+  }
+
+  function periodRow(number, pair, source) {
+    var row = document.createElement("tr");
+    row.appendChild(calibrationCell("第 " + number + " 节"));
+    row.appendChild(calibrationInput("time", pair[0], { "data-period-start": number }));
+    row.appendChild(calibrationInput("time", pair[1], { "data-period-end": number }));
+    row.appendChild(calibrationSourceSelect(number, source));
+    var actions = document.createElement("td");
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn btn-ghost";
+    remove.textContent = "删除";
+    remove.dataset.periodRemove = number;
+    actions.appendChild(remove);
+    row.appendChild(actions);
+    return row;
+  }
+
+  function termRow(semester, term) {
+    var row = document.createElement("tr");
+    row.appendChild(calibrationInput("text", semester, { "data-term-semester": "" }));
+    row.appendChild(calibrationInput("date", term.monday || "", { "data-term-monday": "" }));
+    row.appendChild(calibrationInput("date", term.teaching_start || "", { "data-term-teaching": "" }));
+    row.appendChild(calibrationInput("number", term.weeks == null ? "20" : term.weeks,
+      { "data-term-weeks": "", "min": "1", "max": "30" }));
+    row.appendChild(calibrationInput("text", (term.exdates || []).join(","),
+      { "data-term-exdates": "" }));
+    var actions = document.createElement("td");
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn btn-ghost";
+    remove.textContent = "删除";
+    remove.dataset.termRemove = semester;
+    actions.appendChild(remove);
+    row.appendChild(actions);
+    return row;
+  }
+
+  function renderCalibration(payload) {
+    var periods = payload.periods || {};
+    var sources = payload.period_source || {};
+    elements.periodsBody.innerHTML = "";
+    Object.keys(periods).sort(function (a, b) { return Number(a) - Number(b); }).forEach(function (number) {
+      var pair = periods[number] || ["", ""];
+      elements.periodsBody.appendChild(periodRow(number, pair, sources[number] || "official"));
+    });
+    var terms = payload.terms || {};
+    elements.termsBody.innerHTML = "";
+    Object.keys(terms).sort().forEach(function (semester) {
+      elements.termsBody.appendChild(termRow(semester, terms[semester] || {}));
+    });
+    elements.calibrationSource.textContent = payload.source === "database"
+      ? "后台校准快照（已持久化，优先于仓库文件）"
+      : "仓库文件默认值（未校准）";
+  }
+
+  async function loadCalibration() {
+    var payload = await request("calendar-config");
+    state.calibration = payload;
+    renderCalibration(payload);
+  }
+
+  function collectPeriods() {
+    var periods = {};
+    var sources = {};
+    elements.periodsBody.querySelectorAll("tr").forEach(function (row) {
+      var start = row.querySelector("[data-period-start]");
+      var end = row.querySelector("[data-period-end]");
+      var source = row.querySelector("[data-period-source]");
+      if (!start || !end) return;
+      var key = start.getAttribute("data-period-start");
+      periods[key] = [start.value.trim(), end.value.trim()];
+      if (source) sources[key] = source.value;
+    });
+    return { periods: periods, period_source: sources };
+  }
+
+  function collectTerms() {
+    var terms = {};
+    elements.termsBody.querySelectorAll("tr").forEach(function (row) {
+      var semester = row.querySelector("[data-term-semester]");
+      if (!semester || !semester.value.trim()) return;
+      var monday = row.querySelector("[data-term-monday]");
+      var teaching = row.querySelector("[data-term-teaching]");
+      var weeks = row.querySelector("[data-term-weeks]");
+      var exdates = row.querySelector("[data-term-exdates]");
+      var item = { monday: monday ? monday.value.trim() : "" };
+      if (teaching && teaching.value.trim()) item.teaching_start = teaching.value.trim();
+      item.weeks = Number(weeks && weeks.value ? weeks.value : 20);
+      var ex = (exdates && exdates.value ? exdates.value : "")
+        .split(/[,，;；]/).map(function (part) { return part.trim(); }).filter(Boolean);
+      if (ex.length) item.exdates = ex;
+      terms[semester.value.trim()] = item;
+    });
+    return { terms: terms };
+  }
+
+  async function savePeriods(event) {
+    event.preventDefault();
+    var collected = collectPeriods();
+    if (!Object.keys(collected.periods).length) {
+      showPeriodsMessage("至少保留一个节次", "error");
+      return;
+    }
+    var payload = await request("calendar-config/periods", { method: "PUT", body: collected });
+    state.calibration = payload;
+    renderCalibration(payload);
+    showPeriodsMessage("节次时间已校准并持久化");
+    showCalibrationMessage("");
+  }
+
+  async function saveTerms(event) {
+    event.preventDefault();
+    var collected = collectTerms();
+    var payload = await request("calendar-config/terms", { method: "PUT", body: collected });
+    state.calibration = payload;
+    renderCalibration(payload);
+    showTermsMessage("学期基准已校准并持久化");
+    showCalibrationMessage("");
+  }
+
+  function addPeriodRow() {
+    var periods = collectPeriods().periods;
+    var next = 1;
+    while (periods[String(next)]) next++;
+    if (next > 30) { showPeriodsMessage("节次最多 30 节", "error"); return; }
+    elements.periodsBody.appendChild(periodRow(next, ["08:00", "08:45"], "official"));
+    showPeriodsMessage("");
+  }
+
+  function addTermRow() {
+    elements.termsBody.appendChild(termRow("", { monday: "", weeks: 20, exdates: [] }));
+    showTermsMessage("");
+  }
+
+  function showPeriodsMessage(text, kind) {
+    elements.periodsMessage.textContent = text || "";
+    elements.periodsMessage.classList.toggle("hidden", !text);
+    elements.periodsMessage.classList.toggle("notice-error", kind === "error");
+    elements.periodsMessage.classList.toggle("notice-info", kind !== "error");
+  }
+
+  function showTermsMessage(text, kind) {
+    elements.termsMessage.textContent = text || "";
+    elements.termsMessage.classList.toggle("hidden", !text);
+    elements.termsMessage.classList.toggle("notice-error", kind === "error");
+    elements.termsMessage.classList.toggle("notice-info", kind !== "error");
+  }
+
+  function showCalibrationMessage(text, kind) {
+    elements.calibrationMessage.textContent = text || "";
+    elements.calibrationMessage.classList.toggle("hidden", !text);
+    elements.calibrationMessage.classList.toggle("notice-error", kind === "error");
+    elements.calibrationMessage.classList.toggle("notice-info", kind !== "error");
+  }
+
+  async function resetCalibration() {
+    if (!window.confirm("将删除后台校准快照，恢复仓库文件默认值。确认？")) return;
+    var payload = await request("calendar-config/reset", { method: "POST" });
+    state.calibration = payload;
+    renderCalibration(payload);
+    showCalibrationMessage("已恢复仓库默认值");
+    showPeriodsMessage("");
+    showTermsMessage("");
   }
 
   function showCalendarMessage(text, kind) {
@@ -1193,7 +1405,48 @@
         }).finally(function () { button.disabled = false; });
       });
     }
-    [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"], ["tabCalendars", "calendars"]].forEach(function (pair) {
+
+    if (elements.periodsForm) {
+      elements.periodsForm.addEventListener("submit", function (event) {
+        savePeriods(event).catch(function (error) { showPeriodsMessage(error.message, "error"); });
+      });
+    }
+    if (elements.termsForm) {
+      elements.termsForm.addEventListener("submit", function (event) {
+        saveTerms(event).catch(function (error) { showTermsMessage(error.message, "error"); });
+      });
+    }
+    if (elements.periodAdd) elements.periodAdd.addEventListener("click", addPeriodRow);
+    if (elements.termAdd) elements.termAdd.addEventListener("click", addTermRow);
+    if (elements.periodsBody) {
+      elements.periodsBody.addEventListener("click", function (event) {
+        var button = event.target.closest("[data-period-remove]");
+        if (!button) return;
+        if (elements.periodsBody.querySelectorAll("tr").length <= 1) {
+          showPeriodsMessage("至少保留一个节次", "error");
+          return;
+        }
+        button.closest("tr").remove();
+      });
+    }
+    if (elements.termsBody) {
+      elements.termsBody.addEventListener("click", function (event) {
+        var button = event.target.closest("[data-term-remove]");
+        if (!button) return;
+        button.closest("tr").remove();
+      });
+    }
+    if (elements.calibrationReset) {
+      elements.calibrationReset.addEventListener("click", function () {
+        resetCalibration().catch(function (error) { showCalibrationMessage(error.message, "error"); });
+      });
+    }
+    if (elements.calibrationReload) {
+      elements.calibrationReload.addEventListener("click", function () {
+        loadCalibration().catch(function (error) { showCalibrationMessage(error.message, "error"); });
+      });
+    }
+    [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"], ["tabCalendars", "calendars"], ["tabCalibration", "calibration"]].forEach(function (pair) {
       $(pair[0]).addEventListener("click", function () {
         setActiveTab(pair[1]);
       });

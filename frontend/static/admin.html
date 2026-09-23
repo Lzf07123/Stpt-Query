@@ -55,6 +55,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
             <span>网络日历</span>
           </button>
+          <button class="seg-btn admin-nav-btn" id="tabCalibration" data-tab="calibration" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            <span>校历校准</span>
+          </button>
           <button class="seg-btn admin-nav-btn" id="tabNotices" data-tab="notices" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
             <span>通知管理</span>
@@ -270,6 +274,52 @@
         </div>
       </section>
 
+      <section class="panel" id="calibrationPanel" hidden aria-labelledby="calibrationTitle">
+        <form class="card filter-card" id="periodsForm">
+          <div class="section-caption" id="calibrationTitle">课时与时间调整</div>
+          <p class="muted-text">校准各节次的上课起止时间与来源（官方确认 / 推断）。保存后立即对网络日历与首页学期选项生效，并持久化到后台数据库。</p>
+          <div class="table-scroll">
+            <table>
+              <caption class="sr-only">节次时间表</caption>
+              <thead><tr><th>节次</th><th>开始时间</th><th>结束时间</th><th>来源</th><th>操作</th></tr></thead>
+              <tbody id="periodsBody"><tr><td colspan="5" class="empty-cell">加载中</td></tr></tbody>
+            </table>
+          </div>
+          <div class="notice-create-actions">
+            <button class="btn btn-ghost" id="periodAdd" type="button">新增节次</button>
+            <button class="btn btn-primary" type="submit" id="periodsSave">保存节次时间</button>
+          </div>
+          <output class="notice notice-info hidden" id="periodsMessage" role="status"></output>
+        </form>
+
+        <form class="card filter-card" id="termsForm">
+          <div class="section-caption">第一周定义（学期基准）</div>
+          <p class="muted-text">定义每个学期的第一周周一、正式上课首日、教学周数与节假日例外日期（逗号分隔）。</p>
+          <div class="table-scroll">
+            <table>
+              <caption class="sr-only">学期基准</caption>
+              <thead><tr><th>学期</th><th>第一周周一</th><th>正式上课首日</th><th>教学周数</th><th>节假日例外</th><th>操作</th></tr></thead>
+              <tbody id="termsBody"><tr><td colspan="6" class="empty-cell">加载中</td></tr></tbody>
+            </table>
+          </div>
+          <div class="notice-create-actions">
+            <button class="btn btn-ghost" id="termAdd" type="button">新增学期</button>
+            <button class="btn btn-primary" type="submit" id="termsSave">保存学期基准</button>
+          </div>
+          <output class="notice notice-info hidden" id="termsMessage" role="status"></output>
+        </form>
+
+        <div class="card filter-card">
+          <div class="section-caption">配置来源</div>
+          <p id="calibrationSource" class="muted-text">加载中</p>
+          <div class="notice-create-actions">
+            <button class="btn btn-ghost" id="calibrationReset" type="button">恢复仓库默认值</button>
+            <button class="btn btn-ghost" id="calibrationReload" type="button">重新加载</button>
+          </div>
+          <output class="notice notice-info hidden" id="calibrationMessage" role="status"></output>
+        </div>
+      </section>
+
       <section class="panel" id="logsPanel" hidden>
         <form class="card filter-card logs-primary" id="logFilter">
           <div class="filter-grid">
@@ -402,6 +452,6 @@
   <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=22" defer></script>
+  <script src="/admin.js?v=23" defer></script>
 </body>
 </html>

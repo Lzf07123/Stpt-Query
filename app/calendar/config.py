@@ -1,6 +1,7 @@
 """日历订阅配置：节次时间表、时段编码、星期编码与学期基准。
 
-唯一事实来源是 `config/calendar.json`（非机密、随仓库版本管理，每学期人工更新）。
+唯一事实来源是 `config/calendar.json`（非机密、随仓库版本管理，每学期人工更新），
+后台可在此基础上校准并持久化（SQLite 中的配置快照优先于文件基线）。
 启动时严格校验：配置错误直接失败，避免生成时间错误的日历。
 """
 from __future__ import annotations
@@ -71,6 +72,28 @@ class CalendarConfig:
     def inferred_periods(self) -> Tuple[int, ...]:
         return tuple(sorted(p for p, src in self.period_source.items() if src != "official"))
 
+    def to_dict(self) -> Dict[str, object]:
+        """回写为 config/calendar.json 兼容结构（供后台 API 与持久化快照使用）。"""
+        return {
+            "version": self.version,
+            "periods": {str(k): list(v) for k, v in self.periods.items()},
+            "period_source": {str(k): v for k, v in self.period_source.items()},
+            "block_codes": {k: list(v) for k, v in self.block_codes.items()},
+            "day_code_map": dict(self.day_code_map),
+            "terms": {
+                sem: {
+                    "semester": term.semester,
+                    "monday": term.monday.isoformat(),
+                    "teaching_start": term.teaching_start.isoformat(),
+                    "weeks": term.weeks,
+                    "exdates": [d.isoformat() for d in term.exdates],
+                }
+                for sem, term in self.terms.items()
+            },
+            "student_week_offset": dict(self.student_week_offset),
+            "on_conflict": self.on_conflict,
+        }
+
 
 def _parse_time(value: object, where: str) -> Tuple[str, str]:
     if not isinstance(value, (list, tuple)) or len(value) != 2:
@@ -91,15 +114,8 @@ def _parse_date(value: object, where: str) -> date:
         raise CalendarConfigError("%s 日期非法：%r（应为 YYYY-MM-DD）" % (where, value)) from exc
 
 
-def load_config(path: str | Path) -> CalendarConfig:
-    """读取并校验日历配置；任何非法项都抛 CalendarConfigError。"""
-    raw_path = Path(path)
-    try:
-        payload = json.loads(raw_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise CalendarConfigError("日历配置文件不存在：%s" % raw_path) from exc
-    except json.JSONDecodeError as exc:
-        raise CalendarConfigError("日历配置不是合法 JSON：%s" % exc) from exc
+def parse_config(payload: Mapping) -> CalendarConfig:
+    """校验配置字典并构造 CalendarConfig；任何非法项都抛 CalendarConfigError。"""
     if not isinstance(payload, Mapping):
         raise CalendarConfigError("日历配置根节点必须是对象")
 
@@ -178,3 +194,27 @@ def load_config(path: str | Path) -> CalendarConfig:
         on_conflict=on_conflict,
         version=int(payload.get("version", 1)),
     )
+
+
+def read_config_payload(path: str | Path) -> dict:
+    """读取配置文件为 JSON 字典（不校验），供启动合并与后台展示基线使用。"""
+    raw_path = Path(path)
+    try:
+        payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise CalendarConfigError("日历配置文件不存在：%s" % raw_path) from exc
+    except json.JSONDecodeError as exc:
+        raise CalendarConfigError("日历配置不是合法 JSON：%s" % exc) from exc
+    if not isinstance(payload, Mapping):
+        raise CalendarConfigError("日历配置根节点必须是对象")
+    return dict(payload)
+
+
+def load_config(path: str | Path) -> CalendarConfig:
+    """读取并校验配置文件（文件基线）。"""
+    return parse_config(read_config_payload(path))
+
+
+def load_config_dict(payload: object) -> CalendarConfig:
+    """校验任意配置字典并构造 CalendarConfig（用于后台持久化快照）。"""
+    return parse_config(payload)
