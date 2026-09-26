@@ -57,6 +57,20 @@ def test_service_client_reaches_embedded_app_in_process(mono_app):
     assert payload["status"] in ("ok", "degraded")
 
 
+def test_health_payload_cold_cache_never_probes_synchronously(monkeypatch):
+    """就绪探针路径不得因学校网络慢而阻塞：冷缓存时 /health 直接返回，不触发同步探测。"""
+    state = jwxt_state.ServerState()
+    assert state.net is None
+
+    def forbidden_probe(*_args, **_kwargs):
+        raise AssertionError("cold-cache /health must not call probe_school")
+
+    monkeypatch.setattr(jwxt_state, "probe_school", forbidden_probe)
+    payload = jwxt_state.health_payload(state, object())
+    assert payload["status"] == "ok"
+    assert state.net is None  # 仍交给后台探测线程首轮填充
+
+
 def test_internal_query_proxy_routes_are_not_public(mono_app):
     with TestClient(mono_app) as client:
         for path in ("/login", "/get_schedule", "/get_grades"):

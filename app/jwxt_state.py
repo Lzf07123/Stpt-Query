@@ -743,17 +743,16 @@ def _health_probe_loop(state, interval, stop_event=None, redis_backend=None):
 def health_payload(state, server, now=None):
     """组装 /health 响应体（主端口与独立健康端口共用同一实现）。
 
-    学校可达性由后台探测线程持续刷新；这里仅首次（缓存缺失）做一次同步探测，
-    之后直接返回缓存，健康检查不再因上游变慢而阻塞。
+    学校可达性由后台探测线程持续刷新；健康检查只读缓存、绝不阻塞，
+    缓存缺失时按“服务正常、学校状态未知”返回，待后台线程首轮填充。
     """
     now = now or time.time()
     with state.lock:
         cached = state.net
     if cached is None:
-        net = probe_school()
-        net["at"] = int(now)
-        with state.lock:
-            state.net = net
+        # 冷缓存：健康检查路径上不做同步网络探测。学校可达性由后台探测线程首轮填充，
+        # 避免学校网络/DNS 变慢时 /health 阻塞，进而让编排层 /health/ready 误报 not-ready。
+        net = {"ok": None, "busy": True, "latency_ms": 0, "starting": True}
     else:
         net = dict(cached)
     net.pop("at", None)
