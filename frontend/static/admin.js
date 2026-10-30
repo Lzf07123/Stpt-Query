@@ -8,7 +8,8 @@
   function $(id) { return document.getElementById(id); }
   var elements = {
     loginForm: $("loginForm"), tokenInput: $("adminToken"),
-    loginMessage: $("loginMessage"), app: $("adminApp"), logout: $("logoutBtn"),
+    adminLoginBtn: $("adminLoginBtn"), loginMessage: $("loginMessage"),
+    app: $("adminApp"), logout: $("logoutBtn"),
     tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), tabNotices: $("tabNotices"),
     tabCalendars: $("tabCalendars"), calendarsPanel: $("calendarsPanel"),
     calendarsBody: $("calendarsBody"), calendarQuery: $("calendarQuery"),
@@ -137,20 +138,28 @@
     return payload;
   }
 
-  function applyTheme(theme) {
+  function applyTheme(theme, persist) {
     document.documentElement.classList.toggle("dark", theme === "dark");
-    if (elements.themeToggle) elements.themeToggle.innerHTML = theme === "dark" ? SUN_ICON : MOON_ICON;
+    if (elements.themeToggle) {
+      elements.themeToggle.innerHTML = theme === "dark" ? SUN_ICON : MOON_ICON;
+      elements.themeToggle.setAttribute(
+        "aria-label",
+        theme === "dark" ? "切换到浅色主题" : "切换到深色主题"
+      );
+    }
     var background = getComputedStyle(document.documentElement).getPropertyValue("--eduquery-bg").trim();
     var meta = document.querySelector('meta[name="theme-color"]');
     if (meta && background) meta.setAttribute("content", background);
-    try { localStorage.setItem("eduquery-theme", theme); } catch (e) {}
+    if (persist) {
+      try { localStorage.setItem("eduquery-theme", theme); } catch (e) {}
+    }
   }
 
   function setupTheme() {
     if (!elements.themeToggle) return;
-    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light", false);
     elements.themeToggle.addEventListener("click", function () {
-      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark");
+      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark", true);
     });
   }
 
@@ -320,6 +329,7 @@
     elements.loginForm.closest(".admin-layout").hidden = true;
     elements.app.hidden = false;
     startTimers();
+    elements.tabMetrics.focus({ preventScroll: true });
   }
 
   function showNoticeMessage(message, state) {
@@ -377,7 +387,12 @@
     var items = payload.notices || [];
     elements.noticesBody.innerHTML = "";
     if (!items.length) {
-      elements.noticesBody.innerHTML = '<tr><td colspan="7" class="empty-cell">暂无通知</td></tr>';
+      elements.noticesBody.innerHTML = '<tr><td colspan="7" class="empty-cell">' +
+        '<div class="table-empty-state">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>' +
+          '<strong>暂无通知</strong>' +
+          '<span>发布第一条通知后，状态和时间线会显示在这里。</span>' +
+        "</div></td></tr>";
     } else {
       items.forEach(function (item) {
         var row = document.createElement("tr");
@@ -838,7 +853,12 @@
     if (elements.calendarPaused) elements.calendarPaused.textContent = stats.paused == null ? "0" : stats.paused;
     elements.calendarsBody.innerHTML = "";
     if (!items.length) {
-      elements.calendarsBody.innerHTML = '<tr><td colspan="8" class="empty-cell">暂无订阅</td></tr>';
+      elements.calendarsBody.innerHTML = '<tr><td colspan="8" class="empty-cell">' +
+        '<div class="table-empty-state">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>' +
+          '<strong>暂无订阅</strong>' +
+          '<span>用户开启网络日历订阅后，会在这里显示托管状态。</span>' +
+        "</div></td></tr>";
       return;
     }
     items.forEach(function (item) {
@@ -1077,7 +1097,10 @@
     }
   }
 
+  var logDetailLastFocused = null;
+
   function showLogDetail(item) {
+    logDetailLastFocused = document.activeElement;
     state.detail = item;
     state.detailScope = "";
     state.relatedLogs = [item];
@@ -1085,7 +1108,8 @@
     elements.detailPanel.hidden = false;
     renderLogDetail();
     loadRelatedLogs().catch(function () {});
-    elements.detailPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    elements.detailPanel.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
   }
 
   function closeLogDetail() {
@@ -1095,6 +1119,10 @@
     state.relatedRequest += 1;
     elements.logsPanel.classList.remove("detail-open");
     elements.detailPanel.hidden = true;
+    if (logDetailLastFocused && document.contains(logDetailLastFocused)) {
+      logDetailLastFocused.focus({ preventScroll: true });
+    }
+    logDetailLastFocused = null;
   }
 
   var detailValueLastFocused = null;
@@ -1120,6 +1148,25 @@
     detailValueLastFocused = null;
   }
 
+  if (elements.detailValueModal) {
+    elements.detailValueModal.addEventListener("keydown", function (event) {
+      if (event.key !== "Tab") return;
+      var focusable = Array.prototype.slice.call(elements.detailValueModal.querySelectorAll(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (node) { return node.getClientRects().length > 0; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+  }
+
   function renderLogs(payload) {
     state.hasMore = Boolean(payload.pagination && payload.pagination.has_more);
     elements.total.textContent = String(payload.total == null ? "—" : payload.total);
@@ -1127,8 +1174,28 @@
     elements.failure.textContent = String((payload.stats && payload.stats.failure) || 0);
     elements.source.textContent = { file: "文件日志", redis: "Redis", memory: "进程内存" }[payload.source] || payload.source || "—";
 
+    var tableCard = elements.body.closest(".table-card");
+    if (tableCard) tableCard.classList.toggle("is-empty", !state.logs.length);
     if (!state.logs.length) {
-      elements.body.innerHTML = '<tr><td colspan="11" class="empty-cell">没有匹配的记录</td></tr>';
+      elements.body.innerHTML = '<tr><td colspan="11" class="empty-cell">' +
+        '<div class="table-empty-state">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v15H4z"/><path d="M8 9h8M8 13h6"/><path d="m17 16 3 3M20 16l-3 3"/></svg>' +
+          '<strong>没有匹配的查询记录</strong>' +
+          '<span>调整筛选条件，或等待新的查询产生后再查看。</span>' +
+          '<button class="btn secondary-btn" type="button" data-empty-reset>重置筛选</button>' +
+        "</div></td></tr>";
+      var reset = elements.body.querySelector("[data-empty-reset]");
+      if (reset) {
+        reset.addEventListener("click", function () {
+          elements.filter.reset();
+          elements.filterToggle.setAttribute("aria-expanded", "false");
+          elements.filter.classList.remove("filters-expanded");
+          document.getElementById("advancedFilters").classList.remove("expanded");
+          elements.filterToggle.textContent = "展开筛选";
+          state.offset = 0;
+          loadLogs().catch(showError);
+        });
+      }
       updatePagination();
       return;
     }
@@ -1370,6 +1437,9 @@
 
     elements.loginForm.addEventListener("submit", async function (event) {
       event.preventDefault();
+      elements.adminLoginBtn.disabled = true;
+      elements.adminLoginBtn.setAttribute("aria-busy", "true");
+      elements.adminLoginBtn.textContent = "正在验证…";
       setLoginMessage("验证中…", "info");
       try {
         await activate(elements.tokenInput.value.trim());
@@ -1378,6 +1448,11 @@
       } catch (error) {
         setToken("");
         setLoginMessage(error.message, "error");
+        elements.tokenInput.focus();
+      } finally {
+        elements.adminLoginBtn.disabled = false;
+        elements.adminLoginBtn.removeAttribute("aria-busy");
+        elements.adminLoginBtn.textContent = "安全进入";
       }
     });
     elements.logout.addEventListener("click", function () {

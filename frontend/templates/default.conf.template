@@ -19,7 +19,7 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-XoVch2YEItynbKHaq6Zagc/5lDJBclyIEMKh0Td917A=' 'sha256-F69LsM7xT7R1u3HZjsVNz1ngwe9wYIl4aeXfK4KvLFc=' 'sha256-y8JRKoR5pl+X52aZ3ZYKWOSTroVbem8eD1908CUt0to='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-XoVch2YEItynbKHaq6Zagc/5lDJBclyIEMKh0Td917A=' 'sha256-F69LsM7xT7R1u3HZjsVNz1ngwe9wYIl4aeXfK4KvLFc=' 'sha256-DIcJv9zUX/pnA3GFnUMOhDwaaS7IpPVKTp651n/piMc='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
 
     root /usr/share/nginx/html;
     index index.html;

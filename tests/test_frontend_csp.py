@@ -78,7 +78,36 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=23" in page
+    assert "/admin.js?v=25" in page
+
+
+def test_admin_console_has_consistent_navigation_and_responsive_tooling():
+    page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+
+    assert '<a class="skip-link" href="#main">' in page
+    assert '<main class="wrap" id="main" tabindex="-1">' in page
+    assert 'id="adminLoginBtn"' in page and 'aria-describedby="adminTokenHelp"' in page
+    assert page.count('aria-controls="') >= 5
+    assert page.count('class="admin-panel-head"') == 4
+    assert page.count('role="region" aria-label="') >= 6
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in page
+
+    assert 'elements.adminLoginBtn.disabled = true;' in script
+    assert 'elements.tabMetrics.focus({ preventScroll: true });' in script
+    assert 'class="table-empty-state"' in script
+    assert 'elements.detailValueModal.addEventListener("keydown"' in script
+
+    for selector in (
+        ".admin-login-card {",
+        ".admin-panel-head {",
+        ".admin-nav {",
+        ".table-empty-state {",
+    ):
+        assert selector in style
+    assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in style
+    assert "#calendarFilter .filter-grid {" in style
 
 
 def test_homepage_notice_bar_and_history_are_external_scripts():
@@ -88,7 +117,7 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=6"' in index
-    assert 'href="/style.css?v=82"' in index
+    assert 'href="/style.css?v=84"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script

@@ -11,27 +11,43 @@
     (function () {
       var theme = null;
       try { theme = localStorage.getItem("eduquery-theme"); } catch (e) {}
-      if (theme !== "dark" && theme !== "light") theme = "dark";
+      if (theme !== "dark" && theme !== "light") {
+        theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+      }
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=82">
+  <link rel="stylesheet" href="/style.css?v=84">
 </head>
 <body>
+  <a class="skip-link" href="#main">跳到后台内容</a>
   <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
     <div class="tech-grid"></div>
     <span class="tech-beam"></span>
     <span class="tech-beam tech-beam--violet"></span>
   </div>
 
-  <main class="wrap" id="main">
+  <main class="wrap" id="main" tabindex="-1">
     <section class="layout admin-layout" aria-labelledby="loginHeading">
-      <form class="card admin-card" id="loginForm">
-        <h2 id="loginHeading" class="section-title">管理员验证</h2>
-        <p class="muted-text">请输入 ADMIN_TOKEN。凭据仅保存在当前标签页。</p>
+      <form class="card card-signature card-halo admin-card admin-login-card" id="loginForm">
+        <div class="admin-login-brand">
+          <span class="admin-login-mark"><img src="/image/icon.svg" alt=""></span>
+          <div>
+            <p class="admin-eyebrow">ADMIN CONSOLE</p>
+            <h2 id="loginHeading">后台控制台</h2>
+          </div>
+        </div>
+        <p class="admin-login-desc">登录后可查看运行状态、查询日志、全站通知与日历订阅配置。</p>
         <label class="field-label" for="adminToken">管理员令牌</label>
-        <input class="input" id="adminToken" type="password" autocomplete="current-password" required>
-        <button class="btn btn-primary" type="submit">进入后台</button>
+        <input class="input" id="adminToken" type="password" autocomplete="off" aria-describedby="adminTokenHelp" placeholder="输入 ADMIN_TOKEN" required>
+        <p class="admin-field-help" id="adminTokenHelp">凭据只保存在当前标签页，退出或关闭页面后清除。</p>
+        <button class="btn btn-primary admin-login-submit" id="adminLoginBtn" type="submit">安全进入</button>
+        <div class="admin-login-security">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          管理员令牌不会暴露给查询用户
+        </div>
         <output class="notice notice-info hidden" id="loginMessage" role="status"></output>
       </form>
     </section>
@@ -39,27 +55,31 @@
     <section class="layout admin-app layout-wide" id="adminApp" hidden aria-label="后台工作台">
       <header class="admin-page-head" aria-label="后台页眉">
         <div class="admin-brand">
-          <h1 class="admin-title">后台管理</h1>
-          <span class="admin-scope">仅管理员</span>
+          <span class="admin-brand-mark"><img src="/image/icon.svg" alt=""></span>
+          <div class="admin-brand-copy">
+            <h1 class="admin-title">教务查询控制台</h1>
+            <small>运维 · 审计 · 内容管理</small>
+          </div>
+          <span class="admin-scope">管理员</span>
         </div>
         <nav class="segmented tab-group admin-nav" aria-label="后台视图">
-          <button class="seg-btn admin-nav-btn active" id="tabMetrics" data-tab="metrics" type="button" aria-current="page">
+          <button class="seg-btn admin-nav-btn active" id="tabMetrics" data-tab="metrics" type="button" aria-controls="metricsPanel" aria-current="page">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20a8 8 0 1 1 8-8"/><path d="M12 12l4-4"/></svg>
             <span>资源监控</span>
           </button>
-          <button class="seg-btn admin-nav-btn" id="tabLogs" data-tab="logs" type="button">
+          <button class="seg-btn admin-nav-btn" id="tabLogs" data-tab="logs" type="button" aria-controls="logsPanel">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v15H4z"/><path d="M8 9h8M8 13h8M8 17h4"/></svg>
             <span>查询日志</span>
           </button>
-          <button class="seg-btn admin-nav-btn" id="tabCalendars" data-tab="calendars" type="button">
+          <button class="seg-btn admin-nav-btn" id="tabCalendars" data-tab="calendars" type="button" aria-controls="calendarsPanel">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
             <span>网络日历</span>
           </button>
-          <button class="seg-btn admin-nav-btn" id="tabCalibration" data-tab="calibration" type="button">
+          <button class="seg-btn admin-nav-btn" id="tabCalibration" data-tab="calibration" type="button" aria-controls="calibrationPanel">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
             <span>校历校准</span>
           </button>
-          <button class="seg-btn admin-nav-btn" id="tabNotices" data-tab="notices" type="button">
+          <button class="seg-btn admin-nav-btn" id="tabNotices" data-tab="notices" type="button" aria-controls="noticesPanel">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
             <span>通知管理</span>
           </button>
@@ -165,8 +185,15 @@
       </section>
 
       <section class="panel" id="noticesPanel" hidden aria-labelledby="noticeManageTitle">
+        <div class="admin-panel-head">
+          <div>
+            <p class="admin-eyebrow">COMMUNICATION</p>
+            <h2 id="noticeManageTitle">通知运营</h2>
+            <p>发布全站公告、维护上下线状态，并追踪历史内容。</p>
+          </div>
+        </div>
         <form class="card filter-card" id="noticeForm">
-          <div class="section-caption" id="noticeManageTitle">新建通知</div>
+          <div class="section-caption">新建通知</div>
           <div class="notice-create-grid">
             <label class="notice-content-label">通知内容
               <input class="input" id="noticeContent" maxlength="120" required placeholder="例如：本周六 09:00 系统维护">
@@ -210,7 +237,7 @@
         </div>
 
         <div class="card table-card">
-          <div class="table-scroll notice-table-scroll">
+          <div class="table-scroll notice-table-scroll" tabindex="0" role="region" aria-label="通知列表，可横向滚动">
             <table>
               <caption class="sr-only">通知管理列表</caption>
               <thead><tr><th>内容</th><th>级别</th><th>状态</th><th>发布时间</th><th>下线时间</th><th>更新时间</th><th>操作</th></tr></thead>
@@ -228,13 +255,20 @@
       </section>
 
       <section class="panel" id="calendarsPanel" hidden aria-labelledby="calendarManageTitle">
+        <div class="admin-panel-head">
+          <div>
+            <p class="admin-eyebrow">CALENDAR SUBSCRIPTIONS</p>
+            <h2 id="calendarManageTitle">网络日历订阅</h2>
+            <p>检索已托管订阅，处理刷新、暂停、轮换与删除操作。</p>
+          </div>
+        </div>
         <form class="card filter-card" id="calendarFilter">
-          <div class="section-caption" id="calendarManageTitle">网络日历订阅</div>
+          <div class="section-caption">筛选订阅</div>
           <div class="filter-grid">
             <label>学号<input class="input" id="calendarQuery" inputmode="numeric" maxlength="10" placeholder="10 位学号精确查询"></label>
             <label>学期<input class="input" id="calendarSemesterFilter" maxlength="16" placeholder="如 2026-2027-1"></label>
             <label>状态
-              <select class="custom-select-native" id="calendarStateFilter" aria-label="订阅状态">
+              <select class="select" id="calendarStateFilter" aria-label="订阅状态">
                 <option value="">全部</option>
                 <option value="active">正常</option>
                 <option value="reauth_needed">需重新授权</option>
@@ -258,7 +292,7 @@
         </div>
 
         <div class="card table-card">
-          <div class="table-scroll notice-table-scroll">
+          <div class="table-scroll notice-table-scroll" tabindex="0" role="region" aria-label="订阅列表，可横向滚动">
             <table>
               <caption class="sr-only">网络日历订阅列表</caption>
               <thead><tr><th>学号</th><th>学期</th><th>状态</th><th>刷新间隔</th><th>最后刷新</th><th>失败</th><th>订阅地址</th><th>操作</th></tr></thead>
@@ -275,10 +309,17 @@
       </section>
 
       <section class="panel" id="calibrationPanel" hidden aria-labelledby="calibrationTitle">
+        <div class="admin-panel-head">
+          <div>
+            <p class="admin-eyebrow">ACADEMIC CALENDAR</p>
+            <h2 id="calibrationTitle">校历校准</h2>
+            <p>维护节次时间与学期第一周基准，保存后立即影响日历和首页选项。</p>
+          </div>
+        </div>
         <form class="card filter-card" id="periodsForm">
-          <div class="section-caption" id="calibrationTitle">课时与时间调整</div>
+          <div class="section-caption">课时与时间调整</div>
           <p class="muted-text">校准各节次的上课起止时间与来源（官方确认 / 推断）。保存后立即对网络日历与首页学期选项生效，并持久化到后台数据库。</p>
-          <div class="table-scroll">
+          <div class="table-scroll" tabindex="0" role="region" aria-label="节次时间表，可横向滚动">
             <table>
               <caption class="sr-only">节次时间表</caption>
               <thead><tr><th>节次</th><th>开始时间</th><th>结束时间</th><th>来源</th><th>操作</th></tr></thead>
@@ -295,7 +336,7 @@
         <form class="card filter-card" id="termsForm">
           <div class="section-caption">第一周定义（学期基准）</div>
           <p class="muted-text">定义每个学期的第一周周一、正式上课首日、教学周数与节假日例外日期（逗号分隔）。</p>
-          <div class="table-scroll">
+          <div class="table-scroll" tabindex="0" role="region" aria-label="学期基准表，可横向滚动">
             <table>
               <caption class="sr-only">学期基准</caption>
               <thead><tr><th>学期</th><th>第一周周一</th><th>正式上课首日</th><th>教学周数</th><th>节假日例外</th><th>操作</th></tr></thead>
@@ -320,7 +361,14 @@
         </div>
       </section>
 
-      <section class="panel" id="logsPanel" hidden>
+      <section class="panel" id="logsPanel" hidden aria-labelledby="logsTitle">
+        <div class="admin-panel-head">
+          <div>
+            <p class="admin-eyebrow">AUDIT &amp; TRACE</p>
+            <h2 id="logsTitle">查询日志</h2>
+            <p>按运行结果与上下文检索记录，查看脱敏详情和关联事件。</p>
+          </div>
+        </div>
         <form class="card filter-card logs-primary" id="logFilter">
           <div class="filter-grid">
             <label>关键字<input class="input" name="keyword" placeholder="学号 / 运行ID / IP / 消息" maxlength="100"></label>
@@ -363,7 +411,7 @@
         </div>
 
         <div class="card table-card logs-primary">
-          <div class="table-scroll">
+          <div class="table-scroll" tabindex="0" role="region" aria-label="查询日志列表，可横向滚动">
             <table>
               <caption class="sr-only">查询日志记录，仅管理员可见</caption>
               <thead><tr><th>时间</th><th>学号</th><th>项目</th><th>结果</th><th>分类</th><th>分析</th><th>Token用量</th><th>耗时</th><th>运行ID</th><th>IP</th><th>详情</th></tr></thead>
@@ -416,7 +464,7 @@
             <h3>关联日志查询</h3>
             <div class="scope-row" id="detailScopes"></div>
             <p class="related-status" id="relatedStatus" aria-live="polite">准备查询</p>
-            <div class="table-scroll related-table">
+            <div class="table-scroll related-table" tabindex="0" role="region" aria-label="关联日志列表，可横向滚动">
               <table>
                 <caption class="sr-only">二级关联查询日志记录</caption>
                 <thead><tr><th>时间</th><th>事件</th><th>学号</th><th>项目</th><th>结果</th><th>分类</th><th>分析</th><th>Token用量</th><th>耗时</th><th>消息</th><th>操作</th></tr></thead>
@@ -452,6 +500,6 @@
   <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=23" defer></script>
+  <script src="/admin.js?v=25" defer></script>
 </body>
 </html>
