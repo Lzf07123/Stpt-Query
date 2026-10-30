@@ -4,7 +4,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,7 +88,7 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=6"' in index
-    assert 'href="/style.css?v=79"' in index
+    assert 'href="/style.css?v=82"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -118,6 +122,68 @@ def test_query_first_use_controls_are_accessible_and_isolated():
     # 查询类型与日历刷新间隔不能共用事件选择器，否则切换日历时会误改查询内容。
     assert 'document.querySelectorAll(".query-choice").forEach' in index
     assert 'document.querySelectorAll(".seg-btn").forEach' not in index
+
+
+def test_result_page_has_overview_and_humanized_diagnostics():
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+
+    assert 'id="resultOverview" class="result-overview hidden"' in index
+    assert "function renderResultOverview(" in index
+    assert "function parseDiagnosticReport(" in index
+    assert "function renderDiagnosticReport(" in index
+    assert 'table-shell table-shell--grades' in index
+    assert 'table-shell table-shell--schedule' in index
+    assert 'aria-label="查询结果表格"' in index
+    for selector in (".result-overview {", ".diagnostic-report {", ".table-shell--grades"):
+        assert selector in style
+
+
+def _extract_function(source: str, signature: str) -> str:
+    start = source.index("function " + signature)
+    brace = source.index("{", start)
+    depth = 0
+    for index in range(brace, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    raise AssertionError("函数未闭合: " + signature)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="需要 node 才能执行前端片段")
+def test_result_overview_helpers_are_deterministic(tmp_path):
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    source = "\n".join(
+        _extract_function(index, signature)
+        for signature in (
+            "isTableSeparator(line)",
+            "parseResultTable(text)",
+            "gradeOverviewFacts(text)",
+            "parseDiagnosticReport(text)",
+            "humanizeDiagnosticEvidence(evidence)",
+        )
+    )
+    harness = tmp_path / "result-overview.mjs"
+    harness.write_text(
+        source + "\n"
+        "const grade = gradeOverviewFacts('| 课程 | 成绩 | 学分 |\\n|---|---|---|\\n"
+        "| 高数 | 90 | 4 |\\n| 英语 | 80 | 3 |');\n"
+        "if (grade[0].value !== '2 门' || grade[1].value !== '85.0' || grade[2].value !== '90') process.exit(1);\n"
+        "const report = parseDiagnosticReport('**问题分类：未分类异常**\\n- 环节：登录\\n"
+        "- 判断依据：HTTP 502，响应片段：教务系统登录暂时不可用\\n"
+        "- 用户可自行处理：\\n  - 稍后重试\\n"
+        "- 需要管理员/运维处理：\\n  - 查看日志');\n"
+        "if (report.userActions[0] !== '稍后重试' || report.adminActions[0] !== '查看日志') process.exit(2);\n"
+        "if (humanizeDiagnosticEvidence(report.evidence) !== '学校服务暂时不可用（HTTP 502）') process.exit(3);\n"
+        "console.log('ok');\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 def test_first_visit_theme_follows_system_preference():
