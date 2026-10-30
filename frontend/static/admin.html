@@ -19,7 +19,7 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=84">
+  <link rel="stylesheet" href="/style.css?v=87">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到后台内容</a>
@@ -85,6 +85,10 @@
           </button>
         </nav>
         <div class="admin-head-actions">
+          <button class="admin-health" id="adminHealth" data-state="loading" type="button" aria-controls="dependencySection">
+            <i aria-hidden="true"></i>
+            <span id="adminHealthText">检测中</span>
+          </button>
           <button class="btn secondary-btn" id="logoutBtn" type="button">退出</button>
           <button class="btn theme-toggle" id="themeToggle" type="button" aria-label="切换主题"></button>
         </div>
@@ -128,7 +132,10 @@
           </div>
         </div>
 
-        <div id="dependencyNotices" class="dependency-notices hidden" aria-live="polite"></div>
+        <section class="dependency-section hidden" id="dependencySection" tabindex="-1" aria-labelledby="dependencyTitle">
+          <div class="section-caption" id="dependencyTitle">服务依赖</div>
+          <div id="dependencyNotices" class="dependency-notices" aria-live="polite"></div>
+        </section>
 
         <div class="section-caption">应用负载（近 5 分钟）</div>
         <div class="metric-grid monitor-grid application-grid">
@@ -500,6 +507,6 @@
   <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=25" defer></script>
+  <script src="/admin.js?v=28" defer></script>
 </body>
 </html>

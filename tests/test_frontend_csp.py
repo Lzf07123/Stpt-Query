@@ -78,7 +78,7 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=25" in page
+    assert "/admin.js?v=28" in page
 
 
 def test_admin_console_has_consistent_navigation_and_responsive_tooling():
@@ -89,13 +89,19 @@ def test_admin_console_has_consistent_navigation_and_responsive_tooling():
     assert '<a class="skip-link" href="#main">' in page
     assert '<main class="wrap" id="main" tabindex="-1">' in page
     assert 'id="adminLoginBtn"' in page and 'aria-describedby="adminTokenHelp"' in page
+    assert 'id="adminHealth"' in page and 'id="dependencySection"' in page
+    assert '<button class="admin-health"' in page
     assert page.count('aria-controls="') >= 5
     assert page.count('class="admin-panel-head"') == 4
     assert page.count('role="region" aria-label="') >= 6
     assert 'window.matchMedia("(prefers-color-scheme: dark)")' in page
 
     assert 'elements.adminLoginBtn.disabled = true;' in script
-    assert 'elements.tabMetrics.focus({ preventScroll: true });' in script
+    assert 'initialButton.focus({ preventScroll: true });' in script
+    assert "var ADMIN_TABS = {" in script
+    assert 'window.history[historyMode + "State"]' in script
+    assert 'setActiveTab(pair[1], true, "push");' in script
+    assert 'elements.adminHealth.addEventListener("click"' in script
     assert 'class="table-empty-state"' in script
     assert 'elements.detailValueModal.addEventListener("keydown"' in script
 
@@ -117,7 +123,7 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=6"' in index
-    assert 'href="/style.css?v=84"' in index
+    assert 'href="/style.css?v=87"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script

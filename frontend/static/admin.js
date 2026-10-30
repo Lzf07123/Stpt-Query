@@ -10,6 +10,7 @@
     loginForm: $("loginForm"), tokenInput: $("adminToken"),
     adminLoginBtn: $("adminLoginBtn"), loginMessage: $("loginMessage"),
     app: $("adminApp"), logout: $("logoutBtn"),
+    adminHealth: $("adminHealth"), adminHealthText: $("adminHealthText"),
     tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), tabNotices: $("tabNotices"),
     tabCalendars: $("tabCalendars"), calendarsPanel: $("calendarsPanel"),
     calendarsBody: $("calendarsBody"), calendarQuery: $("calendarQuery"),
@@ -22,7 +23,7 @@
     metricsPanel: $("metricsPanel"), filter: $("logFilter"), exportBtn: $("exportBtn"),
     filterToggle: $("filterToggle"),
     limitSelect: $("limitSelect"),
-    dependencyNotices: $("dependencyNotices"),
+    dependencySection: $("dependencySection"), dependencyNotices: $("dependencyNotices"),
     autoLogs: $("autoLogs"), autoMetrics: $("autoMetrics"),
     body: $("logsBody"), prev: $("prevPage"), next: $("nextPage"), pageInfo: $("pageInfo"),
     detailPanel: $("logDetailPanel"), detailBack: $("detailBack"), detailCopy: $("detailCopy"),
@@ -238,14 +239,43 @@
     elements.storageSource.textContent = labels[fileStatus] || "状态未知";
   }
 
+  function setAdminHealth(state, text, title) {
+    if (!elements.adminHealth || !elements.adminHealthText) return;
+    elements.adminHealth.dataset.state = state || "loading";
+    elements.adminHealthText.textContent = text;
+    elements.adminHealth.title = title || text;
+    elements.adminHealth.setAttribute("aria-label", text + "：" + (title || text) + "，打开资源监控");
+  }
+
   function renderDependencyNotices(payload) {
     if (!elements.dependencyNotices) return;
     var dependencies = payload && payload.dependencies || [];
     var notices = dependencies.filter(function (item) {
       return item.status !== "ok";
     });
+    var critical = notices.filter(function (item) {
+      return item.level === "danger" || item.status === "error";
+    });
+    var warning = notices.filter(function (item) {
+      return !critical.includes(item) && (item.level === "warning" || item.status === "degraded");
+    });
+    if (critical.length) {
+      setAdminHealth("danger", critical.length + " 项异常", critical[0].display + "：" + critical[0].message);
+    } else if (warning.length) {
+      setAdminHealth("warning", warning.length + " 项注意", warning[0].display + "：" + warning[0].message);
+    } else {
+      setAdminHealth("success", "运行正常", "核心服务与已配置依赖运行正常");
+    }
+    notices.sort(function (left, right) {
+      var score = function (item) {
+        if (item.level === "danger" || item.status === "error") return 0;
+        if (item.level === "warning" || item.status === "degraded") return 1;
+        return 2;
+      };
+      return score(left) - score(right);
+    });
     if (!notices.length) {
-      elements.dependencyNotices.classList.add("hidden");
+      if (elements.dependencySection) elements.dependencySection.classList.add("hidden");
       elements.dependencyNotices.innerHTML = "";
       return;
     }
@@ -258,7 +288,7 @@
         escapeHtml({ ok: "正常", degraded: "降级", error: "异常", "not-configured": "未配置", unknown: "检测中" }[state] || state) +
         '</span><span>' + escapeHtml(item.message || "状态未知") + '</span></div>';
     }).join("");
-    elements.dependencyNotices.classList.remove("hidden");
+    if (elements.dependencySection) elements.dependencySection.classList.remove("hidden");
   }
 
   function renderHost(latest) {
@@ -324,12 +354,15 @@
 
   async function activate(token) {
     setToken(token);
-    setActiveTab("metrics", false);
+    setAdminHealth("loading", "检测中", "正在获取系统运行状态");
+    var initialTab = tabFromLocation() || "metrics";
+    setActiveTab(initialTab, false, "replace");
     await Promise.all([loadLogs(), loadMetrics()]);
     elements.loginForm.closest(".admin-layout").hidden = true;
     elements.app.hidden = false;
     startTimers();
-    elements.tabMetrics.focus({ preventScroll: true });
+    var initialButton = tabButton(initialTab);
+    if (initialButton) initialButton.focus({ preventScroll: true });
   }
 
   function showNoticeMessage(message, state) {
@@ -590,7 +623,31 @@
     });
   }
 
-  function setActiveTab(tab, reload) {
+  var ADMIN_TABS = {
+    metrics: "metrics",
+    logs: "logs",
+    notices: "notices",
+    calendars: "calendars",
+    calibration: "calibration"
+  };
+
+  function tabFromLocation() {
+    var tab = String(window.location.hash || "").replace(/^#/, "");
+    return ADMIN_TABS[tab] ? tab : "";
+  }
+
+  function tabButton(tab) {
+    return {
+      metrics: elements.tabMetrics,
+      logs: elements.tabLogs,
+      notices: elements.tabNotices,
+      calendars: elements.tabCalendars,
+      calibration: elements.tabCalibration
+    }[tab];
+  }
+
+  function setActiveTab(tab, reload, historyMode) {
+    if (!ADMIN_TABS[tab]) tab = "metrics";
     var isMetrics = tab === "metrics";
     var isNotices = tab === "notices";
     var isCalendars = tab === "calendars";
@@ -611,6 +668,12 @@
     elements.calendarsPanel.hidden = !isCalendars;
     elements.calibrationPanel.hidden = !isCalibration;
     elements.logsPanel.hidden = !isLogs;
+    if (historyMode === "push" || historyMode === "replace") {
+      var target = "#" + tab;
+      if (window.location.hash !== target) {
+        window.history[historyMode + "State"](null, "", target);
+      }
+    }
     if (isMetrics && reload !== false) loadMetrics().catch(function () {});
     if (isNotices) loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
     if (isCalendars) loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
@@ -1338,10 +1401,11 @@
     renderApplication({});
     renderHost({});
     renderStorage({}, {});
+    setAdminHealth("danger", "状态未知", "暂时无法获取运行状态，请立即刷新重试");
     if (elements.dependencyNotices) {
-      elements.dependencyNotices.classList.add("hidden");
       elements.dependencyNotices.innerHTML = "";
     }
+    if (elements.dependencySection) elements.dependencySection.classList.add("hidden");
     elements.services.innerHTML = "";
     drawCpu([]);
   }
@@ -1458,6 +1522,18 @@
     elements.logout.addEventListener("click", function () {
       setToken(""); stopTimers(); location.reload();
     });
+    if (elements.adminHealth) {
+      elements.adminHealth.addEventListener("click", function () {
+        setActiveTab("metrics", true, "push");
+        var target = elements.dependencySection && !elements.dependencySection.classList.contains("hidden")
+          ? elements.dependencySection : elements.metricsRefresh;
+        var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        window.requestAnimationFrame(function () {
+          target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+          target.focus({ preventScroll: true });
+        });
+      });
+    }
     elements.calendarFilter = $("calendarFilter");
     if (elements.calendarFilter) {
       elements.calendarFilter.addEventListener("submit", function (event) {
@@ -1523,8 +1599,15 @@
     }
     [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"], ["tabCalendars", "calendars"], ["tabCalibration", "calibration"]].forEach(function (pair) {
       $(pair[0]).addEventListener("click", function () {
-        setActiveTab(pair[1]);
+        setActiveTab(pair[1], true, "push");
       });
+    });
+    window.addEventListener("hashchange", function () {
+      if (elements.app.hidden) return;
+      var tab = tabFromLocation() || "metrics";
+      setActiveTab(tab, true);
+      var button = tabButton(tab);
+      if (button) window.requestAnimationFrame(function () { button.focus({ preventScroll: true }); });
     });
     document.querySelectorAll(".notice-level .seg-btn").forEach(function (button) {
       button.addEventListener("click", function () { setNoticeLevel(button.dataset.level); });
