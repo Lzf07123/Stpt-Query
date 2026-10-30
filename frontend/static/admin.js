@@ -244,10 +244,17 @@
 
   function setAdminHealth(state, text, title) {
     if (!elements.adminHealth || !elements.adminHealthText) return;
+    var label = text + "：" + (title || text) + "，打开资源监控";
     elements.adminHealth.dataset.state = state || "loading";
-    elements.adminHealthText.textContent = text;
-    elements.adminHealth.title = title || text;
-    elements.adminHealth.setAttribute("aria-label", text + "：" + (title || text) + "，打开资源监控");
+    if (elements.adminHealthText.textContent !== text) {
+      elements.adminHealthText.textContent = text;
+    }
+    if (elements.adminHealth.title !== (title || text)) {
+      elements.adminHealth.title = title || text;
+    }
+    if (elements.adminHealth.getAttribute("aria-label") !== label) {
+      elements.adminHealth.setAttribute("aria-label", label);
+    }
   }
 
   function renderDependencyNotices(payload) {

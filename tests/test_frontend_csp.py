@@ -78,7 +78,7 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=31" in page
+    assert "/admin.js?v=32" in page
 
 
 def test_admin_console_has_consistent_navigation_and_responsive_tooling():
@@ -102,6 +102,7 @@ def test_admin_console_has_consistent_navigation_and_responsive_tooling():
     assert 'window.history[historyMode + "State"]' in script
     assert 'setActiveTab(pair[1], true, "push");' in script
     assert 'elements.adminHealth.addEventListener("click"' in script
+    assert 'if (elements.adminHealthText.textContent !== text)' in script
     assert 'class="table-empty-state"' in script
     assert 'elements.detailValueModal.addEventListener("keydown"' in script
 
@@ -112,7 +113,7 @@ def test_admin_console_has_consistent_navigation_and_responsive_tooling():
         ".table-empty-state {",
     ):
         assert selector in style
-    assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in style
+    assert "grid-template-columns: repeat(6, minmax(0, 1fr));" in style
     assert "#calendarFilter .filter-grid {" in style
 
 
@@ -123,7 +124,7 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=6"' in index
-    assert 'href="/style.css?v=90"' in index
+    assert 'href="/style.css?v=95"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -263,8 +264,8 @@ def test_design_v16_back_to_top_and_skeleton_contract():
     assert 'class="back-to-top" href="#main" aria-label="返回顶部"' in index
     assert 'class="back-to-top" id="backToTop" href="#main" aria-label="返回顶部"' in admin
     for page in (index, admin):
-        assert 'href="/style.css?v=90"' in page
-    assert 'admin.js?v=31' in admin
+        assert 'href="/style.css?v=95"' in page
+    assert 'admin.js?v=32' in admin
     assert 'backToTop: $("backToTop")' in admin_script
     assert 'elements.backToTop.addEventListener("click"' in admin_script
     assert 'window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });' in admin_script
@@ -285,6 +286,36 @@ def test_design_v16_back_to_top_and_skeleton_contract():
     assert "animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;" in style
     assert "background-size: 220% 100%;" in app_style
     assert "animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;" in app_style
+
+
+def test_admin_mobile_header_and_dashboard_keep_first_use_context():
+    page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+
+    nav_end = page.index("</nav>")
+    actions_start = page.index('<div class="admin-head-actions">')
+    assert page.index('id="adminHealth"') < nav_end < actions_start
+    assert '<span id="adminHealthText" aria-live="polite">检测中</span>' in page
+    assert '<span class="admin-title-wide">教务查询控制台</span>' in page
+    assert '<span class="admin-title-compact" aria-hidden="true">控制台</span>' in page
+
+    for expected in (
+        ".admin-app .card {",
+        "inset 0 1px 0 var(--eduquery-glass-highlight)",
+        "@media (min-width: 1024px) {",
+        "position: sticky;",
+        "@media (max-width: 1023px) {",
+        "grid-template-columns: repeat(6, minmax(0, 1fr));",
+        "@media (max-width: 480px) {",
+        "@media (max-width: 360px) {",
+        "@media (min-width: 320px) and (max-width: 619px) {",
+        "@media (max-width: 359px) {",
+        ".notice-compose-grid {\n  align-items: start;",
+        '.dark .admin-health[data-state="danger"] {',
+        "background: var(--eduquery-destructive-soft-solid);",
+        ".dark .admin-app .admin-nav-btn:not(.active),",
+    ):
+        assert expected in style
 
 
 def test_public_notice_routes_are_proxied_by_frontend():
