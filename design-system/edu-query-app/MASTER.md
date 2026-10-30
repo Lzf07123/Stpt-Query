@@ -1,6 +1,6 @@
 # edu-query-app · 前端实现速览（MASTER）
 
-> 版本：V1.0 ｜ 日期：2026-08-25 ｜ 状态：首次设计落地快照
+> 版本：V1.1 ｜ 日期：2026-10-30 ｜ 状态：Li-Design V1.6 对齐快照
 > 代码事实优先：令牌源 `frontend/src/index.css`；运行时产物 `frontend/static/style.css`；
 > 品牌单点 `frontend/static/brand.js`。本文档与代码冲突时以代码为准并回写本文档。
 
@@ -50,13 +50,13 @@
 | 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪；查询/清空整行 7:3，控件统一 48px |
 | 结果卡 | `.project-card`（液态玻璃） | hover 上浮 3px、顶部主色细线展开 |
 | 结果表格 | `.table-shell`（规范表格组件） | 表头 surface-2、行 hover `bg-surface-2/60`；移动端横向滚动（表格 `min-width:480px`） |
-| 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | shimmer 1.6s 无缝循环 + 容器 240ms 淡入 |
+| 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | V1.6 shimmer 1.35s / 220% + 容器 240ms 淡入 |
 | 空状态 | `.empty-state` / `.empty-state-art` / `.empty-state-text` | SVG 小图 + 引导文案 |
 | 提示/状态 | `.notice` 变体、`.status`（ok/error）、`.status-dot` | 语义色只表状态 |
 | Toast | `.toast` / `.toast-success` / `.toast-error` / `.toast-info` | 进度条 + 进入/离开动画 |
 | 服务状态 | `.service-status` / `.status-seg` / `.status-bar` | 最近 100 次查询可用性 |
 | 页脚 | `.site-footer` / `.site-footer-inner` / `.filing-icon-placeholder` | 56px 单行、muted 链接、brand.js 驱动 |
-| 返回顶部 | `.back-to-top` | 纯锚点 44×44 |
+| 返回顶部 | `.back-to-top`（位于固定页脚内） | 44×44 锚点；后台保留视图哈希，自页脚上边缘再上移 12px，避免遮挡 |
 | 氛围层 | `.tech-ambience--soft` + `.tech-grid` | 工作台 soft；移动端停用/减量 |
 | 扫掠光束 | `.tech-beam` ×3（默认 / `--violet` / `--sage`） | 斜切 16° 透明渐变带 `translateX(-150%→560%)` 扫过并长停顿，10s、错峰 0.8/4.2/7.5s；soft 降浓度；<768px 隐藏 |
 
@@ -95,6 +95,9 @@
   `role=option` + `aria-selected` 同步，Escape 关闭后焦点回到触发器。
 - 叠层：`.card-halo` 提升 z-index，防止其 isolation 叠层上下文使页脚盖住下拉菜单；
   按钮涟漪统一用模板 `.btn-ripple`。
+- V1.6 返回顶部在查询页直接跳转 `#main`；后台的哈希已用于视图深链，因此由 `admin.js`
+  拦截锚点默认行为，仅平滑滚顶并恢复主区域焦点，保留 `#notices/#logs` 等当前视图。
+  两页按钮均作为 `.site-footer` 子项向上偏移，不覆盖版权或网络日历入口。
 - 文字居中：表单标签、输入值/占位符、下拉触发器与选项、提示条、复选框文案均居中；
   服务状态条未捕获格子以 `--eduquery-border` 显示占位。
 
@@ -119,7 +122,19 @@
 - 已发布/已下线通知支持“复制草稿”，复制仅进入编辑器，不直接写入存储；草稿编辑会同时恢复正文与级别。
   发布、存草稿和行操作在执行期间禁用按钮并设置 `aria-busy`，成功提示在表单重置后保留。
 
-## 5. 全量视觉规范验收（2026-08-25，计算样式逐值审计）
+## 5. 全量视觉规范验收（2026-10-30，Li-Design V1.6 复核对齐）
+
+**上游对齐结论**：`Li-Design` 本地与 `origin/main` 均位于 `a5cfcd5`，子模块无漂移；
+本轮按 V1.6 精确契约复核后，修复返回顶部缺失与骨架屏参数漂移。固定页脚、无瀑布流、
+无站内搜索与后台非卡片式导航属于已记录的项目适配，不复制无关组件。
+
+**V1.6 增量验收**：首页与后台均存在 `.back-to-top` 锚点；按钮 44×44、圆角 14px、
+玻璃 `blur(18px) saturate(150%)`，通过页脚相对偏移避开 57–85px 的固定页脚；
+后台点击不改变视图哈希，并恢复主区域焦点；
+查询骨架与搜索骨架统一为 `1.35s / 220% / 120%→-20%`；打印时隐藏按钮，
+`prefers-reduced-motion` 下收敛为单帧。
+
+### 5.1 历史全量视觉规范验收（2026-08-25，计算样式逐值审计）
 
 **Li-Design 视觉刷新 + 品牌方案 Pre-Delivery 清单：27/27 通过**（无头 Chrome 实测）：
 
@@ -276,7 +291,8 @@ GitHub 链接支持运行时覆盖——`brand-env.js` 由 nginx 官方 `/docker
   与无前缀 `--motion-*` / `--ease-*` 同值）。
 - 计算样式抽查（无头 Chrome，本地静态预览）：1440/769/390/320 四档
   `scrollWidth == innerWidth`；结果卡 `backdrop-filter: blur(18px) saturate(1.5)`、
-  圆角 20px；`.back-to-top` 桌面 20/24、移动 14/16；`.theme-toggle` 44×44；
+  圆角 20px；`.back-to-top` 使用页脚相对偏移（桌面右侧 20px、移动 14px、距页脚 12px）；
+  `.theme-toggle` 44×44；
   页脚链接 muted（浅 `rgb(100,115,108)`）；移动端氛围光点 `display:none`。
 - 明暗模式：浅 `html` 背景 `rgb(246,251,249)`、深 `rgb(58,63,69)`（D1 雾灰）。
 

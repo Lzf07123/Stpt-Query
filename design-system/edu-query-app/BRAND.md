@@ -1,8 +1,8 @@
 # edu-query-app · 项目品牌方案（BRAND）
 
-> 版本：V1.0 ｜ 日期：2026-08-25 ｜ 状态：首次设计定稿
-> 模板来源：`Li-Design` 子模块 `REUSABLE-BRAND-SCHEME.md`（V1.5.2）与
-> `REUSABLE-VISUAL-REFRESH-2026-08-24.md`（V1.0）。本文件是项目内方案事实；
+> 版本：V1.1 ｜ 日期：2026-10-30 ｜ 状态：Li-Design V1.6 对齐完成
+> 模板来源：`Li-Design` 子模块 `PROJECTS-IMPLEMENTATION-INDEX.md`（V1.6）、
+> `REUSABLE-BRAND-SCHEME.md`（V1.5.2）与 `REUSABLE-VISUAL-REFRESH-2026-08-24.md`。本文件是项目内方案事实；
 > 后续开发以本文件与落地代码为准，模板仓库仅作升级对照，不是运行时依赖。
 
 ## 1. 项目与定位
@@ -103,6 +103,12 @@ PDF 导出。
 - 不适用项（明确跳过，非偏离）：瀑布流/真实封面（无内容列表）、移动端二级菜单
   （单页无导航）、搜索索引骨架（无站内搜索）。查询页特有形态（表单行、分段选择、
   Markdown 结果渲染、服务状态条）在 `app.css` 以令牌实现并记录于 MASTER.md。
+- V1.6 返回顶部为 44×44 锚点，查询页与后台均常驻。由于本项目页脚固定于视口底部，按钮作为
+  页脚子项以 `bottom: calc(100% + 12px + env(safe-area-inset-bottom))` 定位于页脚上方。
+  查询页直接跳转 `#main`；后台哈希用于五个视图的深链，因此后台保留锚点语义并由既有
+  `admin.js` 拦截默认跳转，只滚到顶部并恢复 `#main` 焦点，避免丢失当前通知/日志视图。
+- V1.6 骨架屏统一为 `1.35s`、`220%` 背景画布、`background-position: 120% → -20%`；
+  查询结果骨架复用同一时序，保证加载质感与家族模板一致。
 - 外壳采用 `.page-shell` 外套 + 内层 `.wrap` 分层，外层未分层 padding 与内层令牌
   间距互不覆盖；`.wrap { overflow-x: clip }` 裁剪卡片辉光（`.card-halo::before`
   外扩 18px），保证四档视口无横向滚动。

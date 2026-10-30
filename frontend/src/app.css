@@ -3527,8 +3527,8 @@
 }
 
 /* 查询骨架屏：参考原版文档式结构（60% 标题条 + 46px 全宽行）。
-   高光使用主题语义令牌（primary-soft，明暗两套自动适配），
-   复用 skeleton-shimmer 无缝关键帧；容器淡入避免出现时突兀 */
+   高光使用玻璃层令牌，复用 Li-Design V1.6 的 1.35s / 220% shimmer；
+   容器淡入避免出现时突兀 */
 .skeleton {
   padding: 4px 2px;
   animation: skeleton-enter 240ms var(--ease-out) both;
@@ -3539,11 +3539,11 @@
   background: linear-gradient(
     90deg,
     var(--eduquery-surface-2) 20%,
-    var(--eduquery-primary-soft) 50%,
-    var(--eduquery-surface-2) 80%
+    var(--eduquery-glass-highlight) 48%,
+    var(--eduquery-surface-2) 76%
   );
-  background-size: 200% 100%;
-  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+  background-size: 220% 100%;
+  animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;
 }
 .skeleton-line {
   height: 18px;

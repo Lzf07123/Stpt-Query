@@ -19,7 +19,7 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=89">
+  <link rel="stylesheet" href="/style.css?v=90">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到后台内容</a>
@@ -530,9 +530,16 @@
     </div>
   </div>
 
-  <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
+  <footer class="site-footer">
+    <div class="site-footer-inner" id="siteFooterInner"></div>
+    <a class="back-to-top" id="backToTop" href="#main" aria-label="返回顶部">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>
+      </svg>
+    </a>
+  </footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=30" defer></script>
+  <script src="/admin.js?v=31" defer></script>
 </body>
 </html>

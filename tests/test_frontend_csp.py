@@ -78,7 +78,7 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=30" in page
+    assert "/admin.js?v=31" in page
 
 
 def test_admin_console_has_consistent_navigation_and_responsive_tooling():
@@ -123,7 +123,7 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=6"' in index
-    assert 'href="/style.css?v=89"' in index
+    assert 'href="/style.css?v=90"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -251,6 +251,40 @@ def test_admin_notice_management_ui_is_wired():
         ".notice-template-btn {",
     ):
         assert selector in style
+
+
+def test_design_v16_back_to_top_and_skeleton_contract():
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    admin_script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
+    app_style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+
+    assert 'class="back-to-top" href="#main" aria-label="返回顶部"' in index
+    assert 'class="back-to-top" id="backToTop" href="#main" aria-label="返回顶部"' in admin
+    for page in (index, admin):
+        assert 'href="/style.css?v=90"' in page
+    assert 'admin.js?v=31' in admin
+    assert 'backToTop: $("backToTop")' in admin_script
+    assert 'elements.backToTop.addEventListener("click"' in admin_script
+    assert 'window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });' in admin_script
+
+    for expected in (
+        ".back-to-top {",
+        "width: 44px;",
+        "height: 44px;",
+        "z-index: 55;",
+        "blur(var(--eduquery-glass-blur)) saturate(var(--eduquery-glass-saturate))",
+        ".site-footer > .back-to-top {",
+        "from { background-position: 120% 0; }",
+        "to { background-position: -20% 0; }",
+    ):
+        assert expected in style
+
+    assert "background-size: 220% 100%;" in style
+    assert "animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;" in style
+    assert "background-size: 220% 100%;" in app_style
+    assert "animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;" in app_style
 
 
 def test_public_notice_routes_are_proxied_by_frontend():

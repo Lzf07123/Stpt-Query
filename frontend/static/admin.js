@@ -35,7 +35,7 @@
     detailScopes: $("detailScopes"), relatedStatus: $("relatedStatus"), relatedBody: $("relatedBody"),
     detailJson: $("detailJson"),
     total: $("statTotal"), success: $("statSuccess"), failure: $("statFailure"),
-    source: $("statSource"), themeToggle: $("themeToggle"),
+    source: $("statSource"), themeToggle: $("themeToggle"), backToTop: $("backToTop"),
     memoryValue: $("memoryValue"), stackMemoryInfo: $("stackMemoryInfo"),
     stackMemoryTotal: $("stackMemoryTotal"), stackServices: $("stackServices"),
     trendMax: $("trendMax"), cpuChart: $("cpuChart"),
@@ -1642,6 +1642,17 @@
     elements.logout.addEventListener("click", function () {
       setToken(""); stopTimers(); location.reload();
     });
+    if (elements.backToTop) {
+      elements.backToTop.addEventListener("click", function (event) {
+        event.preventDefault();
+        var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });
+        window.requestAnimationFrame(function () {
+          var main = $("main");
+          if (main) main.focus({ preventScroll: true });
+        });
+      });
+    }
     if (elements.adminHealth) {
       elements.adminHealth.addEventListener("click", function () {
         setActiveTab("metrics", true, "push");
