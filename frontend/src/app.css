@@ -1298,23 +1298,167 @@
 }
 
 /* ---------- 后台通知管理 ---------- */
-.notice-create-grid {
+.notice-compose-grid {
   display: grid;
-  gap: 14px;
+  gap: 16px;
   grid-template-columns: minmax(0, 1fr);
 }
 
-.notice-content-label {
+.notice-editor {
   display: grid;
-  gap: 6px;
+  gap: 12px;
+  min-width: 0;
+}
+
+.notice-content-label {
   color: var(--eduquery-muted);
   font-size: .82rem;
   font-weight: 600;
 }
 
-.notice-content-label .input {
-  min-height: 44px;
+.notice-content-input {
+  line-height: 1.6;
+  min-height: 108px;
+  resize: vertical;
   text-align: left;
+}
+
+#noticeContent[aria-invalid="true"] {
+  border-color: var(--eduquery-destructive);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--eduquery-destructive) 12%, transparent);
+}
+
+.notice-editor-meta {
+  align-items: center;
+  color: var(--eduquery-muted);
+  display: flex;
+  font-size: .75rem;
+  gap: 12px;
+  justify-content: space-between;
+  line-height: 1.5;
+  margin-top: -6px;
+}
+
+.notice-editor-meta span:last-child {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.notice-editor-meta .is-near-limit {
+  color: var(--eduquery-warning);
+  font-weight: 700;
+}
+
+.notice-template-block {
+  display: grid;
+  gap: 7px;
+}
+
+.notice-template-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.notice-template-btn {
+  background: var(--eduquery-surface-2);
+  border: 1px solid var(--eduquery-border);
+  border-radius: 999px;
+  color: var(--eduquery-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 7px 13px;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.notice-template-btn:hover {
+  background: var(--eduquery-primary-soft);
+  border-color: color-mix(in srgb, var(--eduquery-primary) 30%, var(--eduquery-border));
+  color: var(--eduquery-primary);
+}
+
+.notice-level-control {
+  max-width: 360px;
+}
+
+.notice-preview {
+  align-content: start;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--eduquery-surface) 84%, transparent), transparent),
+    var(--eduquery-surface-2);
+  border: 1px solid var(--eduquery-border);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.notice-preview-head {
+  align-items: center;
+  color: var(--eduquery-muted);
+  display: flex;
+  font-size: .78rem;
+  font-weight: 700;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.notice-preview-window {
+  background: var(--eduquery-surface);
+  border: 1px solid var(--eduquery-border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.notice-preview-bar {
+  align-items: start;
+  background: color-mix(in srgb, var(--eduquery-primary-soft) 64%, var(--eduquery-surface));
+  border: 1px solid color-mix(in srgb, var(--eduquery-primary) 24%, var(--eduquery-border));
+  border-radius: 11px;
+  color: var(--eduquery-foreground);
+  display: grid;
+  font-size: .82rem;
+  font-weight: 600;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  line-height: 1.5;
+  min-height: 46px;
+  padding: 9px 10px;
+}
+
+.notice-preview-bar[data-level="warning"] {
+  background: color-mix(in srgb, var(--eduquery-warning-soft) 74%, var(--eduquery-surface));
+  border-color: color-mix(in srgb, var(--eduquery-warning) 30%, var(--eduquery-border));
+}
+
+.notice-preview-bar[data-empty="true"] {
+  color: var(--eduquery-muted);
+  font-weight: 500;
+}
+
+.notice-preview-bar svg {
+  color: var(--eduquery-primary);
+  height: 16px;
+  margin-top: 2px;
+  width: 16px;
+}
+
+.notice-preview-bar[data-level="warning"] svg {
+  color: var(--eduquery-warning);
+}
+
+.notice-preview > p {
+  color: var(--eduquery-muted);
+  font-size: .75rem;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .notice-create-actions {
@@ -1614,7 +1758,7 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-.notice-create-grid {
+.notice-compose-grid {
   align-items: end;
 }
 
@@ -2468,9 +2612,9 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .notice-create-grid,
+  .notice-compose-grid,
   #noticeFilter .filter-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 0.62fr);
+    grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr);
   }
 
   #calendarFilter .filter-grid {

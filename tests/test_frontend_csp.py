@@ -78,7 +78,7 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=28" in page
+    assert "/admin.js?v=30" in page
 
 
 def test_admin_console_has_consistent_navigation_and_responsive_tooling():
@@ -123,7 +123,7 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=6"' in index
-    assert 'href="/style.css?v=87"' in index
+    assert 'href="/style.css?v=89"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -230,11 +230,27 @@ def test_first_visit_theme_follows_system_preference():
 def test_admin_notice_management_ui_is_wired():
     admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
     script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
     assert 'id="tabNotices"' in admin
     assert 'id="noticesPanel"' in admin
+    assert 'id="noticeForm" novalidate' in admin
     assert 'noticeForm: $("noticeForm")' in script
     assert 'async function loadNotices()' in script
     assert 'request("notices?" + noticeQuery())' in script
+    assert 'id="noticePreviewBar"' in admin and 'id="noticeCounter"' in admin
+    assert 'aria-describedby="noticeContentHelp noticeCounter"' in admin
+    assert admin.count('data-notice-template="') == 3
+    assert "function updateNoticeComposer()" in script
+    assert "function applyNoticeTemplate(name)" in script
+    assert 'noticeActionButton("复制草稿", "duplicate", item.id)' in script
+    assert "elements.noticePublish.setAttribute(\"aria-busy\", \"true\")" in script
+    for selector in (
+        ".notice-compose-grid {",
+        ".notice-preview {",
+        ".notice-preview-bar {",
+        ".notice-template-btn {",
+    ):
+        assert selector in style
 
 
 def test_public_notice_routes_are_proxied_by_frontend():

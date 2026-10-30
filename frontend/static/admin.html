@@ -19,7 +19,7 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=87">
+  <link rel="stylesheet" href="/style.css?v=89">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到后台内容</a>
@@ -199,20 +199,46 @@
             <p>发布全站公告、维护上下线状态，并追踪历史内容。</p>
           </div>
         </div>
-        <form class="card filter-card" id="noticeForm">
-          <div class="section-caption">新建通知</div>
-          <div class="notice-create-grid">
-            <label class="notice-content-label">通知内容
-              <input class="input" id="noticeContent" maxlength="120" required placeholder="例如：本周六 09:00 系统维护">
-            </label>
-            <div class="filter-control">
-              <span class="field-label">级别</span>
-              <div class="segmented notice-level" aria-label="通知级别">
-                <button type="button" class="seg-btn active" data-level="info">普通</button>
-                <button type="button" class="seg-btn" data-level="warning">重要</button>
+        <form class="card filter-card" id="noticeForm" novalidate>
+          <div class="section-caption" id="noticeComposeTitle">新建通知</div>
+          <div class="notice-compose-grid">
+            <div class="notice-editor">
+              <label class="notice-content-label" for="noticeContent">通知内容</label>
+              <textarea class="input notice-content-input" id="noticeContent" maxlength="120" rows="3" required aria-describedby="noticeContentHelp noticeCounter" placeholder="例如：本周六 09:00 系统维护"></textarea>
+              <div class="notice-editor-meta">
+                <span id="noticeContentHelp">单行纯文本，换行会合并为空格。</span>
+                <span id="noticeCounter">0 / 120</span>
               </div>
-              <input type="hidden" id="noticeLevel" value="info">
+              <div class="notice-template-block">
+                <span class="field-label">常用模板</span>
+                <div class="notice-template-actions">
+                  <button type="button" class="notice-template-btn" data-notice-template="maintenance">维护通知</button>
+                  <button type="button" class="notice-template-btn" data-notice-template="restored">恢复通知</button>
+                  <button type="button" class="notice-template-btn" data-notice-template="reminder">成绩提醒</button>
+                </div>
+              </div>
+              <div class="filter-control notice-level-control">
+                <span class="field-label">级别</span>
+                <div class="segmented notice-level" role="group" aria-label="通知级别">
+                  <button type="button" class="seg-btn active" data-level="info" aria-pressed="true">普通</button>
+                  <button type="button" class="seg-btn" data-level="warning" aria-pressed="false">重要</button>
+                </div>
+                <input type="hidden" id="noticeLevel" value="info">
+              </div>
             </div>
+            <aside class="notice-preview" aria-labelledby="noticePreviewTitle">
+              <div class="notice-preview-head">
+                <span id="noticePreviewTitle">首页预览</span>
+                <span class="badge badge-primary" id="noticePreviewLevel">普通</span>
+              </div>
+              <div class="notice-preview-window">
+                <div class="notice-preview-bar" id="noticePreviewBar" data-level="info">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>
+                  <span id="noticePreviewText">通知内容将在这里预览</span>
+                </div>
+              </div>
+              <p>发布后会显示在首页标题下方；重要通知使用高对比提示样式。</p>
+            </aside>
           </div>
           <div class="notice-create-actions">
             <button class="btn btn-primary" type="submit" id="noticePublish">发布</button>
@@ -507,6 +533,6 @@
   <footer class="site-footer"><div class="site-footer-inner" id="siteFooterInner"></div></footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=28" defer></script>
+  <script src="/admin.js?v=30" defer></script>
 </body>
 </html>

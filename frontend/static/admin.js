@@ -42,6 +42,9 @@
     trendPeak: $("trendPeak"), trendAverage: $("trendAverage"), trendSamples: $("trendSamples"),
     metricsUpdated: $("metricsUpdated"), metricsNotice: $("metricsNotice"), metricsRefresh: $("metricsRefresh"),
     noticeForm: $("noticeForm"), noticeContent: $("noticeContent"), noticeLevel: $("noticeLevel"),
+    noticeComposeTitle: $("noticeComposeTitle"), noticeCounter: $("noticeCounter"),
+    noticePreviewText: $("noticePreviewText"), noticePreviewBar: $("noticePreviewBar"),
+    noticePreviewLevel: $("noticePreviewLevel"),
     noticePublish: $("noticePublish"), noticeSaveDraft: $("noticeSaveDraft"),
     noticeCancelEdit: $("noticeCancelEdit"), noticeMessage: $("noticeMessage"),
     noticeFilter: $("noticeFilter"), noticeKeyword: $("noticeKeyword"),
@@ -77,7 +80,7 @@
     logs: [], offset: 0, autoLogsTimer: null, autoMetricsTimer: null,
     detail: null, detailScope: "", relatedLogs: [], relatedRequest: 0,
     metricHistory: [], metricsLoading: false,
-    noticeOffset: 0, noticeLimit: 20, noticeEditingId: "",
+    noticeOffset: 0, noticeLimit: 20, noticeEditingId: "", noticeItems: [],
     calibration: null
   };
 
@@ -372,20 +375,77 @@
     elements.noticeMessage.classList.toggle("notice-info", state !== "error");
   }
 
+  var NOTICE_TEMPLATES = {
+    maintenance: {
+      level: "warning",
+      content: "系统计划于本周六 09:00–10:00 维护，期间成绩与课表查询可能暂时不可用。"
+    },
+    restored: {
+      level: "info",
+      content: "系统维护已完成，成绩与课表查询服务现已恢复。"
+    },
+    reminder: {
+      level: "info",
+      content: "请及时核对本学期成绩；如发现异常，请联系教务处。"
+    }
+  };
+
+  function normalizedNoticeContent() {
+    return String(elements.noticeContent.value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function updateNoticeComposer() {
+    var content = normalizedNoticeContent();
+    var isWarning = elements.noticeLevel.value === "warning";
+    if (content) elements.noticeContent.removeAttribute("aria-invalid");
+    if (elements.noticeCounter) {
+      elements.noticeCounter.textContent = content.length + " / 120";
+      elements.noticeCounter.classList.toggle("is-near-limit", content.length >= 100);
+    }
+    if (elements.noticePreviewText) {
+      elements.noticePreviewText.textContent = content || "通知内容将在这里预览";
+    }
+    if (elements.noticePreviewBar) {
+      elements.noticePreviewBar.dataset.level = isWarning ? "warning" : "info";
+      elements.noticePreviewBar.dataset.empty = content ? "false" : "true";
+    }
+    if (elements.noticePreviewLevel) {
+      elements.noticePreviewLevel.textContent = isWarning ? "重要" : "普通";
+      elements.noticePreviewLevel.classList.toggle("badge-warning", isWarning);
+      elements.noticePreviewLevel.classList.toggle("badge-primary", !isWarning);
+    }
+  }
+
   function setNoticeLevel(level) {
     elements.noticeLevel.value = level;
     document.querySelectorAll(".notice-level .seg-btn").forEach(function (button) {
-      button.classList.toggle("active", button.dataset.level === level);
+      var active = button.dataset.level === level;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
     });
+    updateNoticeComposer();
+  }
+
+  function applyNoticeTemplate(name) {
+    var template = NOTICE_TEMPLATES[name];
+    if (!template) return;
+    elements.noticeContent.value = template.content;
+    setNoticeLevel(template.level);
+    updateNoticeComposer();
+    elements.noticeContent.focus();
+    showNoticeMessage("已套用模板，可继续修改后发布", "info");
   }
 
   function resetNoticeForm() {
     state.noticeEditingId = "";
     elements.noticeContent.value = "";
     setNoticeLevel("info");
+    if (elements.noticeComposeTitle) elements.noticeComposeTitle.textContent = "新建通知";
     elements.noticePublish.textContent = "发布";
     elements.noticeSaveDraft.textContent = "存草稿";
+    elements.noticeCancelEdit.textContent = "取消编辑";
     elements.noticeCancelEdit.classList.add("hidden");
+    updateNoticeComposer();
     showNoticeMessage("");
   }
 
@@ -418,6 +478,7 @@
 
   function renderNotices(payload) {
     var items = payload.notices || [];
+    state.noticeItems = items;
     elements.noticesBody.innerHTML = "";
     if (!items.length) {
       elements.noticesBody.innerHTML = '<tr><td colspan="7" class="empty-cell">' +
@@ -435,9 +496,11 @@
             noticeActionButton("发布", "publish", item.id) +
             noticeActionButton("删除", "delete", item.id, true);
         } else if (item.status === "active") {
-          actions = noticeActionButton("下线", "archive", item.id);
+          actions = noticeActionButton("复制草稿", "duplicate", item.id) +
+            noticeActionButton("下线", "archive", item.id);
         } else {
-          actions = noticeActionButton("重新上线", "publish", item.id);
+          actions = noticeActionButton("复制草稿", "duplicate", item.id) +
+            noticeActionButton("重新上线", "publish", item.id);
         }
         row.innerHTML =
           '<td class="notice-content">' + escapeHtml(item.content) + '</td>' +
@@ -471,41 +534,98 @@
   }
 
   async function submitNotice(status) {
-    var content = elements.noticeContent.value.trim();
+    if (elements.noticePublish.disabled || elements.noticeSaveDraft.disabled) return;
+    elements.noticeContent.removeAttribute("aria-invalid");
+    var content = normalizedNoticeContent();
     if (!content) {
+      elements.noticeContent.setAttribute("aria-invalid", "true");
       showNoticeMessage("请输入通知内容", "error");
+      elements.noticeContent.focus();
+      return;
+    }
+    if (content.length > 120) {
+      elements.noticeContent.setAttribute("aria-invalid", "true");
+      showNoticeMessage("通知内容不能超过 120 个字符", "error");
+      elements.noticeContent.focus();
       return;
     }
     var level = elements.noticeLevel.value;
-    if (state.noticeEditingId) {
-      await request("notices/" + state.noticeEditingId, {
-        method: "PATCH",
-        body: { content: content, level: level, status: status }
-      });
-      showNoticeMessage(status === "active" ? "修订已发布" : "草稿已保存");
-    } else {
-      await request("notices", {
-        method: "POST",
-        body: { content: content, level: level, status: status }
-      });
-      showNoticeMessage(status === "active" ? "通知已发布" : "草稿已创建");
+    var publishLabel = elements.noticePublish.textContent;
+    var draftLabel = elements.noticeSaveDraft.textContent;
+    var completed = false;
+    var successMessage = "";
+    elements.noticePublish.disabled = true;
+    elements.noticeSaveDraft.disabled = true;
+    elements.noticePublish.setAttribute("aria-busy", "true");
+    elements.noticeSaveDraft.setAttribute("aria-busy", "true");
+    elements.noticePublish.textContent = status === "active" ? "发布中…" : publishLabel;
+    elements.noticeSaveDraft.textContent = status === "draft" ? "保存中…" : draftLabel;
+    try {
+      if (state.noticeEditingId) {
+        await request("notices/" + state.noticeEditingId, {
+          method: "PATCH",
+          body: { content: content, level: level, status: status }
+        });
+        successMessage = status === "active" ? "修订已发布" : "草稿已保存";
+      } else {
+        await request("notices", {
+          method: "POST",
+          body: { content: content, level: level, status: status }
+        });
+        successMessage = status === "active" ? "通知已发布" : "草稿已创建";
+      }
+      completed = true;
+      resetNoticeForm();
+      state.noticeOffset = 0;
+      await loadNotices();
+      showNoticeMessage(successMessage);
+    } finally {
+      elements.noticePublish.disabled = false;
+      elements.noticeSaveDraft.disabled = false;
+      elements.noticePublish.removeAttribute("aria-busy");
+      elements.noticeSaveDraft.removeAttribute("aria-busy");
+      if (!completed) {
+        elements.noticePublish.textContent = publishLabel;
+        elements.noticeSaveDraft.textContent = draftLabel;
+      }
     }
-    resetNoticeForm();
-    state.noticeOffset = 0;
-    await loadNotices();
   }
 
   async function noticeAction(action, id) {
+    var scrollBehavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto" : "smooth";
     if (action === "edit") {
-      var row = elements.noticesBody.querySelector('[data-action="edit"][data-id="' + id + '"]');
-      var content = row ? row.closest("tr").querySelector(".notice-content").textContent : "";
+      var editItem = state.noticeItems.find(function (item) { return item.id === id; });
+      if (!editItem) return;
       state.noticeEditingId = id;
-      elements.noticeContent.value = content;
-      elements.noticePublish.textContent = "发布修订";
+      elements.noticeContent.value = editItem.content;
+      setNoticeLevel(editItem.level || "info");
+      elements.noticePublish.textContent = "保存并发布";
       elements.noticeSaveDraft.textContent = "保存草稿";
+      elements.noticeCancelEdit.textContent = "取消编辑";
       elements.noticeCancelEdit.classList.remove("hidden");
+      if (elements.noticeComposeTitle) elements.noticeComposeTitle.textContent = "编辑草稿";
+      updateNoticeComposer();
+      elements.noticeForm.scrollIntoView({ behavior: scrollBehavior, block: "start" });
       elements.noticeContent.focus();
       showNoticeMessage("正在编辑草稿");
+      return;
+    }
+    if (action === "duplicate") {
+      var source = state.noticeItems.find(function (item) { return item.id === id; });
+      if (!source) return;
+      state.noticeEditingId = "";
+      elements.noticeContent.value = source.content;
+      setNoticeLevel(source.level || "info");
+      elements.noticePublish.textContent = "发布副本";
+      elements.noticeSaveDraft.textContent = "保存为新草稿";
+      elements.noticeCancelEdit.textContent = "取消复制";
+      elements.noticeCancelEdit.classList.remove("hidden");
+      if (elements.noticeComposeTitle) elements.noticeComposeTitle.textContent = "复制为新草稿";
+      updateNoticeComposer();
+      elements.noticeForm.scrollIntoView({ behavior: scrollBehavior, block: "start" });
+      elements.noticeContent.focus();
+      showNoticeMessage("已复制内容，保存草稿后才会创建副本");
       return;
     }
     if (action === "delete") {
@@ -1612,6 +1732,12 @@
     document.querySelectorAll(".notice-level .seg-btn").forEach(function (button) {
       button.addEventListener("click", function () { setNoticeLevel(button.dataset.level); });
     });
+    elements.noticeContent.addEventListener("input", updateNoticeComposer);
+    document.querySelectorAll("[data-notice-template]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        applyNoticeTemplate(button.dataset.noticeTemplate);
+      });
+    });
     document.querySelectorAll(".notice-status-filter .seg-btn").forEach(function (button) {
       button.addEventListener("click", function () {
         elements.noticeStatusFilter.value = button.dataset.status || "";
@@ -1648,9 +1774,11 @@
     });
     elements.noticesBody.addEventListener("click", function (event) {
       var button = event.target.closest("button[data-action]");
-      if (!button) return;
+      if (!button || button.disabled) return;
+      button.disabled = true;
       noticeAction(button.dataset.action, button.dataset.id)
-        .catch(function (error) { showNoticeMessage(error.message, "error"); });
+        .catch(function (error) { showNoticeMessage(error.message, "error"); })
+        .finally(function () { button.disabled = false; });
     });
     elements.filterToggle.addEventListener("click", function () {
       var expanded = elements.filterToggle.getAttribute("aria-expanded") === "true";
@@ -1725,7 +1853,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    setupTheme(); setupCustomSelects(); bindEvents();
+    setupTheme(); setupCustomSelects(); bindEvents(); updateNoticeComposer();
     if (window.ResizeObserver) {
       state.chartObserver = new ResizeObserver(function () {
         window.requestAnimationFrame(function () { drawCpu(state.metricHistory); });
