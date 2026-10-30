@@ -83,8 +83,8 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
-    assert 'src="/notice.js?v=5"' in index
-    assert 'href="/style.css?v=77"' in index
+    assert 'src="/notice.js?v=6"' in index
+    assert 'href="/style.css?v=79"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -95,6 +95,35 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert ".notice-history-panel .modal-footer" in style
     assert 'translateX(var(--notice-start, 100%))' in style
     assert "transform: translateX(-100%);" in style
+
+
+def test_query_first_use_controls_are_accessible_and_isolated():
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert '<form id="queryForm"' in index and "novalidate" in index
+    assert 'class="query-kind-grid" role="group" aria-labelledby="queryKindLabel"' in index
+    assert index.count('class="query-choice"') == 2
+    assert '<a class="skip-link" href="#main">' in index
+    assert '<main class="page-shell" id="main" tabindex="-1">' in index
+    assert 'id="username" name="username"' in index
+    assert 'id="password" name="password"' in index
+    assert 'aria-describedby="usernameHelp usernameError"' in index
+    assert 'aria-describedby="passwordHelp passwordError"' in index
+    assert 'id="historySection"' in index
+    assert 'class="full history-row hidden"' in index
+    assert 'id="resultTitle" tabindex="-1"' in index
+    assert 'resultTitle.focus({ preventScroll: true })' in index
+    assert 'progressSteps.style.setProperty("--step-font-size", "12px")' in index
+
+    # 查询类型与日历刷新间隔不能共用事件选择器，否则切换日历时会误改查询内容。
+    assert 'document.querySelectorAll(".query-choice").forEach' in index
+    assert 'document.querySelectorAll(".seg-btn").forEach' not in index
+
+
+def test_first_visit_theme_follows_system_preference():
+    head_script = _inline_scripts("index.html")[0]
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in head_script
+    assert 't = "dark";' not in head_script
 
 
 def test_admin_notice_management_ui_is_wired():

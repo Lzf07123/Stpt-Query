@@ -268,6 +268,15 @@
     @apply bg-background font-sans text-foreground antialiased;
   }
 
+  .skip-link {
+    @apply fixed left-3 top-3 z-[100] rounded-lg border border-primary bg-surface px-4 py-3 text-sm font-semibold text-foreground shadow-lg;
+    transform: translateY(calc(-100% - 24px));
+    transition: transform var(--motion-fast) var(--ease-out);
+  }
+  .skip-link:focus {
+    transform: translateY(0);
+  }
+
   ::selection {
     @apply bg-primary/20 text-foreground;
   }
@@ -633,7 +642,7 @@
     max-width: 100%;
     padding-inline: 2px;
     color: var(--eduquery-muted);
-    font-size: var(--step-font-size, 11px);
+    font-size: var(--step-font-size, 12px);
     line-height: 1.2;
     white-space: nowrap;
     text-align: center;
@@ -921,7 +930,7 @@
     @apply mt-3 text-sm text-muted;
   }
   .modal-close {
-    @apply absolute right-3 top-3 rounded-md p-1 text-muted transition-colors hover:bg-surface-2 hover:text-foreground;
+    @apply absolute right-1 top-1 grid h-11 w-11 place-items-center rounded-md text-lg text-muted transition-colors hover:bg-surface-2 hover:text-foreground;
   }
   .modal-footer {
     @apply flex flex-wrap items-center justify-end gap-2 border-t border-border bg-surface-2/60 px-5 py-3.5 sm:px-6;
@@ -1470,7 +1479,11 @@
   }
   /* 页脚功能入口：与页脚链接同一视觉语言（muted → hover foreground） */
   .site-footer-action {
-    @apply inline-flex shrink-0 cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-xs text-muted transition-colors duration-200 hover:text-foreground focus-visible:text-foreground;
+    @apply inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1 border-0 bg-transparent px-2 py-0 text-xs text-muted transition-colors duration-200 hover:text-foreground focus-visible:text-foreground;
+  }
+  .site-footer-action svg {
+    height: 14px;
+    width: 14px;
   }
   .site-footer a {
     @apply text-muted transition-colors duration-200 hover:text-foreground;

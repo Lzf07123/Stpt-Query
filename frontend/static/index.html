@@ -14,19 +14,22 @@
       var t = null;
       try { t = localStorage.getItem("eduquery-theme"); } catch (e) {}
       if (t !== "dark" && t !== "light") {
-        t = "dark";
+        t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
       }
       document.documentElement.classList.toggle("dark", t === "dark");
       var meta = document.querySelector('meta[name="theme-color"]');
       if (meta) meta.setAttribute("content", t === "dark" ? "#3A3F45" : "#F6FBF9");
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=77">
+  <link rel="stylesheet" href="/style.css?v=79">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/notice.js?v=5" defer></script>
+  <script src="/notice.js?v=6" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">跳到查询区域</a>
   <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
     <div class="tech-grid"></div>
     <span class="tech-beam"></span>
@@ -39,7 +42,7 @@
     <span class="tech-dot tech-dot-5"></span>
     <span class="tech-dot tech-dot-6"></span>
   </div>
-  <div class="page-shell" id="main">
+  <main class="page-shell" id="main" tabindex="-1">
     <div class="wrap">
     <div class="head">
       <button type="button" id="themeToggle" class="theme-toggle icon-btn" aria-label="切换主题">
@@ -64,38 +67,81 @@
       </div>
     </div>
     <div class="layout">
-      <form id="queryForm" class="card card-signature card-halo">
+      <form id="queryForm" class="card card-signature card-halo" novalidate>
         <div id="healthStatus" class="health-strip" role="status" aria-live="polite">
           <span class="health-pill unknown"><i class="health-dot"></i><span>本站 · 检测中</span></span>
           <span class="health-pill unknown"><i class="health-dot"></i><span>查询代理 · 检测中</span></span>
           <span class="health-pill unknown"><i class="health-dot"></i><span>学校服务 · 检测中</span></span>
         </div>
+        <div class="form-intro">
+          <p class="form-intro-copy">
+            <span class="form-eyebrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>
+              安全查询
+            </span>
+            先选择想查看的内容，再输入教务系统账号。
+          </p>
+          <span class="privacy-pill">页面不保存密码</span>
+        </div>
+        <div class="query-kind-block">
+          <div class="form-section-heading">
+            <span id="queryKindLabel">查询内容</span>
+            <span>默认课表</span>
+          </div>
+          <div class="query-kind-grid" role="group" aria-labelledby="queryKindLabel">
+            <button type="button" class="query-choice" data-option="课表" aria-pressed="true">
+              <span class="query-choice-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"></path></svg>
+              </span>
+              <span class="query-choice-copy">
+                <strong>课表</strong>
+                <small>课程时间与教室</small>
+              </span>
+            </button>
+            <button type="button" class="query-choice" data-option="成绩" aria-pressed="false">
+              <span class="query-choice-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"></path><path d="m4 6 6-3 6 5 5-4"></path></svg>
+              </span>
+              <span class="query-choice-copy">
+                <strong>成绩</strong>
+                <small>分数、绩点与分析</small>
+              </span>
+            </button>
+          </div>
+          <input type="hidden" id="option" value="课表">
+        </div>
+        <div class="form-section-heading">
+          <span>登录信息</span>
+          <span>与教务系统一致</span>
+        </div>
         <div class="row">
           <div>
             <label for="username">学号</label>
-            <input id="username" class="input" required placeholder="10 位数字学号" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off">
+            <input id="username" name="username" class="input" required placeholder="10 位数字学号" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="username" enterkeyhint="next" aria-describedby="usernameHelp usernameError">
+            <p class="field-help" id="usernameHelp">与学校统一身份认证账号一致</p>
+            <p class="field-error hidden" id="usernameError" role="alert"></p>
           </div>
           <div>
             <label for="password">密码</label>
             <div class="input-wrap">
-              <input id="password" class="input" type="password" required placeholder="教务系统密码" autocomplete="current-password">
-              <button type="button" class="show-btn" id="togglePassword">显示</button>
+              <input id="password" name="password" class="input" type="password" required placeholder="教务系统密码" autocomplete="current-password" enterkeyhint="go" aria-describedby="passwordHelp passwordError">
+              <button type="button" class="show-btn" id="togglePassword" aria-controls="password" aria-pressed="false">显示</button>
             </div>
+            <p class="field-help" id="passwordHelp">仅用于本次查询，页面不保存</p>
+            <p class="field-error hidden" id="passwordError" role="alert"></p>
           </div>
+        </div>
+        <div class="form-section-heading">
+          <span>查询范围</span>
+          <span id="queryScopeHint">当前学期 · 全部周次</span>
+        </div>
+        <div class="row query-scope-row">
           <div>
-            <label for="option">查询项目</label>
-            <div class="segmented" role="tablist" aria-label="查询项目">
-              <button type="button" class="seg-btn" data-option="课表">课表</button>
-              <button type="button" class="seg-btn" data-option="成绩">成绩</button>
-            </div>
-            <input type="hidden" id="option" value="课表">
-          </div>
-          <div>
-            <label for="semesters">学期（默认当前学期）</label>
+            <div class="field-label" id="semestersLabel">学期</div>
             <div class="dropdown" id="semestersDropdown">
-              <button type="button" class="dropdown-trigger" id="semestersTrigger" aria-haspopup="listbox" aria-expanded="false">默认当前学期</button>
+              <button type="button" class="dropdown-trigger" id="semestersTrigger" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="semestersLabel semestersTrigger">当前学期（自动）</button>
               <div class="dropdown-menu hidden" id="semestersMenu" role="listbox">
-                <button type="button" class="dropdown-item" data-value="">默认当前学期</button>
+                <button type="button" class="dropdown-item" data-value="">当前学期（自动）</button>
                 <button type="button" class="dropdown-item" data-value="2027-2028-2">2027-2028-2</button>
                 <button type="button" class="dropdown-item" data-value="2027-2028-1">2027-2028-1</button>
                 <button type="button" class="dropdown-item" data-value="2026-2027-2">2026-2027-2</button>
@@ -109,11 +155,11 @@
             </div>
           </div>
           <div id="weeksField">
-            <label for="weeks">周数（默认全部）</label>
+            <div class="field-label" id="weeksLabel">周数</div>
             <div class="dropdown" id="weeksDropdown">
-              <button type="button" class="dropdown-trigger" id="weeksTrigger" aria-haspopup="listbox" aria-expanded="false">全部</button>
+              <button type="button" class="dropdown-trigger" id="weeksTrigger" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="weeksLabel weeksTrigger">全部周次</button>
               <div class="dropdown-menu hidden" id="weeksMenu" role="listbox">
-                <button type="button" class="dropdown-item" data-value="all">全部</button>
+                <button type="button" class="dropdown-item" data-value="all">全部周次</button>
                 <button type="button" class="dropdown-item" data-value="1-5">1-5 周</button>
                 <button type="button" class="dropdown-item" data-value="6-10">6-10 周</button>
                 <button type="button" class="dropdown-item" data-value="11-15">11-15 周</button>
@@ -145,18 +191,18 @@
           <div class="full checks" id="gradeOptions">
             <label class="field-check">
               <input type="checkbox" id="md2pdf">
-              仅生成 PDF 文档（仅查询成绩时适用，移动端存在兼容问题）
+              同时生成 PDF 文档
             </label>
             <label class="field-check">
               <input type="checkbox" id="check">
-              分析成绩（查询成绩时生效，输出时间可能延长）
+              附加成绩分析（可能需要更久）
             </label>
           </div>
-          <div class="full history-row">
+          <div class="full history-row hidden" id="historySection">
             <div class="history-column">
-              <label for="historyTrigger">历史查询结果</label>
+              <div class="field-label" id="historyLabel">本机最近查询</div>
               <div class="dropdown" id="historyDropdown">
-                <button type="button" class="dropdown-trigger" id="historyTrigger" aria-haspopup="listbox" aria-expanded="false">— 选择历史查询结果 —</button>
+                <button type="button" class="dropdown-trigger" id="historyTrigger" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="historyLabel historyTrigger">— 选择历史查询结果 —</button>
                 <div class="dropdown-menu hidden" id="historyMenu" role="listbox"></div>
               </div>
             </div>
@@ -166,16 +212,16 @@
         <div class="actions">
           <button class="btn btn-primary" type="submit" id="submitBtn">
             <span class="btn-spinner hidden" id="submitSpinner"></span>
-            <span id="submitBtnText">查询</span>
+            <span id="submitBtnText">查询课表</span>
           </button>
-          <button class="btn btn-ghost" type="button" id="resetBtn">清空</button>
+          <button class="btn btn-ghost" type="button" id="resetBtn">重置</button>
         </div>
         <div id="status" class="notice hidden" aria-live="polite"></div>
       </form>
 
-      <div id="resultCard" class="project-card hidden" aria-live="polite">
+      <div id="resultCard" class="project-card hidden">
         <div class="result-head">
-          <h2 class="section-title">返回结果</h2>
+          <h2 class="section-title" id="resultTitle" tabindex="-1">查询结果</h2>
           <button type="button" id="backToQuery" class="btn btn-primary result-back">
             <span>返回查询</span>
           </button>
@@ -208,14 +254,15 @@
     <div id="serviceStatus" class="service-status hidden"></div>
     <div id="statusTooltip" class="status-tooltip hidden"></div>
     </div>
-  </div>
+  </main>
 
   <footer class="site-footer">
     <div class="site-footer-row">
       <div class="site-footer-inner" id="siteFooterInner"></div>
       <span aria-hidden="true">·</span>
       <button type="button" class="site-footer-action" id="calendarEntry" aria-haspopup="dialog">
-        <span aria-hidden="true">📅</span> 网络日历订阅
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"></path></svg>
+        网络日历订阅
       </button>
     </div>
   </footer>
@@ -336,25 +383,40 @@
     const themeToggle = document.getElementById("themeToggle");
     const SUN_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
     const MOON_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-    function applyTheme(theme) {
+    function applyTheme(theme, persist) {
       document.documentElement.classList.toggle("dark", theme === "dark");
       themeToggle.innerHTML = theme === "dark" ? SUN_ICON : MOON_ICON;
+      themeToggle.setAttribute("aria-label", theme === "dark" ? "切换到浅色主题" : "切换到深色主题");
       var bg = getComputedStyle(document.documentElement).getPropertyValue("--eduquery-bg").trim();
       var meta = document.querySelector('meta[name="theme-color"]');
       if (meta && bg) meta.setAttribute("content", bg);
-      try { localStorage.setItem("eduquery-theme", theme); } catch (e) {}
+      if (persist) {
+        try { localStorage.setItem("eduquery-theme", theme); } catch (e) {}
+      }
     }
     themeToggle.addEventListener("click", function () {
-      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark");
+      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark", true);
     });
-    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light", false);
 
     const form = document.getElementById("queryForm");
     const usernameInput = document.getElementById("username");
+    const usernameError = document.getElementById("usernameError");
+    const passwordError = document.getElementById("passwordError");
     usernameInput.addEventListener("input", function () {
       this.value = this.value.replace(/\D/g, "").slice(0, 10);
+      if (!usernameError.classList.contains("hidden")) clearFieldError(usernameInput, usernameError);
+    });
+    usernameInput.addEventListener("blur", function () {
+      if (this.value) validateUsernameField(false);
     });
     const passwordInput = document.getElementById("password");
+    passwordInput.addEventListener("input", function () {
+      if (!passwordError.classList.contains("hidden")) clearFieldError(passwordInput, passwordError);
+    });
+    passwordInput.addEventListener("blur", function () {
+      if (this.value) validatePasswordField(false);
+    });
     const optionInput = document.getElementById("option");
     const semestersInput = document.getElementById("semesters");
     const weeksInput = document.getElementById("weeks");
@@ -374,6 +436,7 @@
     const runIdCopyState = document.getElementById("runIdCopyState");
     const resultHtml = document.getElementById("resultHtml");
     const resultBox = document.getElementById("result");
+    const resultTitle = document.getElementById("resultTitle");
     const layout = document.querySelector(".layout");
     const serviceStatusBox = document.getElementById("serviceStatus");
     const statusTooltip = document.getElementById("statusTooltip");
@@ -384,6 +447,7 @@
     const historyTrigger = document.getElementById("historyTrigger");
     const historyMenu = document.getElementById("historyMenu");
     const historyClear = document.getElementById("historyClear");
+    const historySection = document.getElementById("historySection");
 
     // Cookie 工具：历史查询记录（不含密码）
     const HISTORY_KEY = "dify_query_results_v3";
@@ -514,6 +578,8 @@
 
     function renderHistorySelect() {
       const arr = loadHistory();
+      historySection.classList.toggle("hidden", arr.length === 0);
+      historyClear.disabled = arr.length === 0;
       const current = historyTrigger.getAttribute("data-label") || "";
       historyMenu.innerHTML = arr.map(function (r, i) {
         const label = recordLabel(r);
@@ -530,6 +596,7 @@
 
     function displaySavedRecord(rec) {
       if (!rec) return;
+      resultTitle.textContent = rec.option ? rec.option + "查询结果" : "查询结果";
       clearLockTimer();
       clearTimeout(resultTimer);
       skeleton.hidden = true;
@@ -559,6 +626,7 @@
         }
         resultCard.classList.remove("fade-out");
         resultCard.classList.add("fade-in");
+        resultTitle.focus({ preventScroll: true });
       }, 180);
     }
 
@@ -666,6 +734,8 @@
       renderHistorySelect();
       historyTrigger.textContent = "— 选择历史查询结果 —";
       historyTrigger.removeAttribute("data-label");
+      historySection.classList.add("hidden");
+      historyClear.disabled = true;
       showToast("success", "历史记录已清空");
     });
 
@@ -675,13 +745,73 @@
       statusBox.classList.add(ok ? "notice-success" : "notice-error");
     }
 
+    function setFieldError(input, errorNode, message) {
+      input.setAttribute("aria-invalid", "true");
+      input.classList.add("input-invalid");
+      errorNode.textContent = message;
+      errorNode.classList.remove("hidden");
+    }
+
+    function clearFieldError(input, errorNode) {
+      input.removeAttribute("aria-invalid");
+      input.classList.remove("input-invalid");
+      errorNode.textContent = "";
+      errorNode.classList.add("hidden");
+    }
+
+    function validateUsernameField(showRequired) {
+      const value = usernameInput.value.trim();
+      let message = "";
+      if (!value && showRequired) message = "请输入 10 位数字学号";
+      else if (value && !/^\d{10}$/.test(value)) message = "学号应为 10 位数字";
+      if (message) {
+        setFieldError(usernameInput, usernameError, message);
+        return false;
+      }
+      clearFieldError(usernameInput, usernameError);
+      return true;
+    }
+
+    function validatePasswordField(showRequired) {
+      if (!passwordInput.value && showRequired) {
+        setFieldError(passwordInput, passwordError, "请输入教务系统密码");
+        return false;
+      }
+      clearFieldError(passwordInput, passwordError);
+      return true;
+    }
+
+    function validateCredentials() {
+      const usernameValid = validateUsernameField(true);
+      const passwordValid = validatePasswordField(true);
+      if (!usernameValid) {
+        usernameInput.focus();
+        return false;
+      }
+      if (!passwordValid) {
+        passwordInput.focus();
+        return false;
+      }
+      return true;
+    }
+
+    function queryButtonLabel() {
+      return "查询" + optionInput.value;
+    }
+
     function syncOptionSeg() {
-      document.querySelectorAll(".seg-btn").forEach(function (btn) {
-        btn.classList.toggle("active", btn.getAttribute("data-option") === optionInput.value);
-      });
       const isSchedule = optionInput.value === "课表";
+      document.querySelectorAll(".query-choice").forEach(function (btn) {
+        const active = btn.getAttribute("data-option") === optionInput.value;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      });
       document.getElementById("weeksField").classList.toggle("hidden", !isSchedule);
       document.getElementById("gradeOptions").classList.toggle("hidden", isSchedule);
+      document.getElementById("queryScopeHint").textContent = isSchedule
+        ? "当前学期 · 全部周次"
+        : "当前学期";
+      if (!submitBtn.disabled) submitBtnText.textContent = queryButtonLabel();
     }
 
     function initDropdown(triggerId, menuId, inputId, defaultLabel) {
@@ -886,17 +1016,7 @@
       progressTrack.classList.toggle("query-progress-done", done && !failed);
       currentJobPhase = normalizedPhase;
       progressStepStates = states;
-      const longestLabel = Math.max.apply(null, steps.map(function (step) {
-        return step.label.length;
-      }));
-      const trackWidth = progressTrack.clientWidth || progressTrack.getBoundingClientRect().width;
-      const responsiveFontSize = Math.max(
-        6,
-        Math.min(11, Math.floor(
-          trackWidth / (steps.length * Math.max(5, longestLabel)) * 10
-        ) / 10)
-      );
-      progressSteps.style.setProperty("--step-font-size", responsiveFontSize + "px");
+      progressSteps.style.setProperty("--step-font-size", "12px");
     }
 
     function hideJobProgress() {
@@ -1000,7 +1120,7 @@
     function setButtonLoading(loading) {
       submitBtn.disabled = loading;
       submitSpinner.classList.toggle("hidden", !loading);
-      submitBtnText.textContent = loading ? "查询中..." : "查询";
+      submitBtnText.textContent = loading ? "正在查询..." : queryButtonLabel();
     }
 
     const ALERT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>';
@@ -1184,7 +1304,7 @@
       weeksDropdown.sync();
     }
 
-    document.querySelectorAll(".seg-btn").forEach(function (btn) {
+    document.querySelectorAll(".query-choice").forEach(function (btn) {
       btn.addEventListener("click", function () {
         optionInput.value = this.getAttribute("data-option");
         syncOptionSeg();
@@ -1750,6 +1870,7 @@
     form.addEventListener("submit", async function (event) {
       event.preventDefault();
       if (submitBtn.disabled) return;
+      if (!validateCredentials()) return;
       const payload = {
         username: usernameInput.value.trim(),
         password: passwordInput.value,
@@ -1763,12 +1884,6 @@
       }
 
       payload.username = String(payload.username);
-      if (!/^\d{10}$/.test(payload.username)) {
-        showStatus("学号必须为 10 位数字", false);
-        showToast("error", "学号必须为 10 位数字");
-        usernameInput.focus();
-        return;
-      }
 
       const seq = ++querySeq;
       if (queryController) queryController.abort();
@@ -1784,6 +1899,8 @@
       resultHtml.classList.add("hidden");
       resultBox.classList.add("hidden");
       resultCard.classList.remove("hidden");
+      resultCard.setAttribute("aria-busy", "true");
+      resultTitle.textContent = payload.option + "查询结果";
       layout.classList.add("has-result");
       updateUrlParams(payload);
       const savedScrollY = window.scrollY;
@@ -1980,8 +2097,12 @@
       } finally {
         if (seq === querySeq) {
           queryController = null;
+          resultCard.removeAttribute("aria-busy");
           setButtonLoading(false);
           window.scrollTo(0, savedScrollY);
+          if (layout.classList.contains("has-result")) {
+            resultTitle.focus({ preventScroll: true });
+          }
         }
       }
     });
@@ -1996,6 +2117,9 @@
       checkInput.checked = false;
       passwordInput.type = "password";
       document.getElementById("togglePassword").textContent = "显示";
+      document.getElementById("togglePassword").setAttribute("aria-pressed", "false");
+      clearFieldError(usernameInput, usernameError);
+      clearFieldError(passwordInput, passwordError);
       historyTrigger.textContent = "— 选择历史查询结果 —";
       historyTrigger.removeAttribute("data-label");
       historyMenu.classList.add("hidden");
@@ -2005,6 +2129,7 @@
       semestersDropdown.sync();
       weeksDropdown.sync();
       resultCard.classList.add("hidden");
+      resultTitle.textContent = "查询结果";
       layout.classList.remove("has-result");
       statusBox.classList.add("hidden");
       hideOfflineBar();
@@ -2027,6 +2152,7 @@
       const show = passwordInput.type === "password";
       passwordInput.type = show ? "text" : "password";
       this.textContent = show ? "隐藏" : "显示";
+      this.setAttribute("aria-pressed", show ? "true" : "false");
     });
 
     runIdCopy.addEventListener("click", function () {
@@ -2099,6 +2225,7 @@
       qrStatus: document.getElementById("calendarQrStatus")
     };
     var calendarState = { state: "", feedUrl: "", verifiedToken: "", semester: "" };
+    var calendarFocus = null;
     // 学期下拉：直接复用首页查询的同一份学期选项（克隆菜单项，避免两处维护）
     (function syncCalendarSemesterOptions() {
       var source = document.getElementById("semestersMenu");
@@ -2196,7 +2323,7 @@
       calendarEls.rotate.classList.toggle("hidden", !hasUrl);
       calendarEls.refresh.classList.toggle("hidden", !hasUrl);
       if (calendarEls.block && !calendarEls.block.classList.contains("hidden")) {
-        calendarEls.block.textContent = "📅 网络日历订阅：" + text +
+        calendarEls.block.textContent = "网络日历订阅：" + text +
           (hasUrl ? " · 已生成订阅地址，可在下方订阅面板中复制或关闭。" : " · 可一键开启。");
       }
       calendarGuideRender();
@@ -2675,6 +2802,7 @@
 
     function calendarOpen() {
       if (calendarUnavailable) return;
+      calendarFocus = document.activeElement;
       calendarUrlVisible = false;      // 面板每次打开都回到掩码状态，需显式点「显示」
       calendarFill(true);
       calendarLoadConfig().then(function (cfg) {
@@ -2684,12 +2812,17 @@
       });
       calendarEls.modal.classList.remove("hidden");
       calendarRender();
-      if (!calendarState.state) calendarEls.username.focus();
+      calendarEls.close.focus();
     }
 
     function calendarClosePanel() {
+      var wasOpen = !calendarEls.modal.classList.contains("hidden");
       calendarEls.modal.classList.add("hidden");
       calendarQrReset();          // 订阅密钥不进截图/演示残留：关闭即清除已生成的二维码
+      if (wasOpen && calendarFocus && document.contains(calendarFocus)) {
+        calendarFocus.focus();
+      }
+      calendarFocus = null;
     }
 
     function calendarShowResultBlock(meta) {
@@ -2710,7 +2843,7 @@
       text.className = "calendar-block-text";
       var label = info.state === "active" ? "已开启网络日历订阅"
         : (info.state === "reauth_needed" ? "订阅存在但用的是旧密码，可重新授权" : "尚未开启网络日历订阅");
-      text.textContent = "📅 " + label + "（" + (info.semester || "") + "）";
+      text.textContent = "网络日历 · " + label + "（" + (info.semester || "") + "）";
       var open = document.createElement("button");
       open.type = "button"; open.className = "btn btn-ghost"; open.textContent = "打开订阅面板";
       open.addEventListener("click", calendarOpen);
@@ -2723,6 +2856,29 @@
     if (calendarEls.dismiss) calendarEls.dismiss.addEventListener("click", calendarClosePanel);
     if (calendarEls.modal) calendarEls.modal.addEventListener("click", function (event) {
       if (event.target === calendarEls.modal) calendarClosePanel();
+    });
+    if (calendarEls.modal) calendarEls.modal.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        calendarClosePanel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      var focusable = Array.prototype.slice.call(calendarEls.modal.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter(function (node) {
+        return node.getClientRects().length > 0 && !node.classList.contains("hidden");
+      });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     });
     if (calendarEls.useForm) calendarEls.useForm.addEventListener("click", function () {
       calendarEls.username.value = usernameInput.value.trim();
