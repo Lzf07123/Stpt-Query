@@ -268,6 +268,15 @@
     @apply bg-background font-sans text-foreground antialiased;
   }
 
+  .skip-link {
+    @apply fixed left-3 top-3 z-[100] rounded-lg border border-primary bg-surface px-4 py-3 text-sm font-semibold text-foreground shadow-lg;
+    transform: translateY(calc(-100% - 24px));
+    transition: transform var(--motion-fast) var(--ease-out);
+  }
+  .skip-link:focus {
+    transform: translateY(0);
+  }
+
   ::selection {
     @apply bg-primary/20 text-foreground;
   }
@@ -633,7 +642,7 @@
     max-width: 100%;
     padding-inline: 2px;
     color: var(--eduquery-muted);
-    font-size: var(--step-font-size, 11px);
+    font-size: var(--step-font-size, 12px);
     line-height: 1.2;
     white-space: nowrap;
     text-align: center;
@@ -921,7 +930,7 @@
     @apply mt-3 text-sm text-muted;
   }
   .modal-close {
-    @apply absolute right-3 top-3 rounded-md p-1 text-muted transition-colors hover:bg-surface-2 hover:text-foreground;
+    @apply absolute right-1 top-1 grid h-11 w-11 place-items-center rounded-md text-lg text-muted transition-colors hover:bg-surface-2 hover:text-foreground;
   }
   .modal-footer {
     @apply flex flex-wrap items-center justify-end gap-2 border-t border-border bg-surface-2/60 px-5 py-3.5 sm:px-6;
@@ -1470,7 +1479,11 @@
   }
   /* 页脚功能入口：与页脚链接同一视觉语言（muted → hover foreground） */
   .site-footer-action {
-    @apply inline-flex shrink-0 cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-xs text-muted transition-colors duration-200 hover:text-foreground focus-visible:text-foreground;
+    @apply inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1 border-0 bg-transparent px-2 py-0 text-xs text-muted transition-colors duration-200 hover:text-foreground focus-visible:text-foreground;
+  }
+  .site-footer-action svg {
+    height: 14px;
+    width: 14px;
   }
   .site-footer a {
     @apply text-muted transition-colors duration-200 hover:text-foreground;
@@ -2352,6 +2365,46 @@ html { scroll-behavior: smooth; }
   .site-header .brand-name-text { display: none; }
 }
 
+/* ---------- 右侧常驻返回顶部（锚点语义 + 玻璃质感） ---------- */
+.back-to-top {
+  position: fixed;
+  right: 20px;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--eduquery-glass-border-soft);
+  border-radius: 14px;
+  background:
+    var(--eduquery-glass-shine),
+    var(--eduquery-glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--eduquery-glass-blur)) saturate(var(--eduquery-glass-saturate));
+  backdrop-filter: blur(var(--eduquery-glass-blur)) saturate(var(--eduquery-glass-saturate));
+  color: var(--eduquery-muted);
+  box-shadow: var(--shadow-md),
+    inset 0 1px 0 var(--eduquery-glass-highlight);
+  text-decoration: none;
+  transition: color var(--eduquery-motion-fast) var(--eduquery-ease-out),
+    background-color var(--eduquery-motion-fast) var(--eduquery-ease-out),
+    box-shadow var(--eduquery-motion-base) var(--eduquery-ease-out),
+    transform var(--eduquery-motion-base) var(--eduquery-ease-spring);
+}
+/* 本项目页脚常驻视口底部，按钮随页脚定位以避免遮挡页脚内容。 */
+.site-footer > .back-to-top {
+  position: absolute;
+  bottom: calc(100% + 12px + env(safe-area-inset-bottom, 0px));
+}
+.back-to-top svg { width: 20px; height: 20px; }
+.back-to-top:hover,
+.back-to-top:focus-visible {
+  color: var(--eduquery-primary-hover);
+  background: var(--eduquery-glass-bg-strong);
+  box-shadow: var(--shadow-lg),
+    inset 0 1px 0 var(--eduquery-glass-highlight);
+  transform: translateY(-2px);
+}
 
 /* ---------- 搜索骨架屏 ---------- */
 .search-skeleton { display: flex; flex-direction: column; gap: 4px; padding: 8px 4px; }
@@ -2370,19 +2423,18 @@ html { scroll-behavior: smooth; }
   background: linear-gradient(
     90deg,
     var(--eduquery-surface-2) 20%,
-    var(--eduquery-primary-soft) 50%,
-    var(--eduquery-surface-2) 80%
+    var(--eduquery-glass-highlight) 48%,
+    var(--eduquery-surface-2) 76%
   );
-  background-size: 200% 100%;
-  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+  background-size: 220% 100%;
+  animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;
 }
 .search-skeleton-bar:first-child { width: 58%; }
 .search-skeleton-bar:nth-child(2) { width: 88%; }
 .search-skeleton-bar:last-child { width: 34%; }
 @keyframes skeleton-shimmer {
-  /* 200% 画布上恰好平移一个周期：末帧=首帧，循环无跳动 */
-  from { background-position: 200% 0; }
-  to { background-position: 0% 0; }
+  from { background-position: 120% 0; }
+  to { background-position: -20% 0; }
 }
 
 /* ---------- 空状态（SVG 小图 + 引导文案） ---------- */
@@ -2615,6 +2667,10 @@ html { scroll-behavior: smooth; }
 }
 @media (max-width: 640px) {
   .masonry { column-count: 1; column-gap: 0; }
+  .back-to-top { right: 14px; }
+}
+@media print {
+  .back-to-top { display: none !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

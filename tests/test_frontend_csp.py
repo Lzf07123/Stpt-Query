@@ -4,7 +4,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,7 +78,43 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=23" in page
+    assert "/admin.js?v=32" in page
+
+
+def test_admin_console_has_consistent_navigation_and_responsive_tooling():
+    page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+
+    assert '<a class="skip-link" href="#main">' in page
+    assert '<main class="wrap" id="main" tabindex="-1">' in page
+    assert 'id="adminLoginBtn"' in page and 'aria-describedby="adminTokenHelp"' in page
+    assert 'id="adminHealth"' in page and 'id="dependencySection"' in page
+    assert '<button class="admin-health"' in page
+    assert page.count('aria-controls="') >= 5
+    assert page.count('class="admin-panel-head"') == 4
+    assert page.count('role="region" aria-label="') >= 6
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in page
+
+    assert 'elements.adminLoginBtn.disabled = true;' in script
+    assert 'initialButton.focus({ preventScroll: true });' in script
+    assert "var ADMIN_TABS = {" in script
+    assert 'window.history[historyMode + "State"]' in script
+    assert 'setActiveTab(pair[1], true, "push");' in script
+    assert 'elements.adminHealth.addEventListener("click"' in script
+    assert 'if (elements.adminHealthText.textContent !== text)' in script
+    assert 'class="table-empty-state"' in script
+    assert 'elements.detailValueModal.addEventListener("keydown"' in script
+
+    for selector in (
+        ".admin-login-card {",
+        ".admin-panel-head {",
+        ".admin-nav {",
+        ".table-empty-state {",
+    ):
+        assert selector in style
+    assert "grid-template-columns: repeat(6, minmax(0, 1fr));" in style
+    assert "#calendarFilter .filter-grid {" in style
 
 
 def test_homepage_notice_bar_and_history_are_external_scripts():
@@ -83,8 +123,8 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
-    assert 'src="/notice.js?v=5"' in index
-    assert 'href="/style.css?v=77"' in index
+    assert 'src="/notice.js?v=6"' in index
+    assert 'href="/style.css?v=95"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -97,14 +137,185 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     assert "transform: translateX(-100%);" in style
 
 
+def test_query_first_use_controls_are_accessible_and_isolated():
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert '<form id="queryForm"' in index and "novalidate" in index
+    assert 'class="query-kind-grid" role="group" aria-labelledby="queryKindLabel"' in index
+    assert index.count('class="query-choice"') == 2
+    assert '<a class="skip-link" href="#main">' in index
+    assert '<main class="page-shell" id="main" tabindex="-1">' in index
+    assert 'id="username" name="username"' in index
+    assert 'id="password" name="password"' in index
+    assert 'aria-describedby="usernameHelp usernameError"' in index
+    assert 'aria-describedby="passwordHelp passwordError"' in index
+    assert 'id="historySection"' in index
+    assert 'class="full history-row hidden"' in index
+    assert 'id="resultTitle" tabindex="-1"' in index
+    assert 'resultTitle.focus({ preventScroll: true })' in index
+    assert 'progressSteps.style.setProperty("--step-font-size", "12px")' in index
+
+    # 查询类型与日历刷新间隔不能共用事件选择器，否则切换日历时会误改查询内容。
+    assert 'document.querySelectorAll(".query-choice").forEach' in index
+    assert 'document.querySelectorAll(".seg-btn").forEach' not in index
+
+
+def test_result_page_has_overview_and_humanized_diagnostics():
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+
+    assert 'id="resultOverview" class="result-overview hidden"' in index
+    assert "function renderResultOverview(" in index
+    assert "function parseDiagnosticReport(" in index
+    assert "function renderDiagnosticReport(" in index
+    assert 'table-shell table-shell--grades' in index
+    assert 'table-shell table-shell--schedule' in index
+    assert 'aria-label="查询结果表格"' in index
+    for selector in (".result-overview {", ".diagnostic-report {", ".table-shell--grades"):
+        assert selector in style
+
+
+def _extract_function(source: str, signature: str) -> str:
+    start = source.index("function " + signature)
+    brace = source.index("{", start)
+    depth = 0
+    for index in range(brace, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    raise AssertionError("函数未闭合: " + signature)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="需要 node 才能执行前端片段")
+def test_result_overview_helpers_are_deterministic(tmp_path):
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    source = "\n".join(
+        _extract_function(index, signature)
+        for signature in (
+            "isTableSeparator(line)",
+            "parseResultTable(text)",
+            "gradeOverviewFacts(text)",
+            "parseDiagnosticReport(text)",
+            "humanizeDiagnosticEvidence(evidence)",
+        )
+    )
+    harness = tmp_path / "result-overview.mjs"
+    harness.write_text(
+        source + "\n"
+        "const grade = gradeOverviewFacts('| 课程 | 成绩 | 学分 |\\n|---|---|---|\\n"
+        "| 高数 | 90 | 4 |\\n| 英语 | 80 | 3 |');\n"
+        "if (grade[0].value !== '2 门' || grade[1].value !== '85.0' || grade[2].value !== '90') process.exit(1);\n"
+        "const report = parseDiagnosticReport('**问题分类：未分类异常**\\n- 环节：登录\\n"
+        "- 判断依据：HTTP 502，响应片段：教务系统登录暂时不可用\\n"
+        "- 用户可自行处理：\\n  - 稍后重试\\n"
+        "- 需要管理员/运维处理：\\n  - 查看日志');\n"
+        "if (report.userActions[0] !== '稍后重试' || report.adminActions[0] !== '查看日志') process.exit(2);\n"
+        "if (humanizeDiagnosticEvidence(report.evidence) !== '学校服务暂时不可用（HTTP 502）') process.exit(3);\n"
+        "console.log('ok');\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_first_visit_theme_follows_system_preference():
+    head_script = _inline_scripts("index.html")[0]
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in head_script
+    assert 't = "dark";' not in head_script
+
+
 def test_admin_notice_management_ui_is_wired():
     admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
     script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
     assert 'id="tabNotices"' in admin
     assert 'id="noticesPanel"' in admin
+    assert 'id="noticeForm" novalidate' in admin
     assert 'noticeForm: $("noticeForm")' in script
     assert 'async function loadNotices()' in script
     assert 'request("notices?" + noticeQuery())' in script
+    assert 'id="noticePreviewBar"' in admin and 'id="noticeCounter"' in admin
+    assert 'aria-describedby="noticeContentHelp noticeCounter"' in admin
+    assert admin.count('data-notice-template="') == 3
+    assert "function updateNoticeComposer()" in script
+    assert "function applyNoticeTemplate(name)" in script
+    assert 'noticeActionButton("复制草稿", "duplicate", item.id)' in script
+    assert "elements.noticePublish.setAttribute(\"aria-busy\", \"true\")" in script
+    for selector in (
+        ".notice-compose-grid {",
+        ".notice-preview {",
+        ".notice-preview-bar {",
+        ".notice-template-btn {",
+    ):
+        assert selector in style
+
+
+def test_design_v16_back_to_top_and_skeleton_contract():
+    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    admin_script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
+    app_style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+
+    assert 'class="back-to-top" href="#main" aria-label="返回顶部"' in index
+    assert 'class="back-to-top" id="backToTop" href="#main" aria-label="返回顶部"' in admin
+    for page in (index, admin):
+        assert 'href="/style.css?v=95"' in page
+    assert 'admin.js?v=32' in admin
+    assert 'backToTop: $("backToTop")' in admin_script
+    assert 'elements.backToTop.addEventListener("click"' in admin_script
+    assert 'window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });' in admin_script
+
+    for expected in (
+        ".back-to-top {",
+        "width: 44px;",
+        "height: 44px;",
+        "z-index: 55;",
+        "blur(var(--eduquery-glass-blur)) saturate(var(--eduquery-glass-saturate))",
+        ".site-footer > .back-to-top {",
+        "from { background-position: 120% 0; }",
+        "to { background-position: -20% 0; }",
+    ):
+        assert expected in style
+
+    assert "background-size: 220% 100%;" in style
+    assert "animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;" in style
+    assert "background-size: 220% 100%;" in app_style
+    assert "animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;" in app_style
+
+
+def test_admin_mobile_header_and_dashboard_keep_first_use_context():
+    page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+
+    nav_end = page.index("</nav>")
+    actions_start = page.index('<div class="admin-head-actions">')
+    assert page.index('id="adminHealth"') < nav_end < actions_start
+    assert '<span id="adminHealthText" aria-live="polite">检测中</span>' in page
+    assert '<span class="admin-title-wide">教务查询控制台</span>' in page
+    assert '<span class="admin-title-compact" aria-hidden="true">控制台</span>' in page
+
+    for expected in (
+        ".admin-app .card {",
+        "inset 0 1px 0 var(--eduquery-glass-highlight)",
+        "@media (min-width: 1024px) {",
+        "position: sticky;",
+        "@media (max-width: 1023px) {",
+        "grid-template-columns: repeat(6, minmax(0, 1fr));",
+        "@media (max-width: 480px) {",
+        "@media (max-width: 360px) {",
+        "@media (min-width: 320px) and (max-width: 619px) {",
+        "@media (max-width: 359px) {",
+        ".notice-compose-grid {\n  align-items: start;",
+        '.dark .admin-health[data-state="danger"] {',
+        "background: var(--eduquery-destructive-soft-solid);",
+        ".dark .admin-app .admin-nav-btn:not(.active),",
+    ):
+        assert expected in style
 
 
 def test_public_notice_routes_are_proxied_by_frontend():

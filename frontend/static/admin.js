@@ -8,7 +8,9 @@
   function $(id) { return document.getElementById(id); }
   var elements = {
     loginForm: $("loginForm"), tokenInput: $("adminToken"),
-    loginMessage: $("loginMessage"), app: $("adminApp"), logout: $("logoutBtn"),
+    adminLoginBtn: $("adminLoginBtn"), loginMessage: $("loginMessage"),
+    app: $("adminApp"), logout: $("logoutBtn"),
+    adminHealth: $("adminHealth"), adminHealthText: $("adminHealthText"),
     tabLogs: $("tabLogs"), tabMetrics: $("tabMetrics"), tabNotices: $("tabNotices"),
     tabCalendars: $("tabCalendars"), calendarsPanel: $("calendarsPanel"),
     calendarsBody: $("calendarsBody"), calendarQuery: $("calendarQuery"),
@@ -21,7 +23,7 @@
     metricsPanel: $("metricsPanel"), filter: $("logFilter"), exportBtn: $("exportBtn"),
     filterToggle: $("filterToggle"),
     limitSelect: $("limitSelect"),
-    dependencyNotices: $("dependencyNotices"),
+    dependencySection: $("dependencySection"), dependencyNotices: $("dependencyNotices"),
     autoLogs: $("autoLogs"), autoMetrics: $("autoMetrics"),
     body: $("logsBody"), prev: $("prevPage"), next: $("nextPage"), pageInfo: $("pageInfo"),
     detailPanel: $("logDetailPanel"), detailBack: $("detailBack"), detailCopy: $("detailCopy"),
@@ -33,13 +35,16 @@
     detailScopes: $("detailScopes"), relatedStatus: $("relatedStatus"), relatedBody: $("relatedBody"),
     detailJson: $("detailJson"),
     total: $("statTotal"), success: $("statSuccess"), failure: $("statFailure"),
-    source: $("statSource"), themeToggle: $("themeToggle"),
+    source: $("statSource"), themeToggle: $("themeToggle"), backToTop: $("backToTop"),
     memoryValue: $("memoryValue"), stackMemoryInfo: $("stackMemoryInfo"),
     stackMemoryTotal: $("stackMemoryTotal"), stackServices: $("stackServices"),
     trendMax: $("trendMax"), cpuChart: $("cpuChart"),
     trendPeak: $("trendPeak"), trendAverage: $("trendAverage"), trendSamples: $("trendSamples"),
     metricsUpdated: $("metricsUpdated"), metricsNotice: $("metricsNotice"), metricsRefresh: $("metricsRefresh"),
     noticeForm: $("noticeForm"), noticeContent: $("noticeContent"), noticeLevel: $("noticeLevel"),
+    noticeComposeTitle: $("noticeComposeTitle"), noticeCounter: $("noticeCounter"),
+    noticePreviewText: $("noticePreviewText"), noticePreviewBar: $("noticePreviewBar"),
+    noticePreviewLevel: $("noticePreviewLevel"),
     noticePublish: $("noticePublish"), noticeSaveDraft: $("noticeSaveDraft"),
     noticeCancelEdit: $("noticeCancelEdit"), noticeMessage: $("noticeMessage"),
     noticeFilter: $("noticeFilter"), noticeKeyword: $("noticeKeyword"),
@@ -75,7 +80,7 @@
     logs: [], offset: 0, autoLogsTimer: null, autoMetricsTimer: null,
     detail: null, detailScope: "", relatedLogs: [], relatedRequest: 0,
     metricHistory: [], metricsLoading: false,
-    noticeOffset: 0, noticeLimit: 20, noticeEditingId: "",
+    noticeOffset: 0, noticeLimit: 20, noticeEditingId: "", noticeItems: [],
     calibration: null
   };
 
@@ -137,20 +142,28 @@
     return payload;
   }
 
-  function applyTheme(theme) {
+  function applyTheme(theme, persist) {
     document.documentElement.classList.toggle("dark", theme === "dark");
-    if (elements.themeToggle) elements.themeToggle.innerHTML = theme === "dark" ? SUN_ICON : MOON_ICON;
+    if (elements.themeToggle) {
+      elements.themeToggle.innerHTML = theme === "dark" ? SUN_ICON : MOON_ICON;
+      elements.themeToggle.setAttribute(
+        "aria-label",
+        theme === "dark" ? "切换到浅色主题" : "切换到深色主题"
+      );
+    }
     var background = getComputedStyle(document.documentElement).getPropertyValue("--eduquery-bg").trim();
     var meta = document.querySelector('meta[name="theme-color"]');
     if (meta && background) meta.setAttribute("content", background);
-    try { localStorage.setItem("eduquery-theme", theme); } catch (e) {}
+    if (persist) {
+      try { localStorage.setItem("eduquery-theme", theme); } catch (e) {}
+    }
   }
 
   function setupTheme() {
     if (!elements.themeToggle) return;
-    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light", false);
     elements.themeToggle.addEventListener("click", function () {
-      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark");
+      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark", true);
     });
   }
 
@@ -229,14 +242,50 @@
     elements.storageSource.textContent = labels[fileStatus] || "状态未知";
   }
 
+  function setAdminHealth(state, text, title) {
+    if (!elements.adminHealth || !elements.adminHealthText) return;
+    var label = text + "：" + (title || text) + "，打开资源监控";
+    elements.adminHealth.dataset.state = state || "loading";
+    if (elements.adminHealthText.textContent !== text) {
+      elements.adminHealthText.textContent = text;
+    }
+    if (elements.adminHealth.title !== (title || text)) {
+      elements.adminHealth.title = title || text;
+    }
+    if (elements.adminHealth.getAttribute("aria-label") !== label) {
+      elements.adminHealth.setAttribute("aria-label", label);
+    }
+  }
+
   function renderDependencyNotices(payload) {
     if (!elements.dependencyNotices) return;
     var dependencies = payload && payload.dependencies || [];
     var notices = dependencies.filter(function (item) {
       return item.status !== "ok";
     });
+    var critical = notices.filter(function (item) {
+      return item.level === "danger" || item.status === "error";
+    });
+    var warning = notices.filter(function (item) {
+      return !critical.includes(item) && (item.level === "warning" || item.status === "degraded");
+    });
+    if (critical.length) {
+      setAdminHealth("danger", critical.length + " 项异常", critical[0].display + "：" + critical[0].message);
+    } else if (warning.length) {
+      setAdminHealth("warning", warning.length + " 项注意", warning[0].display + "：" + warning[0].message);
+    } else {
+      setAdminHealth("success", "运行正常", "核心服务与已配置依赖运行正常");
+    }
+    notices.sort(function (left, right) {
+      var score = function (item) {
+        if (item.level === "danger" || item.status === "error") return 0;
+        if (item.level === "warning" || item.status === "degraded") return 1;
+        return 2;
+      };
+      return score(left) - score(right);
+    });
     if (!notices.length) {
-      elements.dependencyNotices.classList.add("hidden");
+      if (elements.dependencySection) elements.dependencySection.classList.add("hidden");
       elements.dependencyNotices.innerHTML = "";
       return;
     }
@@ -249,7 +298,7 @@
         escapeHtml({ ok: "正常", degraded: "降级", error: "异常", "not-configured": "未配置", unknown: "检测中" }[state] || state) +
         '</span><span>' + escapeHtml(item.message || "状态未知") + '</span></div>';
     }).join("");
-    elements.dependencyNotices.classList.remove("hidden");
+    if (elements.dependencySection) elements.dependencySection.classList.remove("hidden");
   }
 
   function renderHost(latest) {
@@ -315,11 +364,15 @@
 
   async function activate(token) {
     setToken(token);
-    setActiveTab("metrics", false);
+    setAdminHealth("loading", "检测中", "正在获取系统运行状态");
+    var initialTab = tabFromLocation() || "metrics";
+    setActiveTab(initialTab, false, "replace");
     await Promise.all([loadLogs(), loadMetrics()]);
     elements.loginForm.closest(".admin-layout").hidden = true;
     elements.app.hidden = false;
     startTimers();
+    var initialButton = tabButton(initialTab);
+    if (initialButton) initialButton.focus({ preventScroll: true });
   }
 
   function showNoticeMessage(message, state) {
@@ -329,20 +382,77 @@
     elements.noticeMessage.classList.toggle("notice-info", state !== "error");
   }
 
+  var NOTICE_TEMPLATES = {
+    maintenance: {
+      level: "warning",
+      content: "系统计划于本周六 09:00–10:00 维护，期间成绩与课表查询可能暂时不可用。"
+    },
+    restored: {
+      level: "info",
+      content: "系统维护已完成，成绩与课表查询服务现已恢复。"
+    },
+    reminder: {
+      level: "info",
+      content: "请及时核对本学期成绩；如发现异常，请联系教务处。"
+    }
+  };
+
+  function normalizedNoticeContent() {
+    return String(elements.noticeContent.value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function updateNoticeComposer() {
+    var content = normalizedNoticeContent();
+    var isWarning = elements.noticeLevel.value === "warning";
+    if (content) elements.noticeContent.removeAttribute("aria-invalid");
+    if (elements.noticeCounter) {
+      elements.noticeCounter.textContent = content.length + " / 120";
+      elements.noticeCounter.classList.toggle("is-near-limit", content.length >= 100);
+    }
+    if (elements.noticePreviewText) {
+      elements.noticePreviewText.textContent = content || "通知内容将在这里预览";
+    }
+    if (elements.noticePreviewBar) {
+      elements.noticePreviewBar.dataset.level = isWarning ? "warning" : "info";
+      elements.noticePreviewBar.dataset.empty = content ? "false" : "true";
+    }
+    if (elements.noticePreviewLevel) {
+      elements.noticePreviewLevel.textContent = isWarning ? "重要" : "普通";
+      elements.noticePreviewLevel.classList.toggle("badge-warning", isWarning);
+      elements.noticePreviewLevel.classList.toggle("badge-primary", !isWarning);
+    }
+  }
+
   function setNoticeLevel(level) {
     elements.noticeLevel.value = level;
     document.querySelectorAll(".notice-level .seg-btn").forEach(function (button) {
-      button.classList.toggle("active", button.dataset.level === level);
+      var active = button.dataset.level === level;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
     });
+    updateNoticeComposer();
+  }
+
+  function applyNoticeTemplate(name) {
+    var template = NOTICE_TEMPLATES[name];
+    if (!template) return;
+    elements.noticeContent.value = template.content;
+    setNoticeLevel(template.level);
+    updateNoticeComposer();
+    elements.noticeContent.focus();
+    showNoticeMessage("已套用模板，可继续修改后发布", "info");
   }
 
   function resetNoticeForm() {
     state.noticeEditingId = "";
     elements.noticeContent.value = "";
     setNoticeLevel("info");
+    if (elements.noticeComposeTitle) elements.noticeComposeTitle.textContent = "新建通知";
     elements.noticePublish.textContent = "发布";
     elements.noticeSaveDraft.textContent = "存草稿";
+    elements.noticeCancelEdit.textContent = "取消编辑";
     elements.noticeCancelEdit.classList.add("hidden");
+    updateNoticeComposer();
     showNoticeMessage("");
   }
 
@@ -375,9 +485,15 @@
 
   function renderNotices(payload) {
     var items = payload.notices || [];
+    state.noticeItems = items;
     elements.noticesBody.innerHTML = "";
     if (!items.length) {
-      elements.noticesBody.innerHTML = '<tr><td colspan="7" class="empty-cell">暂无通知</td></tr>';
+      elements.noticesBody.innerHTML = '<tr><td colspan="7" class="empty-cell">' +
+        '<div class="table-empty-state">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>' +
+          '<strong>暂无通知</strong>' +
+          '<span>发布第一条通知后，状态和时间线会显示在这里。</span>' +
+        "</div></td></tr>";
     } else {
       items.forEach(function (item) {
         var row = document.createElement("tr");
@@ -387,9 +503,11 @@
             noticeActionButton("发布", "publish", item.id) +
             noticeActionButton("删除", "delete", item.id, true);
         } else if (item.status === "active") {
-          actions = noticeActionButton("下线", "archive", item.id);
+          actions = noticeActionButton("复制草稿", "duplicate", item.id) +
+            noticeActionButton("下线", "archive", item.id);
         } else {
-          actions = noticeActionButton("重新上线", "publish", item.id);
+          actions = noticeActionButton("复制草稿", "duplicate", item.id) +
+            noticeActionButton("重新上线", "publish", item.id);
         }
         row.innerHTML =
           '<td class="notice-content">' + escapeHtml(item.content) + '</td>' +
@@ -423,41 +541,98 @@
   }
 
   async function submitNotice(status) {
-    var content = elements.noticeContent.value.trim();
+    if (elements.noticePublish.disabled || elements.noticeSaveDraft.disabled) return;
+    elements.noticeContent.removeAttribute("aria-invalid");
+    var content = normalizedNoticeContent();
     if (!content) {
+      elements.noticeContent.setAttribute("aria-invalid", "true");
       showNoticeMessage("请输入通知内容", "error");
+      elements.noticeContent.focus();
+      return;
+    }
+    if (content.length > 120) {
+      elements.noticeContent.setAttribute("aria-invalid", "true");
+      showNoticeMessage("通知内容不能超过 120 个字符", "error");
+      elements.noticeContent.focus();
       return;
     }
     var level = elements.noticeLevel.value;
-    if (state.noticeEditingId) {
-      await request("notices/" + state.noticeEditingId, {
-        method: "PATCH",
-        body: { content: content, level: level, status: status }
-      });
-      showNoticeMessage(status === "active" ? "修订已发布" : "草稿已保存");
-    } else {
-      await request("notices", {
-        method: "POST",
-        body: { content: content, level: level, status: status }
-      });
-      showNoticeMessage(status === "active" ? "通知已发布" : "草稿已创建");
+    var publishLabel = elements.noticePublish.textContent;
+    var draftLabel = elements.noticeSaveDraft.textContent;
+    var completed = false;
+    var successMessage = "";
+    elements.noticePublish.disabled = true;
+    elements.noticeSaveDraft.disabled = true;
+    elements.noticePublish.setAttribute("aria-busy", "true");
+    elements.noticeSaveDraft.setAttribute("aria-busy", "true");
+    elements.noticePublish.textContent = status === "active" ? "发布中…" : publishLabel;
+    elements.noticeSaveDraft.textContent = status === "draft" ? "保存中…" : draftLabel;
+    try {
+      if (state.noticeEditingId) {
+        await request("notices/" + state.noticeEditingId, {
+          method: "PATCH",
+          body: { content: content, level: level, status: status }
+        });
+        successMessage = status === "active" ? "修订已发布" : "草稿已保存";
+      } else {
+        await request("notices", {
+          method: "POST",
+          body: { content: content, level: level, status: status }
+        });
+        successMessage = status === "active" ? "通知已发布" : "草稿已创建";
+      }
+      completed = true;
+      resetNoticeForm();
+      state.noticeOffset = 0;
+      await loadNotices();
+      showNoticeMessage(successMessage);
+    } finally {
+      elements.noticePublish.disabled = false;
+      elements.noticeSaveDraft.disabled = false;
+      elements.noticePublish.removeAttribute("aria-busy");
+      elements.noticeSaveDraft.removeAttribute("aria-busy");
+      if (!completed) {
+        elements.noticePublish.textContent = publishLabel;
+        elements.noticeSaveDraft.textContent = draftLabel;
+      }
     }
-    resetNoticeForm();
-    state.noticeOffset = 0;
-    await loadNotices();
   }
 
   async function noticeAction(action, id) {
+    var scrollBehavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto" : "smooth";
     if (action === "edit") {
-      var row = elements.noticesBody.querySelector('[data-action="edit"][data-id="' + id + '"]');
-      var content = row ? row.closest("tr").querySelector(".notice-content").textContent : "";
+      var editItem = state.noticeItems.find(function (item) { return item.id === id; });
+      if (!editItem) return;
       state.noticeEditingId = id;
-      elements.noticeContent.value = content;
-      elements.noticePublish.textContent = "发布修订";
+      elements.noticeContent.value = editItem.content;
+      setNoticeLevel(editItem.level || "info");
+      elements.noticePublish.textContent = "保存并发布";
       elements.noticeSaveDraft.textContent = "保存草稿";
+      elements.noticeCancelEdit.textContent = "取消编辑";
       elements.noticeCancelEdit.classList.remove("hidden");
+      if (elements.noticeComposeTitle) elements.noticeComposeTitle.textContent = "编辑草稿";
+      updateNoticeComposer();
+      elements.noticeForm.scrollIntoView({ behavior: scrollBehavior, block: "start" });
       elements.noticeContent.focus();
       showNoticeMessage("正在编辑草稿");
+      return;
+    }
+    if (action === "duplicate") {
+      var source = state.noticeItems.find(function (item) { return item.id === id; });
+      if (!source) return;
+      state.noticeEditingId = "";
+      elements.noticeContent.value = source.content;
+      setNoticeLevel(source.level || "info");
+      elements.noticePublish.textContent = "发布副本";
+      elements.noticeSaveDraft.textContent = "保存为新草稿";
+      elements.noticeCancelEdit.textContent = "取消复制";
+      elements.noticeCancelEdit.classList.remove("hidden");
+      if (elements.noticeComposeTitle) elements.noticeComposeTitle.textContent = "复制为新草稿";
+      updateNoticeComposer();
+      elements.noticeForm.scrollIntoView({ behavior: scrollBehavior, block: "start" });
+      elements.noticeContent.focus();
+      showNoticeMessage("已复制内容，保存草稿后才会创建副本");
       return;
     }
     if (action === "delete") {
@@ -575,7 +750,31 @@
     });
   }
 
-  function setActiveTab(tab, reload) {
+  var ADMIN_TABS = {
+    metrics: "metrics",
+    logs: "logs",
+    notices: "notices",
+    calendars: "calendars",
+    calibration: "calibration"
+  };
+
+  function tabFromLocation() {
+    var tab = String(window.location.hash || "").replace(/^#/, "");
+    return ADMIN_TABS[tab] ? tab : "";
+  }
+
+  function tabButton(tab) {
+    return {
+      metrics: elements.tabMetrics,
+      logs: elements.tabLogs,
+      notices: elements.tabNotices,
+      calendars: elements.tabCalendars,
+      calibration: elements.tabCalibration
+    }[tab];
+  }
+
+  function setActiveTab(tab, reload, historyMode) {
+    if (!ADMIN_TABS[tab]) tab = "metrics";
     var isMetrics = tab === "metrics";
     var isNotices = tab === "notices";
     var isCalendars = tab === "calendars";
@@ -596,6 +795,12 @@
     elements.calendarsPanel.hidden = !isCalendars;
     elements.calibrationPanel.hidden = !isCalibration;
     elements.logsPanel.hidden = !isLogs;
+    if (historyMode === "push" || historyMode === "replace") {
+      var target = "#" + tab;
+      if (window.location.hash !== target) {
+        window.history[historyMode + "State"](null, "", target);
+      }
+    }
     if (isMetrics && reload !== false) loadMetrics().catch(function () {});
     if (isNotices) loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });
     if (isCalendars) loadCalendars().catch(function (error) { showCalendarMessage(error.message, "error"); });
@@ -838,7 +1043,12 @@
     if (elements.calendarPaused) elements.calendarPaused.textContent = stats.paused == null ? "0" : stats.paused;
     elements.calendarsBody.innerHTML = "";
     if (!items.length) {
-      elements.calendarsBody.innerHTML = '<tr><td colspan="8" class="empty-cell">暂无订阅</td></tr>';
+      elements.calendarsBody.innerHTML = '<tr><td colspan="8" class="empty-cell">' +
+        '<div class="table-empty-state">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>' +
+          '<strong>暂无订阅</strong>' +
+          '<span>用户开启网络日历订阅后，会在这里显示托管状态。</span>' +
+        "</div></td></tr>";
       return;
     }
     items.forEach(function (item) {
@@ -1077,7 +1287,10 @@
     }
   }
 
+  var logDetailLastFocused = null;
+
   function showLogDetail(item) {
+    logDetailLastFocused = document.activeElement;
     state.detail = item;
     state.detailScope = "";
     state.relatedLogs = [item];
@@ -1085,7 +1298,8 @@
     elements.detailPanel.hidden = false;
     renderLogDetail();
     loadRelatedLogs().catch(function () {});
-    elements.detailPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    elements.detailPanel.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
   }
 
   function closeLogDetail() {
@@ -1095,6 +1309,10 @@
     state.relatedRequest += 1;
     elements.logsPanel.classList.remove("detail-open");
     elements.detailPanel.hidden = true;
+    if (logDetailLastFocused && document.contains(logDetailLastFocused)) {
+      logDetailLastFocused.focus({ preventScroll: true });
+    }
+    logDetailLastFocused = null;
   }
 
   var detailValueLastFocused = null;
@@ -1120,6 +1338,25 @@
     detailValueLastFocused = null;
   }
 
+  if (elements.detailValueModal) {
+    elements.detailValueModal.addEventListener("keydown", function (event) {
+      if (event.key !== "Tab") return;
+      var focusable = Array.prototype.slice.call(elements.detailValueModal.querySelectorAll(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (node) { return node.getClientRects().length > 0; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+  }
+
   function renderLogs(payload) {
     state.hasMore = Boolean(payload.pagination && payload.pagination.has_more);
     elements.total.textContent = String(payload.total == null ? "—" : payload.total);
@@ -1127,8 +1364,28 @@
     elements.failure.textContent = String((payload.stats && payload.stats.failure) || 0);
     elements.source.textContent = { file: "文件日志", redis: "Redis", memory: "进程内存" }[payload.source] || payload.source || "—";
 
+    var tableCard = elements.body.closest(".table-card");
+    if (tableCard) tableCard.classList.toggle("is-empty", !state.logs.length);
     if (!state.logs.length) {
-      elements.body.innerHTML = '<tr><td colspan="11" class="empty-cell">没有匹配的记录</td></tr>';
+      elements.body.innerHTML = '<tr><td colspan="11" class="empty-cell">' +
+        '<div class="table-empty-state">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v15H4z"/><path d="M8 9h8M8 13h6"/><path d="m17 16 3 3M20 16l-3 3"/></svg>' +
+          '<strong>没有匹配的查询记录</strong>' +
+          '<span>调整筛选条件，或等待新的查询产生后再查看。</span>' +
+          '<button class="btn secondary-btn" type="button" data-empty-reset>重置筛选</button>' +
+        "</div></td></tr>";
+      var reset = elements.body.querySelector("[data-empty-reset]");
+      if (reset) {
+        reset.addEventListener("click", function () {
+          elements.filter.reset();
+          elements.filterToggle.setAttribute("aria-expanded", "false");
+          elements.filter.classList.remove("filters-expanded");
+          document.getElementById("advancedFilters").classList.remove("expanded");
+          elements.filterToggle.textContent = "展开筛选";
+          state.offset = 0;
+          loadLogs().catch(showError);
+        });
+      }
       updatePagination();
       return;
     }
@@ -1271,10 +1528,11 @@
     renderApplication({});
     renderHost({});
     renderStorage({}, {});
+    setAdminHealth("danger", "状态未知", "暂时无法获取运行状态，请立即刷新重试");
     if (elements.dependencyNotices) {
-      elements.dependencyNotices.classList.add("hidden");
       elements.dependencyNotices.innerHTML = "";
     }
+    if (elements.dependencySection) elements.dependencySection.classList.add("hidden");
     elements.services.innerHTML = "";
     drawCpu([]);
   }
@@ -1370,6 +1628,9 @@
 
     elements.loginForm.addEventListener("submit", async function (event) {
       event.preventDefault();
+      elements.adminLoginBtn.disabled = true;
+      elements.adminLoginBtn.setAttribute("aria-busy", "true");
+      elements.adminLoginBtn.textContent = "正在验证…";
       setLoginMessage("验证中…", "info");
       try {
         await activate(elements.tokenInput.value.trim());
@@ -1378,11 +1639,39 @@
       } catch (error) {
         setToken("");
         setLoginMessage(error.message, "error");
+        elements.tokenInput.focus();
+      } finally {
+        elements.adminLoginBtn.disabled = false;
+        elements.adminLoginBtn.removeAttribute("aria-busy");
+        elements.adminLoginBtn.textContent = "安全进入";
       }
     });
     elements.logout.addEventListener("click", function () {
       setToken(""); stopTimers(); location.reload();
     });
+    if (elements.backToTop) {
+      elements.backToTop.addEventListener("click", function (event) {
+        event.preventDefault();
+        var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });
+        window.requestAnimationFrame(function () {
+          var main = $("main");
+          if (main) main.focus({ preventScroll: true });
+        });
+      });
+    }
+    if (elements.adminHealth) {
+      elements.adminHealth.addEventListener("click", function () {
+        setActiveTab("metrics", true, "push");
+        var target = elements.dependencySection && !elements.dependencySection.classList.contains("hidden")
+          ? elements.dependencySection : elements.metricsRefresh;
+        var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        window.requestAnimationFrame(function () {
+          target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+          target.focus({ preventScroll: true });
+        });
+      });
+    }
     elements.calendarFilter = $("calendarFilter");
     if (elements.calendarFilter) {
       elements.calendarFilter.addEventListener("submit", function (event) {
@@ -1448,11 +1737,24 @@
     }
     [["tabMetrics", "metrics"], ["tabLogs", "logs"], ["tabNotices", "notices"], ["tabCalendars", "calendars"], ["tabCalibration", "calibration"]].forEach(function (pair) {
       $(pair[0]).addEventListener("click", function () {
-        setActiveTab(pair[1]);
+        setActiveTab(pair[1], true, "push");
       });
+    });
+    window.addEventListener("hashchange", function () {
+      if (elements.app.hidden) return;
+      var tab = tabFromLocation() || "metrics";
+      setActiveTab(tab, true);
+      var button = tabButton(tab);
+      if (button) window.requestAnimationFrame(function () { button.focus({ preventScroll: true }); });
     });
     document.querySelectorAll(".notice-level .seg-btn").forEach(function (button) {
       button.addEventListener("click", function () { setNoticeLevel(button.dataset.level); });
+    });
+    elements.noticeContent.addEventListener("input", updateNoticeComposer);
+    document.querySelectorAll("[data-notice-template]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        applyNoticeTemplate(button.dataset.noticeTemplate);
+      });
     });
     document.querySelectorAll(".notice-status-filter .seg-btn").forEach(function (button) {
       button.addEventListener("click", function () {
@@ -1490,9 +1792,11 @@
     });
     elements.noticesBody.addEventListener("click", function (event) {
       var button = event.target.closest("button[data-action]");
-      if (!button) return;
+      if (!button || button.disabled) return;
+      button.disabled = true;
       noticeAction(button.dataset.action, button.dataset.id)
-        .catch(function (error) { showNoticeMessage(error.message, "error"); });
+        .catch(function (error) { showNoticeMessage(error.message, "error"); })
+        .finally(function () { button.disabled = false; });
     });
     elements.filterToggle.addEventListener("click", function () {
       var expanded = elements.filterToggle.getAttribute("aria-expanded") === "true";
@@ -1567,7 +1871,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    setupTheme(); setupCustomSelects(); bindEvents();
+    setupTheme(); setupCustomSelects(); bindEvents(); updateNoticeComposer();
     if (window.ResizeObserver) {
       state.chartObserver = new ResizeObserver(function () {
         window.requestAnimationFrame(function () { drawCpu(state.metricHistory); });
