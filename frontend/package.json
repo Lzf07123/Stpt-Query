@@ -4,8 +4,9 @@
   "version": "0.1.0",
   "description": "教务信息查询前端：Tailwind CSS 4 令牌构建（运行时零第三方资源）",
   "scripts": {
-    "build": "tailwindcss -i ./src/index.css -o ./static/style.css --minify",
-    "watch": "tailwindcss -i ./src/index.css -o ./static/style.css --watch"
+    "build": "tailwindcss -i ./src/index.css -o ./static/style.css --minify && tailwindcss -i ./src/admin.css -o ./static/style-admin.css --minify",
+    "watch:app": "tailwindcss -i ./src/index.css -o ./static/style.css --watch",
+    "watch:admin": "tailwindcss -i ./src/admin.css -o ./static/style-admin.css --watch"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.1.0",

@@ -17,6 +17,21 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 SCHEMA_VERSION = "1"
 
+# 审计保留期：calendar_audit 是不含身份的审计追踪（calendar_id/动作/角色/结果），
+# 保留 180 天供安全排查，到期由调度器清理，防止无限增长。
+AUDIT_RETENTION_DAYS = 180
+
+# 与 _admin_state 保持同一判定顺序（暂停优先于最近一次拉取状态）的 SQL 表达；
+# `?` 占位符为当前时间（now_iso()），供 paused_until 比较。
+_ADMIN_STATE_SQL = (
+    "CASE"
+    " WHEN paused_until IS NOT NULL AND paused_until != '' AND paused_until > ?"
+    " THEN 'locked'"
+    " WHEN last_fetch_status = 'credential_error' THEN 'reauth_needed'"
+    " WHEN last_fetch_status = 'upstream_error' THEN 'degraded'"
+    " ELSE 'active' END"
+)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS calendars (
     id                TEXT PRIMARY KEY,
@@ -328,6 +343,12 @@ class CalendarStore:
         if semester:
             where.append("semester = ?")
             args.append(semester)
+        if state:
+            # state 条件必须进 SQL WHERE（在分页之前过滤），total 按同条件统计；
+            # 否则 total 与页内条目数对不上，且翻页会丢条目。
+            where.append("%s = ?" % _ADMIN_STATE_SQL)
+            args.append(now_iso())
+            args.append(str(state))
         clause = " AND ".join(where)
         with self._lock:
             total = self._conn.execute(
@@ -336,21 +357,37 @@ class CalendarStore:
                 "SELECT * FROM calendars WHERE %s ORDER BY created_at DESC LIMIT ? OFFSET ?" % clause,
                 args + [int(size), max(0, (int(page) - 1) * int(size))]).fetchall()
         items = [self._row(r) for r in rows if r]
-        if state:
-            items = [item for item in items if _admin_state(item) == state]
         return {"items": items, "total": total, "page": int(page), "size": int(size)}
 
     def stats(self) -> Dict[str, Any]:
+        # 只取 _admin_state 所需列，避免把全表 ics_blob（BLOB）载入内存
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM calendars WHERE revoked_at IS NULL").fetchall()
-        items = [self._row(r) for r in rows if r]
+                "SELECT paused_until, last_fetch_status FROM calendars"
+                " WHERE revoked_at IS NULL").fetchall()
+        items = [dict(row) for row in rows]
         counter: Dict[str, int] = {}
         for item in items:
             key = _admin_state(item)
             counter[key] = counter.get(key, 0) + 1
         return {"total": len(items), "states": counter,
                 "paused": sum(1 for i in items if i.get("paused_until") and i["paused_until"] > now_iso())}
+
+    # ---------- 过期数据清理 ----------
+    def cleanup_expired(self, now: Optional[str] = None) -> Dict[str, int]:
+        """删除过期幂等键与超过保留期的审计行（调度器每轮顺带执行）。
+
+        calendar_ops 的 TTL 在写入时给定（默认 86400 秒）；calendar_audit 按
+        AUDIT_RETENTION_DAYS（180 天）保留，到期删除。返回各自删除的行数。
+        """
+        stamp = now or now_iso()
+        cutoff = (datetime.now().astimezone()
+                  - timedelta(days=AUDIT_RETENTION_DAYS)).isoformat(timespec="seconds")
+        ops_removed = self._exec(
+            "DELETE FROM calendar_ops WHERE expires_at < ?", (stamp,)).rowcount
+        audit_removed = self._exec(
+            "DELETE FROM calendar_audit WHERE at < ?", (cutoff,)).rowcount
+        return {"ops_removed": max(0, ops_removed), "audit_removed": max(0, audit_removed)}
 
 
 def _admin_state(item: Dict[str, Any]) -> str:

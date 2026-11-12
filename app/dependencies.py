@@ -8,10 +8,13 @@ from typing import Dict, List, Literal
 
 DependencyState = Literal["ok", "degraded", "error", "not-configured", "unknown"]
 
+# 编排 Redis 降级文案的唯一事实来源：main.py 各降级点与默认提示共用同一常量
+REDIS_DEGRADED_MESSAGE = "Redis 不可用，查询继续；限流、历史与异步任务降级"
+
 _DEFAULT_MESSAGES = {
     "redis": {
         "ok": "共享队列与历史正常",
-        "degraded": "Redis 不可用，查询继续；限流、历史与异步任务降级",
+        "degraded": REDIS_DEGRADED_MESSAGE,
         "error": "Redis 不可用",
         "not-configured": "未配置 Redis，仅支持单副本历史与同步查询",
     },

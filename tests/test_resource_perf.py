@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as main
+import app.context as context
 from app.main import Settings, create_app
 from app.notices import NoticeCreate, NoticeStore
 
@@ -77,14 +77,14 @@ def test_service_status_scan_is_cached_until_ttl_expires(tmp_path, monkeypatch):
         resource_monitor_interval_seconds=30,
     ))
     calls = 0
-    original = main._read_service_status_summary
+    original = context._read_service_status_summary
 
     def counted_scan(*args, **kwargs):
         nonlocal calls
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(main, "_read_service_status_summary", counted_scan)
+    monkeypatch.setattr(context, "_read_service_status_summary", counted_scan)
     with TestClient(app) as client:
         headers = {"Authorization": "Bearer test-token"}
         first = client.get("/service-status", headers=headers)
@@ -163,3 +163,51 @@ def test_service_status_count_uses_one_redis_pipeline(tmp_path):
     assert app.state.redis.pipeline_runs == [[
         ("hincrby", "gw:v2:service-status:accepted", "total", 1),
     ]]
+
+
+async def test_service_status_concurrent_misses_single_flight(tmp_path, monkeypatch):
+    """并发 miss 经锁合并重建：只扫一次共享日志卷，所有请求拿到一致载荷。"""
+    import asyncio
+
+    import httpx
+
+    from app.querylog import JSONLFileWriter
+
+    path = tmp_path / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    writer.write_raw({
+        "event": "query", "time": "2026-09-02T10:00:00+08:00",
+        "run_id": "run-1", "username": "2023000001", "option": "成绩",
+        "success": True, "kind": "grades",
+    })
+    app = create_app(_settings(
+        tmp_path,
+        file_log_enabled=True,
+        file_log_path=str(path),
+        service_status_cache_seconds=60,
+        resource_monitor_interval_seconds=30,
+    ))
+    calls = 0
+    original = context._read_service_status_summary
+
+    def slow_scan(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        import time as time_module
+        time_module.sleep(0.15)  # 放大扫描窗口，制造并发 miss
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(context, "_read_service_status_summary", slow_scan)
+
+    transport = httpx.ASGITransport(app=app)
+    headers = {"Authorization": "Bearer test-token"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        responses = await asyncio.gather(*[
+            client.get("/service-status", headers=headers) for _ in range(3)
+        ])
+
+    assert all(response.status_code == 200 for response in responses)
+    assert calls == 1, "并发 miss 应合并为一次文件扫描（single-flight）"
+    payloads = [response.json() for response in responses]
+    assert payloads[0] == payloads[1] == payloads[2]
+    assert payloads[0]["accepted_total"] == 1

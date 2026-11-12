@@ -211,12 +211,12 @@ class NoticeStore:
         for item in archived[self.max_history:]:
             self.records.pop(item.id, None)
 
-    def _write_records(self, records: dict[str, NoticeRecord], append_record: NoticeRecord | None = None) -> None:
-        if append_record is not None:
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(append_record.model_dump_json() + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
+    def _append_record(self, record: NoticeRecord) -> None:
+        """权威 JSONL 只追加单条记录并 fsync（压缩路径走 _compact_locked）。"""
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(record.model_dump_json() + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
     def _compact_locked(self, records: dict[str, NoticeRecord]) -> None:
         temporary = self.path.with_name(self.path.name + ".tmp")
@@ -239,7 +239,7 @@ class NoticeStore:
                         or raw_after >= self.compact_after):
                     self._compact_locked(records)
                 else:
-                    self._write_records(records, record)
+                    self._append_record(record)
                 self.records = records
                 self._state_signature = None
                 self._cache_loaded_at = 0.0

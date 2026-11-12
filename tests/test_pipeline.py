@@ -230,3 +230,21 @@ async def test_credential_error_does_not_trigger_relogin():
 
     assert not result["success"]
     assert svc.calls == ["/login", "/get_schedule"]
+
+
+async def test_relogin_decision_uses_shared_session_invalid_predicate():
+    """重登判定复用 classifier.is_session_invalid：两份历史正则的超集统一生效。"""
+    req = _req(option="课表")
+    # 旧 pipeline 口径的文案（401 + 会话失效）→ 允许一次受控重登
+    pipeline_signal = ServiceError(401, {"error": "学校端会话异常"}, "上游服务 HTTP 401")
+    assert Pipeline._can_relogin_after_session_error(req, pipeline_signal) is True
+    # 旧 classifier 口径的信号 SessionInvalid 也能触发（此前 pipeline 正则不含）
+    classifier_signal = ServiceError(401, {"error": "SessionInvalid"}, "上游服务 HTTP 401")
+    assert Pipeline._can_relogin_after_session_error(req, classifier_signal) is True
+    # 非会话类 401 不重登
+    credential_signal = ServiceError(401, {"error": "账号或密码错误"}, "上游服务 HTTP 401")
+    assert Pipeline._can_relogin_after_session_error(req, credential_signal) is False
+    # 无密码不允许重登
+    no_password = SessionWorkflowRequest(username="2023000001", option="课表", password=None)
+    assert Pipeline._can_relogin_after_session_error(
+        no_password, pipeline_signal) is False

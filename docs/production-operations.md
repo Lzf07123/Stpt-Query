@@ -47,15 +47,22 @@ stay in process memory.
 | Query JSONL | `app-query-logs` named volume | 7 files, 50 MiB each (`FILE_LOG_*`) | Sync stdout/JSONL to the centralized log platform; optionally archive the volume |
 | Notice JSONL | `app-notice-fallback` named volume | `NOTICE_HISTORY_MAX` (500) with compaction | Copy the volume or the JSONL file daily |
 | Optional Redis | External instance | Follow TTLs; query history is capped | Run `scripts/backup-redis.sh` daily (14-day default) when Redis is used |
-| Service stdout | Docker logging driver | Configure the host logging driver | Ship to centralized logs; do not store credentials |
+| Service stdout | Docker `json-file` driver (Compose default) | Rotated at 10 MiB x 3 files per container | Ship to centralized logs; do not store credentials |
 | Built images | Local Docker/registry | Prune superseded tags after a release | Keep release tags, not a rolling `latest` tag |
 
-`scripts/backup-redis.sh` targets the optional **external** Redis: it runs
-`redis-cli -u "$REDIS_URL" SAVE`, pulls the snapshot with
-`redis-cli --rdb <file>`, compresses it, and removes backups older than
-`REDIS_BACKUP_RETENTION_DAYS` (14 days by default). It needs `redis-cli` on the
-host that runs the script. The default topology ships no Redis container, so
-leave `REDIS_URL` empty unless async jobs or multiple replicas are required.
+Compose already sets `json-file` rotation (10 MiB x 3 files) on both containers,
+so stdout is bounded by default; configure the host logging driver only when
+shipping to a centralized platform.
+
+`scripts/backup-redis.sh` targets the optional **external** Redis: it pulls a
+consistent snapshot with `redis-cli --rdb <file>` (the command itself triggers
+the snapshot; no blocking `SAVE` is issued), compresses it, and removes backups
+older than `REDIS_BACKUP_RETENTION_DAYS` (14 days by default). Credentials are
+passed via the `REDISCLI_AUTH` environment variable — parsed from `REDIS_URL` or
+overridden explicitly with `REDIS_PASSWORD` — so the password never appears in
+`ps`/process arguments. It needs `redis-cli` on the host that runs the script.
+The default topology ships no Redis container, so leave `REDIS_URL` empty unless
+async jobs or multiple replicas are required.
 
 ## Launch Checklist
 

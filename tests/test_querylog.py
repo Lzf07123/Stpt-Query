@@ -106,6 +106,23 @@ def test_jsonl_file_writer_rotates_by_size(tmp_path):
     assert len(active_lines) >= 1
 
 
+def test_archive_files_ignore_stray_non_numeric_suffixes(tmp_path):
+    """杂散文件（如 queries.jsonl.tmp）不得让归档枚举崩溃，也不参与排序。"""
+    path = tmp_path / "queries.jsonl"
+    writer = JSONLFileWriter(str(path))
+    writer.write_raw({"event": "query", "run_id": "r1", "success": True})
+    (tmp_path / "queries.jsonl.1").write_text('{"event":"query"}\n', encoding="utf-8")
+    (tmp_path / "queries.jsonl.tmp").write_text("stray", encoding="utf-8")
+    (tmp_path / "queries.jsonl.1.bak").write_text("stray", encoding="utf-8")
+
+    files = writer.archive_files()
+    assert files == [str(tmp_path / "queries.jsonl.1"), str(path)]
+
+    lines = list(writer.iter_recent_lines())
+    assert lines[0] == '{"event":"query"}'          # 备份先于当前文件
+    assert json.loads(lines[1])["run_id"] == "r1"
+
+
 def test_log_filter_redacts_sensitive_query_values():
     redacted = _redact_sensitive_log_message(
         "GET /get_schedule/export?code=abcdef123456&semester=2025-2026-1")

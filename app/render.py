@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 _IMAGE_SYNTAX = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 _HTML_TAG = re.compile(r"</?(?!br>)[a-zA-Z][^>]*>", re.IGNORECASE)
 _MD_LINK = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+\"[^\"]*\")?\s*\)")
+_BR_TAG = re.compile(r"(?i)<br\s*/?>")
+_MULTI_NEWLINE = re.compile(r"\n{3,}")
 
 
 def _as_dict(data: Any) -> Dict[str, Any]:
@@ -45,7 +47,7 @@ def _safe_http_url(raw: Any) -> str:
 def sanitize_markdown(text: str) -> str:
     """只保留无脚本文本、标准 Markdown 和显式 HTTP(S) 链接。"""
     cleaned = str(text or "")
-    cleaned = re.sub(r"(?i)<br\s*/?>", "<br>", cleaned)
+    cleaned = _BR_TAG.sub("<br>", cleaned)
     cleaned = _IMAGE_SYNTAX.sub("", cleaned)
     cleaned = _HTML_TAG.sub("", cleaned)
 
@@ -56,7 +58,7 @@ def sanitize_markdown(text: str) -> str:
         return label
 
     cleaned = _MD_LINK.sub(_link, cleaned)
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return _MULTI_NEWLINE.sub("\n\n", cleaned).strip()
 
 
 def _body_text(data: Any) -> str:
@@ -221,17 +223,16 @@ def _fmt_weeks(w: Any) -> str:
 
 
 def _cell_text(r: Dict[str, Any]) -> str:
+    """拼装课程单元格；竖线转义统一由 _grid_from_rows 出表时处理一次。"""
     def clean(value: Any) -> str:
-        return str(value or "").replace("\r", "").replace("\n", "<br>") \
-            .replace("|", "\\|")
+        return str(value or "").replace("\r", "").replace("\n", "<br>")
 
     bits = [clean(r.get("courseName"))]
     extra = [
         x for x in (
             clean(r.get("teacherName")),
             clean(r.get("classroomName")),
-            _fmt_weeks(r.get("weeks")).replace("\r", "").replace("\n", "<br>") \
-                .replace("|", "\\|"),
+            _fmt_weeks(r.get("weeks")).replace("\r", "").replace("\n", "<br>"),
         ) if x
     ]
     if extra:
@@ -265,6 +266,8 @@ def _grid_from_rows(rows: List[Dict[str, Any]]) -> str:
         cells = [time_names.get(t, t)]
         for d in day_codes:
             cells.append(" / ".join(_cell_text(r) for r in grid.get((t, d), [])))
+        # 唯一的竖线转义点：节次名/星期名/课程单元格在此统一转义一次，
+        # 避免此前 _cell_text 与此处双重转义把 `\|` 变成 `\\|`
         lines.append("| " + " | ".join(c.replace("|", "\\|") for c in cells) + " |")
     return "\n".join(lines)
 

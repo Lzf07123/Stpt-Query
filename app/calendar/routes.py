@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from email.utils import format_datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
@@ -52,6 +54,25 @@ def _etag_matches(header: str, etag: str) -> bool:
     opaque = lambda tag: tag[2:] if tag.startswith("W/") else tag      # noqa: E731
     return any(opaque(item.strip()) == opaque(etag)
                for item in value.split(",") if item.strip())
+
+
+def _http_date(value: Any) -> Optional[str]:
+    """把存储的 ISO-8601 时间转成 RFC 9110 HTTP-date（IMF-fixdate，GMT 后缀）。
+
+    Last-Modified 必须是 HTTP-date（如 ``Wed, 13 Nov 2026 03:00:00 GMT``），
+    直接输出 ISO-8601 属于非法格式，严格的日历客户端会忽略或报错。
+    解析失败返回 None（调用方省略该响应头）。
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        # 存储值按本地时区写入；naive 值按本地时区解释后归一到 UTC
+        parsed = parsed.astimezone()
+    return format_datetime(parsed.astimezone(timezone.utc), usegmt=True)
 
 
 def _error(exc: CalendarError) -> JSONResponse:
@@ -138,8 +159,9 @@ def build_router(service: CalendarService, require_auth: Callable[..., Any],
         }
         if _etag_matches(request.headers.get("if-none-match", ""), etag):
             return Response(status_code=304, headers=headers)
-        if data.get("last_modified"):
-            headers["Last-Modified"] = data["last_modified"]
+        last_modified = _http_date(data.get("last_modified"))
+        if last_modified:
+            headers["Last-Modified"] = last_modified
         return Response(content=data["body"], media_type="text/calendar; charset=utf-8",
                         headers=headers)
 

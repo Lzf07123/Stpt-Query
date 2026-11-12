@@ -160,7 +160,6 @@ class JobStore:
         payload = json.loads(raw_payload)
         payload.pop("fingerprint", None)
         request = SessionWorkflowRequest.model_validate(payload)
-        raw = await self._raw_status(str(job_id))
         return str(job_id), request, str(payload["session"]), \
             str(payload.get("client_ip") or "unknown"), now
 
@@ -279,7 +278,28 @@ class JobStore:
             else:
                 await self.redis.zrem(self.active_key, job_id)
                 await self.redis.zrem(self.pending_key, job_id)
-        return len(job_ids)
+        reaped = len(job_ids)
+        reaped += await self.reap_zombie_pending(ttl_seconds)
+        return reaped
+
+    async def reap_zombie_pending(self, ttl_seconds: int) -> int:
+        """清理 pending 索引中的僵尸成员，避免占满 JOB_PENDING_LIMIT 造成假满 503。
+
+        pending zset 的 score 承载入队时间；status/payload 键按相同 TTL 过期，
+        因此入队早于 TTL 且状态已不在 queued/running（含状态键已消失）的成员
+        只能是残留记录，直接移出 pending 索引即可，对既有数据无格式要求。
+        """
+        cutoff = time.time() - ttl_seconds
+        zombie_ids = await self.redis.zrangebyscore(self.pending_key, 0, cutoff)
+        cleaned = 0
+        for job_id in zombie_ids:
+            raw = await self._raw_status(str(job_id))
+            state = raw.get("state") if raw else None
+            if state in ("queued", "running"):
+                continue
+            await self.redis.zrem(self.pending_key, str(job_id))
+            cleaned += 1
+        return cleaned
 
     async def _raw_status(self, job_id: str) -> Optional[dict]:
         raw = await self.redis.get(self._status_key(job_id))

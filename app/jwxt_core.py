@@ -16,48 +16,15 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
-from urllib.parse import quote, unquote, urlencode, urlparse
-
-import requests
-import urllib3
-
-#!/usr/bin/env python3
-"""教务信息查询 Web 服务（FastAPI 多模块实现）。
-
-原 http.server 实现已重构为 FastAPI/uvicorn 单文件服务：业务逻辑、请求适配、
-配置解析均在本文档内；路由/鉴权/限流/会话/缓存/响应语义保持不变。
-"""
-import argparse
-import base64
-from dataclasses import dataclass
-import gzip
-import hashlib
-import ipaddress
-import json
-import logging
-import os
-import queue
-import re
-import secrets
-import socket
-import threading
-import time
-from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import asynccontextmanager, contextmanager
 from logging.handlers import RotatingFileHandler
 from urllib.parse import quote, unquote, urlencode, urlparse
 
 import requests
 import urllib3
-import uvicorn
-from fastapi import Depends, FastAPI, Request, Response, Security
-from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
-from starlette.concurrency import run_in_threadpool
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from requests.adapters import HTTPAdapter
-from typing import List, Optional, Union
+from urllib3.connection import HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.exceptions import ConnectTimeoutError, NameResolutionError
 
 BASE = "https://sec.stpt.edu.cn"
 SERVICE = BASE + "/rump_frontend/loginFromCas/"
@@ -84,6 +51,13 @@ MAX_FINALS_PAGES = 10
 MAX_UNI_PAGES = 10
 # 同账号登录互斥锁等待超时（秒）：避免持锁方异常时同账号请求无限排队
 LOGIN_LOCK_TIMEOUT = 20.0
+# 同账号登录互斥锁的 Redis 租约上界（秒）：登录关键段（完整 CAS/WebVPN 握手）由
+# 约 8 个串行上游请求组成，每个请求超时 TIMEOUT，最坏情况明显超过 30s；租约低于
+# 该值时学校侧慢响应会导致 Redis 锁提前过期、同账号并发重复登录（互相顶下线）。
+# 权衡：持锁副本若崩溃，锁最长在租约期满后自动释放（期间该账号登录等待超时返回
+# 503）；内存模式无租约概念，不受影响。
+LOGIN_LOCK_HOLD_STEPS = 8
+LOGIN_LOCK_LEASE = max(30.0, LOGIN_LOCK_HOLD_STEPS * TIMEOUT)
 AJAX = {"X-Requested-With": "XMLHttpRequest", "Accept": "application/json, text/plain, */*"}
 # 已知端点路径：兜底路由命中这些路径但方法不支持时返回 405（而不是 404）
 KNOWN_PATHS = {
@@ -91,6 +65,9 @@ KNOWN_PATHS = {
     "/get_grades", "/get_schedule", "/get_schedule/export",
     "/jump", "/jump/go", "/metrics",
 }
+# DNS 兜底仅对学校域名生效（经共享池适配器的 HTTPS 连接；见 _DnsFallbackHTTPSConnection），
+# 不再全局替换 socket.getaddrinfo，避免影响进程内其它库的解析行为
+DNS_FALLBACK_HOSTS = ("sec.stpt.edu.cn",)
 DNS_FALLBACK_IPS: list[str] = []
 UPSTREAM_PARALLEL = 4  # 查询时对学校上游的最大并发请求数（--upstream-parallel / JWXT_UPSTREAM_PARALLEL 可调）
 # 上游并发上限（内存模式进程级；Redis 模式下由 jwxt_redis.RedisSemaphore 替换为
@@ -299,12 +276,22 @@ def setup_logging(level=logging.INFO, log_file=""):
 
 SENSITIVE_PARAM = ("password", "ticket", "token", "st", "session", "code")
 
+# CAS TGT 出现在 URL 路径中的形态（mint_st 按标准 CAS REST 把 TGT 放进
+# /v1/tickets/<TGT> 路径段；TGT 是长期凭据，DEBUG 日志必须整段掩码）
+_TICKET_PATH_RE = re.compile(r"/v1/tickets/[^/?#]+")
+
 
 def _sanitize_url(url):
-    """掩码 URL 查询参数中的票据/密码，避免泄露进日志。"""
+    """掩码 URL 中的票据/密码，避免泄露进日志。
+
+    - 查询参数：命中 SENSITIVE_PARAM 的键值整段掩码；
+    - 路径段：/v1/tickets/<TGT> 整段替换为 ***（其余路径原样保留）。
+    """
     base, _, qs = url.partition("?")
+    if "/v1/tickets/" in base:
+        base = _TICKET_PATH_RE.sub("/v1/tickets/***", base)
     if not qs:
-        return url
+        return base
     out = []
     for seg in qs.split("&"):
         k, _, v = seg.partition("=")
@@ -313,7 +300,11 @@ def _sanitize_url(url):
 
 
 def _mask_body(raw):
-    """请求体脱敏：password 全掩码，session/token 只保留前 6 位。"""
+    """请求体脱敏：password/session/token 等敏感字段一律全掩码。
+
+    宪法要求日志不得输出 session/token，因此不再保留前 6 位（前缀泄露
+    仍可能被用于撞库/重放比对），统一输出 ***。
+    """
     try:
         obj = json.loads(raw)
     except Exception:
@@ -326,38 +317,58 @@ def _mask_body(raw):
         if kk in ("password", "passwd", "code"):
             out[k] = "***"
         elif kk in ("session", "seesion", "token", "authorization"):
-            out[k] = (str(v)[:6] + "***") if v not in (None, "") else v
+            out[k] = "***" if v not in (None, "") else v
         else:
             out[k] = v
     return json.dumps(out, ensure_ascii=False)
 
-try:
-    import socket
+# urllib3 在 DNS 解析失败时抛 NameResolutionError（2.x）；1.x 直接抛
+# socket.gaierror。两者都纳入“DNS 失败”判定以触发兜底。
+_DNS_FAILURE_EXCS = (socket.gaierror, NameResolutionError)
 
-    _ORIG_GAI = socket.getaddrinfo
 
-    def _gai(host, port, *a, **k):
+class _DnsFallbackHTTPSConnection(HTTPSConnection):
+    """带学校域名 DNS 兜底的 HTTPS 连接（替代旧的全局 getaddrinfo 补丁）。
+
+    常规 DNS 解析失败且目标主机在 DNS_FALLBACK_HOSTS 中时，改用配置的兜底 IP
+    建立 TCP 连接重试；TLS SNI、证书校验与 HTTP Host 头仍使用原域名——
+    urllib3 在 _new_conn() 返回后才读取 self.host 作为 server_hostname，
+    这里只在兜底重试期间临时改写 _dns_host（TCP 建连目标），finally 中恢复。
+    """
+
+    def _new_conn(self):
         try:
-            return _ORIG_GAI(host, port, *a, **k)
-        except socket.gaierror:
-            if host != "sec.stpt.edu.cn" or not DNS_FALLBACK_IPS:
+            return super()._new_conn()
+        except _DNS_FAILURE_EXCS as exc:
+            target = getattr(self, "_dns_host", None) or self.host
+            if (not DNS_FALLBACK_IPS
+                    or target.rstrip(".") not in DNS_FALLBACK_HOSTS):
                 raise
-            fam = k.get("family") or (a[0] if a else socket.AF_UNSPEC)
-            out = []
-            for ip in DNS_FALLBACK_IPS:
-                try:
-                    for f, t, p, c, sa in _ORIG_GAI(ip, port):
-                        if fam in (socket.AF_UNSPEC, 0, f):
-                            out.append((f, t, p, "", (sa[0], sa[1])))
-                except socket.gaierror:
-                    pass
-            if out:
-                return out
-            raise
+            last = exc
+            try:
+                for ip in DNS_FALLBACK_IPS:
+                    self._dns_host = ip  # 仅改写 TCP 建连目标
+                    try:
+                        return super()._new_conn()
+                    except (OSError, ConnectTimeoutError) as e:
+                        # 该兜底 IP 不可达：尝试下一个 IP
+                        last = e
+                        continue
+            finally:
+                self._dns_host = target  # 恢复原域名，保证 SNI/Host/证书校验不变
+            raise last
 
-    socket.getaddrinfo = _gai
-except Exception:
-    pass
+
+class _DnsFallbackHTTPSConnectionPool(HTTPSConnectionPool):
+    """HTTPS 连接池：使用支持学校域名 DNS 兜底的连接类。"""
+
+    ConnectionCls = _DnsFallbackHTTPSConnection
+
+
+_POOL_CLASSES_BY_SCHEME = {
+    "http": HTTPConnectionPool,
+    "https": _DnsFallbackHTTPSConnectionPool,
+}
 
 
 _SHARED_ADAPTER = None
@@ -372,10 +383,17 @@ class _SharedPoolAdapter(HTTPAdapter):
 
     requests.Session.close() 会关闭自身挂载的 adapter；共享池由进程持有，
     close() 置为 no-op，避免单个会话/克隆会话关闭时清空全局连接池。
+    HTTPS 池使用学校域名 DNS 兜底连接类（_DnsFallbackHTTPSConnection），
+    DNS 兜底只影响经本适配器发起的学校请求，不再全局替换 socket.getaddrinfo。
     """
 
     def close(self):
         pass
+
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        # 仅替换本池管理器的池类映射（_new_pool 时读取），不影响其它适配器
+        self.poolmanager.pool_classes_by_scheme = dict(_POOL_CLASSES_BY_SCHEME)
 
 
 def _shared_adapter():
@@ -392,14 +410,20 @@ def _shared_adapter():
 @contextmanager
 def _upstream_slot():
     """上游并发槽位（内存/Redis 模式共用同一接口）：
-    获取超时抛 UpstreamBusyError，不无限排队。"""
-    if not UPSTREAM_SEM.acquire(timeout=UPSTREAM_SEM_TIMEOUT):
+    获取超时抛 UpstreamBusyError，不无限排队。
+
+    进入时对全局 UPSTREAM_SEM 取局部引用并在 acquire/release 间复用：
+    apply_config 与 Redis 模式会整体替换该对象（BoundedSemaphore ↔
+    RedisSemaphore），若 release 时重读全局可能拿到另一个对象，导致
+    BoundedSemaphore 跨对象 release 抛 ValueError。"""
+    sem = UPSTREAM_SEM
+    if not sem.acquire(timeout=UPSTREAM_SEM_TIMEOUT):
         raise UpstreamBusyError(
             "上游并发已达上限（等待 %.1fs 超时），请稍后重试" % UPSTREAM_SEM_TIMEOUT)
     try:
         yield
     finally:
-        UPSTREAM_SEM.release()
+        sem.release()
 
 
 def _upstream_executor():
@@ -1294,6 +1318,34 @@ def render_schedule(data, semester, info=None, note="", details=True):
     return "\n".join(L)
 
 
+def _session_invalid_result(e, extra_fields):
+    """密码登录路径遇学校端会话失效的统一响应：非瞬时故障，不缓存。"""
+    LOG.warning("密码登录查询遇学校端会话失效 error=%s", e)
+    result = {"success": False,
+              "error": "学校端会话已失效（%s），请稍后重试或重新登录" % e,
+              "output": "", "count": 0, "rows": []}
+    result.update(extra_fields)
+    result["neg_cacheable"] = False
+    result["credential_error"] = True
+    return result
+
+
+def _query_error_result(e, extra_fields):
+    """main/main_schedule 共用的查询失败响应映射（单一事实来源）。
+
+    extra_fields 携带端点差异字段（成绩为 info/stats，课表为 semester）；
+    认证类失败不进负缓存，瞬时上游故障可负缓存，其余按不可重试处理。
+    """
+    credential_error = _is_auth_failure(e)
+    result = {"success": False, "error": "%s: %s" % (type(e).__name__, e),
+              "output": "", "count": 0, "rows": []}
+    result.update(extra_fields)
+    result["neg_cacheable"] = (False if credential_error
+                               else _is_transient_error(e))
+    result["credential_error"] = credential_error
+    return result
+
+
 def main(username: str, password: str, semesters: str = "", include_all: bool = False,
          include_rows: bool = True, include_output: bool = True,
          include_sensitive: bool = False, j=None) -> dict:
@@ -1404,19 +1456,11 @@ def main(username: str, password: str, semesters: str = "", include_all: bool = 
         if created is not None:
             # 密码路径：学校端会话被下线/未登录不是瞬时故障，不缓存；
             # 若刚登录就被挤下线，调用方可稍后重试（下次 /login 会重新建会话）
-            LOG.warning("密码登录查询遇学校端会话失效 username=%s error=%s", u, e)
-            return {"success": False, "error": "学校端会话已失效（%s），请稍后重试或重新登录"
-                    % e, "output": "", "count": 0, "rows": [], "info": {}, "stats": None,
-                    "neg_cacheable": False, "credential_error": True}
+            return _session_invalid_result(e, {"info": {}, "stats": None})
         # 会话路径：交由 handler 转 401 并清除内存会话，防止 /login 复用死会话
         raise TokenError("session 已失效（学校端会话被下线或未登录），请重新 POST /login 获取新 session")
     except Exception as e:
-        credential_error = _is_auth_failure(e)
-        return {"success": False, "error": "%s: %s" % (type(e).__name__, e), "output": "",
-                "count": 0, "rows": [], "info": {}, "stats": None,
-                "neg_cacheable": (False if credential_error
-                                  else _is_transient_error(e)),
-                "credential_error": credential_error}
+        return _query_error_result(e, {"info": {}, "stats": None})
     finally:
         if created is not None:
             created.close()
@@ -1575,18 +1619,10 @@ def main_schedule(username: str, password: str, semester: str = "", weeks=None,
         return resp
     except SessionInvalidError as e:
         if created is not None:
-            LOG.warning("密码登录查询遇学校端会话失效 username=%s error=%s", u, e)
-            return {"success": False, "error": "学校端会话已失效（%s），请稍后重试或重新登录"
-                    % e, "output": "", "count": 0, "rows": [], "semester": semester or "",
-                    "neg_cacheable": False, "credential_error": True}
+            return _session_invalid_result(e, {"semester": semester or ""})
         raise TokenError("session 已失效（学校端会话被下线或未登录），请重新 POST /login 获取新 session")
     except Exception as e:
-        credential_error = _is_auth_failure(e)
-        return {"success": False, "error": "%s: %s" % (type(e).__name__, e),
-                "output": "", "count": 0, "rows": [], "semester": semester or "",
-                "neg_cacheable": (False if credential_error
-                                  else _is_transient_error(e)),
-                "credential_error": credential_error}
+        return _query_error_result(e, {"semester": semester or ""})
     finally:
         if created is not None:
             created.close()
@@ -1990,8 +2026,11 @@ def apply_config(cfg):
     except Exception:
         pass
     try:
-        import jwxt_state as _state_mod
+        # 标准部署以 `app` 包导入（app.jwxt_state）；旧写法 `import jwxt_state`
+        # 仅在把 app/ 目录本身塞进 sys.path 时才命中同一模块，标准部署下
+        # ImportError 被吞，JWXT_WARM_WAIT/LOGIN_REUSE 同步静默失效。
+        from app import jwxt_state as _state_mod
         _state_mod.WARM_WAIT = WARM_WAIT
         _state_mod.LOGIN_REUSE = LOGIN_REUSE
-    except Exception:
-        pass
+    except Exception as e:
+        LOG.warning("同步 jwxt_state 配置失败（WARM_WAIT/LOGIN_REUSE 可能不生效）: %s", e)

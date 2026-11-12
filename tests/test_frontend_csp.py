@@ -1,4 +1,9 @@
-"""前端内联脚本 CSP 哈希与重试交互回归测试。"""
+"""前端脚本外置与 CSP 契约回归测试。
+
+index.html 的内联脚本已外置：主脚本为 static/app.js（defer），首屏主题预置为
+static/theme-init.js（阻塞执行，防深色首绘闪烁）；二者走 CSP `script-src 'self'`，
+主站 CSP 只保留 admin.html 唯一内联主题脚本的 SHA-256 哈希。
+"""
 from __future__ import annotations
 
 import base64
@@ -13,46 +18,84 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# admin.html 唯一内联脚本（主题预置）的哈希；/jump/go 桥接页哈希独立，不在此列
+ADMIN_INLINE_HASH = "sha256-DIcJv9zUX/pnA3GFnUMOhDwaaS7IpPVKTp651n/piMc="
+
+
+def _read(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
+
 
 def _inline_scripts(filename: str) -> list[str]:
-    html = (ROOT / "frontend" / "static" / filename).read_text(encoding="utf-8")
+    html = _read("frontend/static/" + filename)
     return [match.group(1) for match in re.finditer(r"<script>(.*?)</script>", html, re.DOTALL)]
 
 
-def test_frontend_inline_scripts_are_allowed_by_csp():
-    policy = (ROOT / "frontend" / "templates" / "default.conf.template").read_text(
-        encoding="utf-8"
-    )
-    for filename in ("index.html", "admin.html"):
-        scripts = _inline_scripts(filename)
-        assert scripts, filename
-        for script in scripts:
-            digest = hashlib.sha256(script.encode("utf-8")).digest()
-            expected = "sha256-" + base64.b64encode(digest).decode("ascii")
-            assert f"'{expected}'" in policy
+def _location_body(config: str, head_prefix: str) -> str:
+    """按 location 头部前缀取块体（到第一个收括号为止，模板内无嵌套大括号）。"""
+    start = config.index(head_prefix)
+    open_brace = config.index("{", start)
+    return config[open_brace:config.index("}", open_brace)]
+
+
+def test_index_html_has_no_inline_scripts_and_references_external_assets():
+    """查询页不允许任何内联脚本：主脚本与主题预置全部外置，CSP 走 'self'。"""
+    index = _read("frontend/static/index.html")
+    assert _inline_scripts("index.html") == []
+    assert '<script src="/app.js?v=1" defer></script>' in index
+    assert '<script src="/theme-init.js?v=1"></script>' in index
+    assert (ROOT / "frontend" / "static" / "app.js").is_file()
+    assert (ROOT / "frontend" / "static" / "theme-init.js").is_file()
+    # admin.html 仍保留唯一内联主题脚本（其哈希在 CSP 中声明）
+    assert len(_inline_scripts("admin.html")) == 1
+
+
+def test_frontend_script_src_only_keeps_admin_inline_hash():
+    """主站 CSP 的 script-src 只含 'self' 与 admin 内联哈希，且哈希与实际脚本一致。"""
+    policy = _read("frontend/templates/default.conf.template")
+    main_csp = policy[:policy.index("location = /jump/go {")]
+    script_src = re.search(r"script-src ([^;\"]+)", main_csp).group(1)
+    hashes = re.findall(r"'(sha256-[A-Za-z0-9+/=]+)'", script_src)
+    assert hashes == [ADMIN_INLINE_HASH]
+    assert "'self'" in script_src
+
+    script = _inline_scripts("admin.html")[0]
+    digest = hashlib.sha256(script.encode("utf-8")).digest()
+    assert "sha256-" + base64.b64encode(digest).decode("ascii") == ADMIN_INLINE_HASH
+
+
+def test_theme_init_runs_before_stylesheet_and_follows_system_preference():
+    """主题预置必须阻塞执行且位于样式表之前，防止深色用户首绘闪白。"""
+    index = _read("frontend/static/index.html")
+    theme = _read("frontend/static/theme-init.js")
+    theme_pos = index.index('<script src="/theme-init.js?v=1"></script>')
+    style_pos = index.index('<link rel="stylesheet"')
+    assert theme_pos < style_pos
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in theme
+    assert 't = "dark";' not in theme
 
 
 def test_retry_buttons_use_delegated_listener_not_inline_handler():
-    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
-    assert 'class="empty-state-action btn btn-primary js-retry-query"' in index
-    assert 'class="btn btn-ghost js-retry-query"' in index
+    index = _read("frontend/static/index.html")
+    app = _read("frontend/static/app.js")
+    assert 'class="empty-state-action btn btn-primary js-retry-query"' in app
+    assert 'class="btn btn-ghost js-retry-query"' in app
     assert "onclick=" not in index
-    assert '.closest(".js-retry-query")' in index
+    assert "onclick=" not in app
+    assert '.closest(".js-retry-query")' in app
 
 
 def test_history_scrubs_current_and_legacy_schedule_download_links():
-    index = (ROOT / "frontend" / "static" / "index.html").read_text(
-        encoding="utf-8"
-    )
-    assert r"/^\[点击下载课表（(?:PDF|Word) 文件）\]\(/.test(line)" in index
-    assert 'line.indexOf("> ⚠️ 此链接含个人令牌，请勿外传。") === 0' in index
-    assert "storeResultText(id, stripLoginNote(String(record.resultText || \"\")))" in index
-    assert "function sanitizeStoredHistory()" in index
-    assert "sanitizeStoredHistory();" in index
+    app = _read("frontend/static/app.js")
+    assert r"/^\[点击下载课表（(?:PDF|Word) 文件）\]\(/.test(line)" in app
+    assert 'line.indexOf("> ⚠️ 此链接含个人令牌，请勿外传。") === 0' in app
+    assert "storeResultText(id, stripLoginNote(String(record.resultText || \"\")))" in app
+    assert "function sanitizeStoredHistory()" in app
+    assert "sanitizeStoredHistory();" in app
 
 
 def test_admin_limit_selector_lives_in_log_pagination():
-    admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    admin = _read("frontend/static/admin.html")
     form_start = admin.index('<form class="card filter-card logs-primary" id="logFilter">')
     form_end = admin.index("</form>", form_start)
     pagination_start = admin.index('<div class="pagination">')
@@ -66,15 +109,15 @@ def test_admin_limit_selector_lives_in_log_pagination():
     assert '<select class="custom-select-native" id="limitSelect" name="limit"' in pagination
     assert '<button class="custom-select-trigger" id="limitTrigger"' in pagination
 
-    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
+    script = _read("frontend/static/admin.js")
     assert 'limitSelect: $("limitSelect")' in script
     assert "elements.filter.elements.limit" not in script
     assert 'new FormData(elements.filter).get("limit")' not in script
 
 
 def test_admin_orchestration_distribution_includes_redis():
-    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
-    page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
+    script = _read("frontend/static/admin.js")
+    page = _read("frontend/static/admin.html")
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
@@ -82,9 +125,9 @@ def test_admin_orchestration_distribution_includes_redis():
 
 
 def test_admin_console_has_consistent_navigation_and_responsive_tooling():
-    page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
-    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
-    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+    page = _read("frontend/static/admin.html")
+    script = _read("frontend/static/admin.js")
+    style = _read("frontend/src/admin.css")
 
     assert '<a class="skip-link" href="#main">' in page
     assert '<main class="wrap" id="main" tabindex="-1">' in page
@@ -118,13 +161,13 @@ def test_admin_console_has_consistent_navigation_and_responsive_tooling():
 
 
 def test_homepage_notice_bar_and_history_are_external_scripts():
-    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
-    script = (ROOT / "frontend" / "static" / "notice.js").read_text(encoding="utf-8")
-    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+    index = _read("frontend/static/index.html")
+    script = _read("frontend/static/notice.js")
+    style = _read("frontend/src/app.css")
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
     assert 'src="/notice.js?v=6"' in index
-    assert 'href="/style.css?v=95"' in index
+    assert 'href="/style.css?v=96"' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -138,7 +181,8 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
 
 
 def test_query_first_use_controls_are_accessible_and_isolated():
-    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    index = _read("frontend/static/index.html")
+    app = _read("frontend/static/app.js")
 
     assert '<form id="queryForm"' in index and "novalidate" in index
     assert 'class="query-kind-grid" role="group" aria-labelledby="queryKindLabel"' in index
@@ -152,25 +196,26 @@ def test_query_first_use_controls_are_accessible_and_isolated():
     assert 'id="historySection"' in index
     assert 'class="full history-row hidden"' in index
     assert 'id="resultTitle" tabindex="-1"' in index
-    assert 'resultTitle.focus({ preventScroll: true })' in index
-    assert 'progressSteps.style.setProperty("--step-font-size", "12px")' in index
+    assert 'resultTitle.focus({ preventScroll: true })' in app
+    assert 'progressSteps.style.setProperty("--step-font-size", "12px")' in app
 
     # 查询类型与日历刷新间隔不能共用事件选择器，否则切换日历时会误改查询内容。
-    assert 'document.querySelectorAll(".query-choice").forEach' in index
-    assert 'document.querySelectorAll(".seg-btn").forEach' not in index
+    assert 'document.querySelectorAll(".query-choice").forEach' in app
+    assert 'document.querySelectorAll(".seg-btn").forEach' not in app
 
 
 def test_result_page_has_overview_and_humanized_diagnostics():
-    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
-    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+    index = _read("frontend/static/index.html")
+    app = _read("frontend/static/app.js")
+    style = _read("frontend/src/app.css")
 
     assert 'id="resultOverview" class="result-overview hidden"' in index
-    assert "function renderResultOverview(" in index
-    assert "function parseDiagnosticReport(" in index
-    assert "function renderDiagnosticReport(" in index
-    assert 'table-shell table-shell--grades' in index
-    assert 'table-shell table-shell--schedule' in index
-    assert 'aria-label="查询结果表格"' in index
+    assert "function renderResultOverview(" in app
+    assert "function parseDiagnosticReport(" in app
+    assert "function renderDiagnosticReport(" in app
+    assert 'table-shell table-shell--grades' in app
+    assert 'table-shell table-shell--schedule' in app
+    assert 'aria-label="查询结果表格"' in app
     for selector in (".result-overview {", ".diagnostic-report {", ".table-shell--grades"):
         assert selector in style
 
@@ -192,9 +237,9 @@ def _extract_function(source: str, signature: str) -> str:
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="需要 node 才能执行前端片段")
 def test_result_overview_helpers_are_deterministic(tmp_path):
-    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    app = _read("frontend/static/app.js")
     source = "\n".join(
-        _extract_function(index, signature)
+        _extract_function(app, signature)
         for signature in (
             "isTableSeparator(line)",
             "parseResultTable(text)",
@@ -222,16 +267,10 @@ def test_result_overview_helpers_are_deterministic(tmp_path):
     assert result.returncode == 0, result.stderr or result.stdout
 
 
-def test_first_visit_theme_follows_system_preference():
-    head_script = _inline_scripts("index.html")[0]
-    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in head_script
-    assert 't = "dark";' not in head_script
-
-
 def test_admin_notice_management_ui_is_wired():
-    admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
-    script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
-    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+    admin = _read("frontend/static/admin.html")
+    script = _read("frontend/static/admin.js")
+    style = _read("frontend/src/admin.css")
     assert 'id="tabNotices"' in admin
     assert 'id="noticesPanel"' in admin
     assert 'id="noticeForm" novalidate' in admin
@@ -255,16 +294,16 @@ def test_admin_notice_management_ui_is_wired():
 
 
 def test_design_v16_back_to_top_and_skeleton_contract():
-    index = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
-    admin = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
-    admin_script = (ROOT / "frontend" / "static" / "admin.js").read_text(encoding="utf-8")
-    style = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
-    app_style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+    index = _read("frontend/static/index.html")
+    admin = _read("frontend/static/admin.html")
+    admin_script = _read("frontend/static/admin.js")
+    style = _read("frontend/src/index.css")
+    app_style = _read("frontend/src/app.css")
 
     assert 'class="back-to-top" href="#main" aria-label="返回顶部"' in index
     assert 'class="back-to-top" id="backToTop" href="#main" aria-label="返回顶部"' in admin
-    for page in (index, admin):
-        assert 'href="/style.css?v=95"' in page
+    assert 'href="/style.css?v=96"' in index
+    assert 'href="/style-admin.css?v=1"' in admin
     assert 'admin.js?v=32' in admin
     assert 'backToTop: $("backToTop")' in admin_script
     assert 'elements.backToTop.addEventListener("click"' in admin_script
@@ -289,8 +328,8 @@ def test_design_v16_back_to_top_and_skeleton_contract():
 
 
 def test_admin_mobile_header_and_dashboard_keep_first_use_context():
-    page = (ROOT / "frontend" / "static" / "admin.html").read_text(encoding="utf-8")
-    style = (ROOT / "frontend" / "src" / "app.css").read_text(encoding="utf-8")
+    page = _read("frontend/static/admin.html")
+    style = _read("frontend/src/admin.css")
 
     nav_end = page.index("</nav>")
     actions_start = page.index('<div class="admin-head-actions">')
@@ -319,10 +358,50 @@ def test_admin_mobile_header_and_dashboard_keep_first_use_context():
 
 
 def test_public_notice_routes_are_proxied_by_frontend():
-    policy = (ROOT / "frontend" / "templates" / "default.conf.template").read_text(
-        encoding="utf-8"
-    )
+    policy = _read("frontend/templates/default.conf.template")
     assert "notices(?:/active|/history)" in policy
+
+
+def test_edge_rate_limit_configuration():
+    """边缘限流挡板：业务入口限流，公开只读路径不限流（日历客户端/健康检查高频轮询）。"""
+    zone = _read("frontend/nginx.conf")
+    assert "limit_req_zone $remote_addr zone=perip:10m rate=10r/s;" in zone
+
+    config = _read("frontend/templates/default.conf.template")
+
+    # 业务入口必须挂边缘限流挡板（宽松值；业务限流由 app 层 RATE_LIMIT 负责）
+    for head in (
+        "location = /jump/go",
+        "location = /get_schedule/export",
+        "location ^~ /api/v1/calendars",
+    ):
+        assert "limit_req zone=perip burst=20 nodelay;" in _location_body(config, head), head
+
+    run_head_start = config.index("location ~ ^/(run(?:/jobs")
+    run_open = config.index("{", run_head_start)
+    run_body = config[run_open:config.index("}", run_open)]
+    assert "limit_req zone=perip burst=20 nodelay;" in run_body
+
+    # 公开只读与静态路径不得限流
+    for head in ("location ^~ /cal/", "location = / {", "location / {"):
+        assert "limit_req" not in _location_body(config, head), head
+
+    public_regex = config[config.index("location ~ ^/(service-status"):]
+    public_regex = public_regex[:public_regex.index("}")]
+    assert "limit_req" not in public_regex
+
+    # 公开路径所在的正则 location 必须存在（业务与公开路径拆成两个 regex location）
+    assert "location ~ ^/(service-status|notices(?:/active|/history)|health(/.*)?|jump(/.*)?|get_schedule/export)$ {" in config
+
+
+def test_direct_html_paths_disable_caching():
+    """直连 /index.html 与 /admin.html 必须禁缓存，且不得自建 add_header（保住 server 级 CSP）。"""
+    config = _read("frontend/templates/default.conf.template")
+    for head in ("location = /index.html", "location = /admin.html"):
+        body = _location_body(config, head)
+        assert "expires epoch;" in body, head
+        assert "add_header" not in body, head
+    assert "expires 1h;" in config  # 静态兜底目录保持 1h 缓存（HTML 精确路径已单独禁缓存）
 
 
 def test_jump_bridge_hash_matches_rendered_page():
@@ -335,7 +414,7 @@ def test_jump_bridge_hash_matches_rendered_page():
     html = Handler._jump_bridge(None, "code-for-hash-check")
     script = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
     digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
-    config = (ROOT / "frontend" / "templates" / "default.conf.template").read_text(encoding="utf-8")
+    config = _read("frontend/templates/default.conf.template")
     bridge_block = config[config.index("location = /jump/go {"):]
     bridge_block = bridge_block[:bridge_block.index("}")]
     declared = set(re.findall(r"'(sha256-[A-Za-z0-9+/=]+)'", bridge_block))
@@ -352,7 +431,7 @@ def test_locations_with_custom_headers_keep_security_headers():
     否则该 location 会静默丢失 CSP / X-Content-Type-Options / HSTS 等
     （历史上 /admin 即因此没有 CSP）。
     """
-    config = (ROOT / "frontend" / "templates" / "default.conf.template").read_text(encoding="utf-8")
+    config = _read("frontend/templates/default.conf.template")
     # 锚定行首，避免误匹配 Permissions-Policy 里的 "geolocation=()" 等字面量
     blocks = re.findall(r"(?m)^\s*location[^\n{]*\{[^}]*\}", config)
     assert len(blocks) >= 5, "未解析到预期的 location 块"

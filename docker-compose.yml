@@ -136,6 +136,14 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+    # stdout 是查询日志权威通道：本地 json-file 滚动，防止无界增长挤爆宿主磁盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # 优雅停机：留足在途查询（渲染 + LLM 分析 + PDF）收尾时间，默认 10s 会 SIGKILL 腰斩
+    stop_grace_period: 45s
 
   # ===== 容器 2：前端（默认唯一对外入口）=====
   # nginx 静态页 + 反代 /run、/service-status、/health*、/notices* 到单体应用
@@ -180,6 +188,12 @@ services:
       timeout: 5s
       start_period: 5s
       retries: 3
+    # nginx 访问日志走 stdout：本地 json-file 滚动，防止无界增长挤爆宿主磁盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   # 边缘网络：nginx ↔ 单体应用（唯一网络；不再有内网分层）

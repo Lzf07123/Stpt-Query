@@ -1,12 +1,15 @@
 """HTTP 层测试：探针端点、鉴权、生产校验与限流。"""
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.jobs import JobStore
 from app.main import Settings, create_app
 from app.pipeline import ServiceError
+from app.schema import SessionWorkflowRequest
 
 
 def _client() -> TestClient:
@@ -463,3 +466,170 @@ async def test_async_worker_links_pipeline_phases_to_job_status():
     assert status.state == "success"
     assert status.phase == "analyzing"
     assert calls == ["dispatching", "querying", "querying", "analyzing"]
+
+
+def test_memory_rate_allow_writes_back_filtered_timestamps():
+    """限流桶写回归约：被限流也写回过滤结果；空桶删 key；LRU 硬上限保持。"""
+    from collections import OrderedDict
+    from threading import Lock
+
+    from app.context import MAX_RATE_KEYS, _memory_rate_allow
+
+    hits: OrderedDict = OrderedDict()
+    lock = Lock()
+    now = 1000.0
+
+    assert _memory_rate_allow(hits, lock, "ip-a", now, 2) is False
+    assert hits["ip-a"] == [1000.0]
+    assert _memory_rate_allow(hits, lock, "ip-a", now + 1, 2) is False
+    assert _memory_rate_allow(hits, lock, "ip-a", now + 2, 2) is True
+    # 被限流的请求不追加新时间戳，但过滤结果仍写回
+    assert hits["ip-a"] == [1000.0, 1001.0]
+
+    # 过滤：60 秒外的旧时间戳被丢弃，桶清空后重新开始计数
+    assert _memory_rate_allow(hits, lock, "ip-a", now + 61, 2) is False
+    assert hits["ip-a"] == [1061.0]
+
+    # 被限流路径同样写回：过旧条目不会滞留内存（修复点）
+    hits["ip-c"] = [now - 5, now - 4, now - 120]
+    assert _memory_rate_allow(hits, lock, "ip-c", now, 2) is True
+    assert hits["ip-c"] == [now - 5, now - 4]
+
+    # 空桶（全部过期且无新增）不驻留内存
+    hits["ip-b"] = [now - 120]
+    assert _memory_rate_allow(hits, lock, "ip-b", now + 100, 0) is True
+    assert "ip-b" not in hits
+
+    # LRU 硬上限：超出 4096 后淘汰最久未使用 key
+    lru_hits: OrderedDict = OrderedDict()
+    for index in range(MAX_RATE_KEYS):
+        lru_hits[f"ip-{index:05d}"] = [now]
+    lru_hits.move_to_end("ip-00000")
+    assert _memory_rate_allow(lru_hits, lock, "ip-new", now, 1) is False
+    assert len(lru_hits) == MAX_RATE_KEYS
+    assert "ip-00001" not in lru_hits
+    assert "ip-new" in lru_hits
+
+
+async def test_run_releases_query_slot_before_logging(monkeypatch):
+    """槽位释放先于日志写入：pipeline 落定即释放，日志/日历收尾在槽位之外。"""
+    import httpx
+
+    import app.context as context_module
+
+    events = []
+    app = create_app(Settings(
+        _env_file=None,
+        environment="development",
+        auto_rotate_token=False,
+        api_token="test-token",
+        service_base_url="http://127.0.0.1:9",
+        service_api_token="x",
+        llm_api_key="",
+        global_concurrency=1,
+        file_log_enabled=False,
+    ))
+    slots = app.state.query_slots
+
+    class RecordingPipeline:
+        async def run(self, body):
+            events.append(("pipeline", slots.locked()))
+            return {"success": True, "kind": "grades", "run_id": "run-1",
+                    "output": "ok", "meta": {}}
+
+    def fake_log_query(entry):
+        events.append(("log", slots.locked()))
+
+    import app.context as context_module
+    monkeypatch.setattr(context_module, "log_query", fake_log_query)
+    app.state.pipeline = RecordingPipeline()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/run",
+            headers={"Authorization": "Bearer test-token"},
+            json={"username": "2023000001", "password": "pw", "option": "成绩"})
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    # 槽位持有期间跑 pipeline（locked=True），日志写入时槽位已释放（locked=False）
+    assert events == [("pipeline", True), ("log", False)]
+
+
+async def test_job_worker_idle_backoff_grows_and_resets():
+    """空轮询指数退避（0.2s→1s 封顶），领到任务后重置回 0.2s。"""
+    import time as time_module
+
+    app = create_app(Settings(
+        _env_file=None,
+        environment="development",
+        auto_rotate_token=False,
+        api_token="test-token",
+        service_base_url="http://127.0.0.1:9",
+        service_api_token="x",
+        llm_api_key="",
+        job_workers=1,
+        file_log_enabled=False,
+    ))
+
+    class PingableRedis:
+        async def ping(self):
+            return True
+
+        async def aclose(self):
+            return None
+
+    class BackoffJobStore:
+        def __init__(self):
+            self.claim_times = []
+            self.completed = []
+
+        async def claim(self, ttl_seconds):
+            self.claim_times.append(time_module.monotonic())
+            if len(self.claim_times) == 5:
+                return ("0" * 32, SessionWorkflowRequest(
+                    username="2023000001", option="成绩"),
+                    "short-lived-session", "127.0.0.1", time_module.time())
+            return None
+
+        async def mark_phase(self, job_id, phase, ttl_seconds):
+            return True
+
+        async def mark_running(self, job_id, started_at, ttl_seconds):
+            return True
+
+        async def complete(self, job_id, result, ttl_seconds):
+            self.completed.append(job_id)
+
+        async def reap_stale(self, stale_after_seconds, ttl_seconds):
+            return 0
+
+    class InstantPipeline:
+        async def run(self, body, session=None, progress_cb=None):
+            return {"success": True, "kind": "grades", "run_id": "run-1",
+                    "output": "ok", "meta": {}}
+
+    store = BackoffJobStore()
+    app.state.redis = PingableRedis()
+    app.state.job_store = store
+    app.state.pipeline = InstantPipeline()
+
+    with TestClient(app):
+        for _ in range(200):
+            if len(store.claim_times) >= 7:
+                break
+            await asyncio.sleep(0.05)
+
+    assert len(store.claim_times) >= 7, "worker 应持续空轮询并完成一次任务"
+    assert store.completed, "第 5 次 claim 应交付一个任务"
+    gaps = [store.claim_times[i + 1] - store.claim_times[i]
+            for i in range(min(6, len(store.claim_times) - 1))]
+    # 期望退避序列：0.2 → 0.4 → 0.8 → 1.0 →(交付后立即可 claim) → 0.2（重置）
+    assert 0.15 <= gaps[0] < 0.5, "首次空轮询约 0.2s：%s" % gaps
+    assert gaps[1] > gaps[0] * 1.5, "第二次空轮询应约 0.4s（指数增长）：%s" % gaps
+    assert gaps[2] > gaps[1] * 1.5, "第三次空轮询应约 0.8s：%s" % gaps
+    assert gaps[2] <= gaps[3] < 2.0, "退避封顶 1s：%s" % gaps
+    assert gaps[4] < 0.5, "任务交付后下一次 claim 立即执行：%s" % gaps
+    assert gaps[5] < gaps[3] * 0.5, \
+        "任务完成后空轮询间隔重置回 0.2s 量级（不再继续 1s 封顶）：%s" % gaps

@@ -13,6 +13,7 @@ import asyncio
 import copy
 import hashlib
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .config import (CalendarConfig, CalendarConfigError, Term,
                      load_config_dict, read_config_payload)
 from .crypto import CalendarCrypto, CalendarCryptoError
-from .ics import build_events, render
+from .ics import build_events, extract_dtstamp, render
 from .qr import QrPayloadError, qr_matrix, webcal_url
 from .rules import ScheduleDataError
 from .store import CalendarStore, now_iso
@@ -111,7 +112,10 @@ class CalendarService:
         self._config_payload = dict(config_payload or config.to_dict())
         self._config_source = config_source if config_source in ("file", "database") else "file"
         self.school = school
-        self._locks: Dict[str, asyncio.Lock] = {}
+        # 每把锁带引用计数：计数归零即从字典删除，避免 _locks 随历史 key 无界增长。
+        # 持有 entry 引用的协程始终用同一把锁，删除只发生在无人持有时，无竞态。
+        self._locks: Dict[str, List[Any]] = {}
+        self._locks_guard = asyncio.Lock()
         self._attempt_lock = asyncio.Lock()
 
     # ---------------- 工具 ----------------
@@ -119,12 +123,23 @@ class CalendarService:
         base = (self.settings.public_base_url or "").rstrip("/")
         return base + FEED_PATH % token
 
-    def _lock(self, key: str) -> asyncio.Lock:
-        lock = self._locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[key] = lock
-        return lock
+    @asynccontextmanager
+    async def _holding(self, key: str):
+        """按 key 互斥执行（create/refresh 对同一订阅统一用 calendar_id 锁）。"""
+        async with self._locks_guard:
+            entry = self._locks.get(key)
+            if entry is None:
+                entry = [asyncio.Lock(), 0]
+                self._locks[key] = entry
+            entry[1] += 1
+        try:
+            async with entry[0]:
+                yield
+        finally:
+            async with self._locks_guard:
+                entry[1] -= 1
+                if entry[1] <= 0 and self._locks.get(key) is entry:
+                    del self._locks[key]
 
     def normalized_refresh(self, value: Optional[int]) -> int:
         try:
@@ -146,13 +161,41 @@ class CalendarService:
             timespec="seconds")
 
     def _build_ics(self, rows: List[Dict[str, Any]], term: Term, sequence: int,
-                   refresh_seconds: Optional[int] = None) -> Tuple[bytes, str, List[str]]:
-        """生成 ICS；REFRESH-INTERVAL 必须取该订阅自己的刷新间隔而不是全局默认值。"""
+                   refresh_seconds: Optional[int] = None,
+                   stamp: Optional[datetime] = None) -> Tuple[bytes, str, List[str]]:
+        """生成 ICS；REFRESH-INTERVAL 必须取该订阅自己的刷新间隔而不是全局默认值。
+
+        `stamp` 是 DTSTAMP/LAST-MODIFIED 的时间源（None = 当前时间）。
+        """
         events, anomalies = build_events(rows, term, self.config, self.crypto, sequence)
         text = render(events, calendar_name="我的课表",
-                      refresh_seconds=refresh_seconds or self.settings.default_refresh)
+                      refresh_seconds=refresh_seconds or self.settings.default_refresh,
+                      now=stamp)
         payload = text.encode("utf-8")
         return payload, hashlib.sha256(payload).hexdigest(), anomalies
+
+    def _render_snapshot(self, rows: List[Dict[str, Any]], term: Term,
+                         refresh_seconds: Optional[int],
+                         previous: Optional[Dict[str, Any]]) -> Tuple[bytes, str, bool, List[str]]:
+        """渲染 ICS 快照并判定内容是否变化。
+
+        变化检测必须与上一份快照同参数（同 SEQUENCE、同 DTSTAMP）渲染，否则文本
+        必然不同、changed 恒真。数据不变 → ICS 文本不变 → ETag 不变（304 生效）；
+        数据变化时以当前时间重打 DTSTAMP/LAST-MODIFIED，并把 SEQUENCE 推进到
+        revision + 1（save_snapshot 随 changed 同步自增 revision，保持不变量
+        「快照 SEQUENCE == revision」）。
+        """
+        previous = previous or {}
+        previous_etag = previous.get("ics_etag") or ""
+        if previous_etag:
+            stamp = extract_dtstamp(previous.get("ics_blob"))
+            payload, etag, anomalies = self._build_ics(
+                rows, term, int(previous.get("revision") or 0), refresh_seconds, stamp)
+            if etag == previous_etag:
+                return payload, etag, False, anomalies
+        payload, etag, anomalies = self._build_ics(
+            rows, term, int(previous.get("revision") or 0) + 1, refresh_seconds, None)
+        return payload, etag, True, anomalies
 
     # ---------------- 身份判定 ----------------
     def _password_matches(self, record: Dict[str, Any], password: str) -> bool:
@@ -219,6 +262,8 @@ class CalendarService:
         owner_hash = self.crypto.owner_hash(username)
         record = self.store.get_by_owner_semester(owner_hash, semester)
         if record is None:
+            # 先做一次等量本地密钥校验再 404：避免「秒回 404」暴露该学号没有订阅
+            self.crypto.timing_dummy()
             raise CalendarError(404, "未找到该学期的订阅", "not_found")
         proven = self._password_matches(record, password) or bool(
             verified_token and self.crypto.check_verify_token(verified_token, owner_hash))
@@ -266,14 +311,21 @@ class CalendarService:
             if not reauthorize:
                 raise CalendarError(409, "该学期已存在订阅且密码不同，请使用重新授权",
                                     "reauthorize_required")
-        elif len(self.store.list_by_owner(owner_hash)) >= int(self.settings.max_per_owner):
-            raise CalendarError(409, "订阅数量已达上限", "too_many_subscriptions")
 
         interval = self.normalized_refresh(refresh_interval)
-        async with self._lock(owner_hash):
+        # 已有订阅用 calendar_id 锁（与 refresh/refresh_record 一致，消除 owner 锁与
+        # id 锁并发写同一快照）；新订阅在创建前用 owner 锁串行化配额检查。
+        lock_key = existing["id"] if existing is not None else owner_hash
+        async with self._holding(lock_key):
+            # 锁内重读：并发窗口内记录可能已被创建/变更，配额也必须在锁内判定，
+            # 否则两个并发 create 同 owner 会同时通过 max_per_owner 检查。
+            existing = self.store.get_by_owner_semester(owner_hash, semester)
+            if existing is None and len(self.store.list_by_owner(owner_hash)) >= int(
+                    self.settings.max_per_owner):
+                raise CalendarError(409, "订阅数量已达上限", "too_many_subscriptions")
             rows = await self.school.schedule_rows(username, password, semester)
-            sequence = int(existing["revision"]) + 1 if existing else 1
-            payload, etag, anomalies = self._build_ics(rows, term, sequence, interval)
+            payload, etag, changed, anomalies = self._render_snapshot(
+                rows, term, interval, existing)
             if existing is None:
                 token = self.crypto.new_token()
                 calendar_id = str(uuid.uuid4())
@@ -299,7 +351,10 @@ class CalendarService:
                 self.store.update_credentials(
                     calendar_id, self.crypto.encrypt(password, "cred|%s" % calendar_id),
                     self.crypto.encrypt(username, "user|%s" % calendar_id))
-            self.store.save_snapshot(calendar_id, payload, etag, changed=True, status="ok",
+            # 新建订阅：INSERT 已代表版本 1（快照 SEQUENCE == revision 的不变量），
+            # 不再因 changed=True 额外自增；重新授权按内容真实变化决定是否自增。
+            self.store.save_snapshot(calendar_id, payload, etag,
+                                     changed=bool(existing) and changed, status="ok",
                                      next_refresh_at=now_iso(interval), fail_count=0,
                                      clear_pause=True)
             self.store.audit(calendar_id, "reauthorize" if existing else "create", "user", "ok")
@@ -319,7 +374,12 @@ class CalendarService:
         if not self._password_matches(record, password):
             await self.school.schedule_rows(username, password, semester)   # L3 校验
         term = self._term(semester)
-        async with self._lock(record["id"]):
+        async with self._holding(record["id"]):
+            # 进锁后按 id 重读：并发刷新/轮换窗口内的 revision、etag 与间隔必须以
+            # 最新记录为准，否则快照序号会丢计、过期比较会误判 changed。
+            record = self.store.get_by_id(record["id"])
+            if record is None:
+                raise CalendarError(404, "未找到该学期的订阅", "not_found")
             last = record.get("last_fetch_at")
             cooldown = max(60, int(self.settings.min_refresh) // 60)
             if last:
@@ -335,11 +395,9 @@ class CalendarService:
                                                     timespec="seconds"),
                             "state": "active"}
             rows = await self.school.schedule_rows(username, password, semester)
-            payload, etag, anomalies = self._build_ics(rows, term, int(record["revision"]) + 1,
-                                                       int(record["refresh_interval"]))
-            changed = etag != (record.get("ics_etag") or "")
-            self.store.save_snapshot(record["id"], payload, etag if changed else record.get("ics_etag") or etag,
-                                     changed=changed, status="ok",
+            payload, etag, changed, anomalies = self._render_snapshot(
+                rows, term, int(record["refresh_interval"]), record)
+            self.store.save_snapshot(record["id"], payload, etag, changed=changed, status="ok",
                                      next_refresh_at=now_iso(int(record["refresh_interval"])),
                                      fail_count=0, clear_pause=True)
             self.store.audit(record["id"], "refresh", "user", "ok")
@@ -351,17 +409,21 @@ class CalendarService:
         """按记录刷新（后台调度/后台手工触发）；失败按策略退避，不抛异常给调用方。"""
         semester = record["semester"]
         term = self._term(semester)
-        try:
-            username = self.crypto.decrypt(record["username_enc"], "user|%s" % record["id"])
-            password = self.crypto.decrypt(record["cred_enc"], "cred|%s" % record["id"])
-        except CalendarCryptoError as exc:
-            self.store.mark_failure(record["id"], status="config_error", error=str(exc),
-                                    fail_count=int(record.get("fail_count") or 0) + 1,
-                                    next_refresh_at=now_iso(24 * 3600), paused_until=None)
-            return "config_error"
-        if username and not self._password_matches(record, password):
-            return "config_error"
-        async with self._lock(record["id"]):
+        async with self._holding(record["id"]):
+            # 进锁后按 id 重读（同 refresh）：以最新 revision/etag 做比较与自增。
+            record = self.store.get_by_id(record["id"])
+            if record is None:
+                return "not_found"
+            try:
+                username = self.crypto.decrypt(record["username_enc"], "user|%s" % record["id"])
+                password = self.crypto.decrypt(record["cred_enc"], "cred|%s" % record["id"])
+            except CalendarCryptoError as exc:
+                self.store.mark_failure(record["id"], status="config_error", error=str(exc),
+                                        fail_count=int(record.get("fail_count") or 0) + 1,
+                                        next_refresh_at=now_iso(24 * 3600), paused_until=None)
+                return "config_error"
+            # 凭据完整性由 AEAD 解密保证：cred_enc 缺失或被篡改已在上方解密处拦截，
+            # 解密成功即与落盘密文一致，无需再走一次 _password_matches 双重解密。
             try:
                 rows = await self.school.schedule_rows(username, password, semester)
             except CalendarAuthError:
@@ -382,12 +444,9 @@ class CalendarService:
                                         next_refresh_at=now_iso(backoff), paused_until=None)
                 self.store.audit(record["id"], "refresh", actor, "upstream_error")
                 return "upstream_error"
-            payload, etag, _ = self._build_ics(rows, term, int(record["revision"]) + 1,
-                                                int(record["refresh_interval"]))
-            changed = etag != (record.get("ics_etag") or "")
-            self.store.save_snapshot(record["id"], payload,
-                                     etag if changed else record.get("ics_etag") or etag,
-                                     changed=changed, status="ok",
+            payload, etag, changed, _ = self._render_snapshot(
+                rows, term, int(record["refresh_interval"]), record)
+            self.store.save_snapshot(record["id"], payload, etag, changed=changed, status="ok",
                                      next_refresh_at=now_iso(int(record["refresh_interval"])),
                                      fail_count=0, clear_pause=True)
             self.store.audit(record["id"], "refresh", actor, "ok")
@@ -407,6 +466,8 @@ class CalendarService:
         owner_hash = self.crypto.owner_hash(username)
         record = self.store.get_by_owner_semester(owner_hash, semester)
         if record is None:
+            # 先做一次等量本地密钥校验再 404：避免「秒回 404」暴露该学号没有订阅
+            self.crypto.timing_dummy()
             raise CalendarError(404, "未找到该学期的订阅", "not_found")
         await self._authoritative(owner_hash, username, password, verified_token, record)
         token = self.crypto.new_token()

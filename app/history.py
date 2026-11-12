@@ -146,10 +146,7 @@ class RedisEventHistory:
     async def recent(self, versioned_key: str, legacy_key: str,
                      limit: int = 100) -> list[dict]:
         limit = max(0, int(limit))
-        try:
-            events = await self._read_versioned(versioned_key, limit)
-        except Exception:
-            raise
+        events = await self._read_versioned(versioned_key, limit)
         try:
             legacy = await self._read_legacy(legacy_key, limit)
         except Exception:

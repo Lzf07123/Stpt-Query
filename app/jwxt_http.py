@@ -70,6 +70,19 @@ def _redis_module():
             _REDIS_MODULE = module
     return _REDIS_MODULE
 
+def _token_equal(provided, token):
+    """恒时比较令牌：统一按 UTF-8 字节比较。
+
+    secrets.compare_digest 对含非 ASCII 字符的 str 直接抛 TypeError
+    （在鉴权路径上会变成 500）；先 encode("utf-8") 保证任意请求头输入
+    都安全——不匹配一律按未认证（401）处理。"""
+    try:
+        return secrets.compare_digest(
+            (provided or "").encode("utf-8"), (token or "").encode("utf-8"))
+    except Exception:
+        return False
+
+
 class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler 提供 FastAPI 适配）
 
     def _cors_headers(self):
@@ -84,15 +97,6 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
             ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
             ("Access-Control-Expose-Headers", "X-Trace-Id"),
         ]
-
-    def _rate_ok(self):
-        ip = self._client_ip()
-        if not self.server.rate_limiter.allow(ip):
-            LOG.warning("触发限流 client=%s path=%s", ip, urlparse(self.path).path)
-            self._reply(429, {"success": False, "error": "请求过于频繁，请稍后再试",
-                              "output": "", "count": 0, "rows": []})
-            return False
-        return True
 
     def _login_rate_ok(self):
         ip = self._client_ip()
@@ -158,7 +162,10 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                 getattr(self, "trace_id", "-"))
         except PoolFullError:
             # 队列满时跳过预热：会话仍可用，首次查询会按需同步补齐
-            LOG.warning("后台任务队列已满，跳过会话预热 session=%s***", str(sid)[:6])
+            LOG.warning("后台任务队列已满，跳过会话预热 session=***")
+            # 必须置位 warm_evt：否则该会话首次查询会在 _ensure_warmed 里
+            # 空等满 WARM_WAIT 才走按需同步补齐
+            evt.set()
             j.close()
         return sid, {
             "reused": False,
@@ -281,7 +288,7 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
         token = self.server.token
         authorization = self.headers.get("Authorization", "")
         provided = authorization[7:] if authorization.startswith("Bearer ") else ""
-        ok = not token or secrets.compare_digest(provided, token)
+        ok = not token or _token_equal(provided, token)
         if not ok:
             LOG.warning("未授权访问 path=%s client=%s",
                         urlparse(self.path).path,
@@ -777,7 +784,7 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
         sid = self.server.jump_codes.resolve(code, consume=consume) if code else None
         if not sid:
             msg = "跳转链接已失效或过期，请重新调用 /jump 获取新链接"
-            LOG.warning("跳转码无效或过期 code=%s***", (code or "")[:6])
+            LOG.warning("跳转码无效或过期 code=***")
             if json_mode:
                 self._reply(401, {"success": False, "error": msg})
             else:
@@ -1063,24 +1070,6 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                     .replace("@@APP_PLAIN@@", e(app_plain))
                     .replace("@@WARM_DIRECT@@", e(BASE + "/rump_frontend/login/")))
 
-    def do_GET(self):
-        self._begin()
-        if not self._rate_ok():
-            return
-        try:
-            self._handle_get()
-        except Exception as e:
-            LOG.exception("GET 请求处理异常 path=%s", self.path)
-            try:
-                with self.server.state.lock:
-                    self.server.state.last_real = {"at": int(time.time()),
-                                                   "endpoint": urlparse(self.path).path,
-                                                   "ok": False, "count": 0,
-                                                   "error": "%s: %s" % (type(e).__name__, e)}
-            except Exception:
-                pass
-            self._reply(500, _internal_error_body())
-
     def _handle_get(self):
         p = urlparse(self.path).path
         q = urlparse(self.path).query
@@ -1178,30 +1167,266 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                 self._reply(404, {"success": False, "error": "not found: " + p,
                                   "output": "", "count": 0, "rows": []})
 
-    def do_POST(self):
-        self._begin()
-        if not self._rate_ok():
+    def cache_get_with_touch(self, cache, ck, p, session, u, pw,
+                             recover_sid=False):
+        """查询缓存并在命中时完成公共回填（成绩/课表平行结构抽取）：
+        标记缓存命中、续期/找回会话、更新最近一次请求指标、记录负缓存命中日志。
+
+        recover_sid=True（课表路径）时，密码路径命中会尝试找回同账号会话，
+        供回填下载码使用。返回 (hit, hit_sid)；未命中返回 (None, None)。
+        """
+        if cache is None or ck is None:
+            return None, None
+        hit = cache.get(ck)
+        if hit is None:
+            return None, None
+        self._cache_hit = True
+        hit_sid = session
+        if hit_sid:
+            self.server.sessions.touch(hit_sid)
+        elif recover_sid and u and pw:
+            # 密码路径命中缓存：尝试找回同账号会话，用于签发下载码
+            hit_sid = self.server.sessions.find_reusable(
+                u, _pwd_hash(u, pw), LOGIN_REUSE_MAX_AGE)
+            if hit_sid:
+                self.server.sessions.touch(hit_sid)
+        with self.server.state.lock:
+            self.server.state.last_real = {"at": int(time.time()),
+                                           "endpoint": p,
+                                           "ok": bool(hit.get("success")),
+                                           "count": hit.get("count", 0),
+                                           "cached": True}
+        if not hit.get("success"):
+            LOG.warning("业务失败（负缓存命中） endpoint=%s error=%s", p, hit.get("error"))
+        return hit, hit_sid
+
+    def cache_put_result(self, cache, ck, r, *, include_sensitive=False,
+                         strip_download=False, defaults=None):
+        """查询结果写入缓存（成绩/课表平行结构抽取）：成功结果整条缓存；
+        失败仅在上游瞬时故障（neg_cacheable）时按 NEG_CACHE_TTL 负缓存，
+        凭据错误不缓存。
+
+        include_sensitive=True（含身份证/证件照的响应）一律不缓存；
+        strip_download=True（课表路径）时剔除 download_url（含短时 code，不入缓存）；
+        defaults 为失败响应的缺省字段（成绩路径补 info/stats）。
+        """
+        if cache is None or ck is None or not _cache_write_allowed(include_sensitive, r):
             return
+        if r.get("success"):
+            value = dict(r)
+            if strip_download:
+                value.pop("download_url", None)
+            # JSON 类缓存只存 value dict：get_payload 命中时按需序列化，
+            # 不再同时保存 dict 与 bytes 两份（内存放大 4-6 倍）
+            cache.set(ck, value)
+            return
+        nf = dict(r)
+        for k, v in (defaults or {}).items():
+            nf.setdefault(k, v)
+        nf.setdefault("rows", [])
+        if strip_download:
+            nf.pop("download_url", None)
+        nf.pop("neg_cacheable", None)
+        nf.pop("credential_error", None)
+        cache.set(ck, nf, ttl=NEG_CACHE_TTL)
+
+    def _post_login(self):
+        """POST /login：限流 + Bearer 校验后换取 session（同账号互斥）。"""
+        if not self._login_rate_ok():
+            return
+        if not self._ok():
+            self._reply(401, {"success": False, "error": "token required", "output": "", "count": 0, "rows": []})
+            return
+        b = self._body()
+        u = (b.get("username") or "").strip()
+        pw = (b.get("password") or "").strip()
+        if not u or not pw:
+            if b.get("session") or b.get("seesion"):
+                self._reply(400, {"success": False,
+                                  "error": "调用有误：/login 用于用 username/password 换取令牌；"
+                                           "携带令牌查询请调用 /get_grades 或 /get_schedule，字段名是 session",
+                                  "output": "", "count": 0, "rows": []})
+            else:
+                self._reply(400, {"success": False, "error": "username/password 必填（/login 用于换取令牌）",
+                                  "output": "", "count": 0, "rows": []})
+            return
+        # 同账号并发登录互斥：避免两个请求同时向学校创建会话，
+        # 触发“已在其他地方登录”互相顶下线；持锁后统一走复用/新登录助手
         try:
-            self._handle_post()
-        except BodyTooLarge as e:
-            self.close_connection = True
-            LOG.warning("请求体超限 path=%s %s", urlparse(self.path).path, e)
-            self._reply(413, {"success": False, "error": "请求体过大（上限 %d 字节）" % MAX_BODY,
+            with self.server.login_locks.lock(u, timeout=LOGIN_LOCK_TIMEOUT):
+                sid, meta = self._login_session(u, pw)
+        except LockTimeoutError:
+            LOG.warning("登录锁等待超时 username=%s", u)
+            self._reply(503, {"success": False,
+                              "error": "登录处理繁忙，请稍后重试",
                               "output": "", "count": 0, "rows": []})
+            return
         except Exception as e:
-            LOG.exception("请求处理异常 path=%s", self.path)
-            try:
-                with self.server.state.lock:
-                    self.server.state.last_real = {"at": int(time.time()),
-                                                   "endpoint": urlparse(self.path).path,
-                                                   "ok": False, "count": 0,
-                                                   "error": "%s: %s" % (type(e).__name__, e)}
-            except Exception:
-                pass
-            self._reply(500, _internal_error_body())
+            self._reply_login_error(e)
+            return
+        self._reply(200, {"success": True, "session": sid, "token": sid,
+                          "username": u, **meta})
+
+    def _post_export(self):
+        """POST /get_schedule/export：Bearer 校验后按请求体参数导出课表 PDF。"""
+        if not self._ok():
+            self._reply(401, {"success": False, "error": "token required", "output": "", "count": 0, "rows": []})
+            return
+        b = self._body()
+        self._export(str(b.get("username") or "").strip(),
+                     str(b.get("password") or "").strip(),
+                     str(b.get("session") or "").strip(),
+                     str(b.get("semester") or "").strip(),
+                     b.get("weeks"),
+                     b.get("odd_or_double", 1),
+                     str(b.get("code") or "").strip())
+
+    def _post_jump(self):
+        """POST /jump：Bearer 校验后按请求体参数签发免密跳转链接。"""
+        if not self._ok():
+            self._reply(401, {"success": False, "error": "token required",
+                              "url": "", "count": 0, "rows": []})
+            return
+        b = self._body()
+        self._jump(str(b.get("session") or "").strip(),
+                   str(b.get("page") or "").strip(),
+                   _to_bool(b.get("redirect", False)),
+                   _to_bool(b.get("json", False)),
+                   _to_bool(b.get("verify", False)),
+                   _to_bool(b.get("warm", False)))
+
+    def _post_schedule(self, p, b, session, u, pw):
+        """POST /get_schedule：查缓存（命中回填下载码）→ 执行 → 写缓存。
+
+        返回响应 dict（交由 _handle_post 统一收尾）；已直接写出响应或无需
+        收尾时返回 None。
+        """
+        include_rows = _to_bool(b.get("include_rows", True))
+        include_details = _to_bool(b.get("include_details", True))
+        # 课表结果短 TTL 缓存：键 = 学号 + 学期 + 规范化周次 + 单双周 + 裁剪参数
+        # （不含密码）。课表一周内基本不变，重复查询直接命中缓存，减少学校上游压力；
+        # 学校侧偶发失败以短时负缓存防抖。缓存不落盘、重启即失效，与成绩缓存同级。
+        cache = getattr(self.server, "schedule_cache", None)
+        sem_raw = str(b.get("semester") or "").strip()
+        weeks_raw = b.get("weeks")
+        weeks_err = _weeks_param_error(weeks_raw)
+        if weeks_err:
+            self._reply(400, {"success": False, "error": weeks_err,
+                              "output": "", "count": 0, "rows": [],
+                              "semester": sem_raw})
+            return None
+        odd_err = _odd_or_double_error(b.get("odd_or_double", 1))
+        if odd_err:
+            self._reply(400, {"success": False, "error": odd_err,
+                              "output": "", "count": 0, "rows": [],
+                              "semester": sem_raw})
+            return None
+        odd_raw = _to_int(b.get("odd_or_double", 1), 1)
+        cache_u = u
+        if not cache_u and session:
+            _c = self.server.sessions.get(session)
+            if _c:
+                cache_u = _c.get("username", "")
+        ck = None
+        if cache is not None and cache_u:
+            ck = _schedule_cache_key(cache_u, sem_raw, weeks_raw, odd_raw,
+                                     include_rows, include_details)
+            hit, hit_sid = self.cache_get_with_touch(
+                cache, ck, p, session, u, pw, recover_sid=True)
+            if hit is not None:
+                if hit_sid and hit.get("success"):
+                    resp = dict(hit)
+                    code = self.server.export_codes.mint(hit_sid)
+                    suffix = _schedule_export_suffix(b, code, resp.get("semester", ""))
+                    base = public_url(self.headers)
+                    resp["download_url"] = base + suffix if base else suffix
+                    if getattr(self.server, "schedule_pdf_prewarm", False):
+                        try:
+                            _background_executor().submit(
+                                self._prewarm_schedule_pdf, hit_sid,
+                                resp.get("semester", ""), weeks_raw, odd_raw)
+                        except PoolFullError:
+                            LOG.warning("后台任务队列已满，跳过课表 PDF 预热")
+                    self._reply(200, resp)
+                    return None
+                self._reply(200, hit, body=cache.get_payload(ck))
+                return None
+        r, session, error_reply = self._execute_data_query(
+            p, session, u, pw,
+            lambda uu, pp, jj: main_schedule(
+                uu, pp, sem_raw, weeks_raw, odd_raw, j=jj,
+                include_rows=include_rows, include_details=include_details))
+        if error_reply is not None:
+            status_code, body = error_reply
+            if status_code is not None:
+                self._reply(status_code, body)
+            return None
+        if not r.get("success"):
+            LOG.warning("业务失败 endpoint=%s error=%s", p, r.get("error"))
+        if session and r.get("success"):
+            code = self.server.export_codes.mint(session)
+            suffix = _schedule_export_suffix(b, code, r.get("semester", ""))
+            base = public_url(self.headers)
+            r["download_url"] = base + suffix if base else suffix
+            if getattr(self.server, "schedule_pdf_prewarm", False):
+                try:
+                    _background_executor().submit(
+                        self._prewarm_schedule_pdf, session,
+                        r.get("semester", ""), weeks_raw, odd_raw)
+                except PoolFullError:
+                    LOG.warning("后台任务队列已满，跳过课表 PDF 预热")
+        # 负缓存：仅上游瞬时故障才缓存，凭据错误不缓存
+        self.cache_put_result(cache, ck, r, strip_download=True)
+        return r
+
+    def _post_grades(self, p, b, session, u, pw):
+        """POST /get_grades：查缓存 → 执行 → 写缓存。返回响应 dict（交由
+        _handle_post 统一收尾）；已直接写出响应时返回 None。"""
+        grades_include_rows = _to_bool(b.get("include_rows", True))
+        grades_include_output = _to_bool(b.get("include_output", True))
+        grades_include_all = _to_bool(b.get("include_all", False))
+        grades_include_sensitive = _to_bool(b.get("include_sensitive_info", False))
+        # 成绩查询结果短 TTL 缓存：键 = 学号 + 查询参数（不含密码）。
+        # session 查询时先从会话存储取学号，未登录成功过则不缓存。
+        cache = getattr(self.server, "grades_cache", None)
+        cache_u = u
+        if not cache_u and session:
+            _c = self.server.sessions.get(session)
+            if _c:
+                cache_u = _c.get("username", "")
+        ck = None
+        if cache is not None and cache_u:
+            ck = "%s|%s|%d|%d|%d|%d" % (cache_u, _norm_semesters_key(b.get("semesters")),
+                                         grades_include_all, grades_include_rows,
+                                         grades_include_output, grades_include_sensitive)
+            hit, _hit_sid = self.cache_get_with_touch(cache, ck, p, session, u, pw)
+            if hit is not None:
+                self._reply(200, hit, body=cache.get_payload(ck))
+                return None
+        r, session, error_reply = self._execute_data_query(
+            p, session, u, pw,
+            lambda uu, pp, jj: main(
+                uu, pp, str(b.get("semesters") or ""),
+                grades_include_all,
+                include_rows=grades_include_rows,
+                include_output=grades_include_output,
+                include_sensitive=grades_include_sensitive, j=jj))
+        if error_reply is not None:
+            status_code, body = error_reply
+            if status_code is not None:
+                self._reply(status_code, body)
+            return None
+        # 敏感字段（身份证/证件照）响应不缓存；失败结果仅当标记
+        # neg_cacheable（上游瞬时故障）时负缓存，凭据错误不缓存
+        self.cache_put_result(cache, ck, r,
+                              include_sensitive=grades_include_sensitive,
+                              defaults={"info": {}, "stats": None})
+        if not r.get("success"):
+            LOG.warning("业务失败 endpoint=%s error=%s", p, r.get("error"))
+        return r
 
     def _handle_post(self):
+        """POST 分发：小端点就地处理，成绩/课表/登录/导出/跳转拆分到 _post_*。"""
         p = urlparse(self.path).path
         if p == "/health/deep":
             b = self._body()
@@ -1215,66 +1440,13 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
             self._reply(200, st)
             return
         if p == "/login":
-            if not self._login_rate_ok():
-                return
-            if not self._ok():
-                self._reply(401, {"success": False, "error": "token required", "output": "", "count": 0, "rows": []})
-                return
-            b = self._body()
-            u = (b.get("username") or "").strip()
-            pw = (b.get("password") or "").strip()
-            if not u or not pw:
-                if b.get("session") or b.get("seesion"):
-                    self._reply(400, {"success": False,
-                                      "error": "调用有误：/login 用于用 username/password 换取令牌；"
-                                               "携带令牌查询请调用 /get_grades 或 /get_schedule，字段名是 session",
-                                      "output": "", "count": 0, "rows": []})
-                else:
-                    self._reply(400, {"success": False, "error": "username/password 必填（/login 用于换取令牌）",
-                                      "output": "", "count": 0, "rows": []})
-                return
-            # 同账号并发登录互斥：避免两个请求同时向学校创建会话，
-            # 触发“已在其他地方登录”互相顶下线；持锁后统一走复用/新登录助手
-            try:
-                with self.server.login_locks.lock(u, timeout=LOGIN_LOCK_TIMEOUT):
-                    sid, meta = self._login_session(u, pw)
-            except LockTimeoutError:
-                LOG.warning("登录锁等待超时 username=%s", u)
-                self._reply(503, {"success": False,
-                                  "error": "登录处理繁忙，请稍后重试",
-                                  "output": "", "count": 0, "rows": []})
-                return
-            except Exception as e:
-                self._reply_login_error(e)
-                return
-            self._reply(200, {"success": True, "session": sid, "token": sid,
-                              "username": u, **meta})
+            self._post_login()
             return
         if p == "/get_schedule/export":
-            if not self._ok():
-                self._reply(401, {"success": False, "error": "token required", "output": "", "count": 0, "rows": []})
-                return
-            b = self._body()
-            self._export(str(b.get("username") or "").strip(),
-                         str(b.get("password") or "").strip(),
-                         str(b.get("session") or "").strip(),
-                         str(b.get("semester") or "").strip(),
-                         b.get("weeks"),
-                         b.get("odd_or_double", 1),
-                         str(b.get("code") or "").strip())
+            self._post_export()
             return
         if p == "/jump":
-            if not self._ok():
-                self._reply(401, {"success": False, "error": "token required",
-                                  "url": "", "count": 0, "rows": []})
-                return
-            b = self._body()
-            self._jump(str(b.get("session") or "").strip(),
-                       str(b.get("page") or "").strip(),
-                       _to_bool(b.get("redirect", False)),
-                       _to_bool(b.get("json", False)),
-                       _to_bool(b.get("verify", False)),
-                       _to_bool(b.get("warm", False)))
+            self._post_jump()
             return
         if p not in ("/get_grades", "/get_schedule"):
             if p in KNOWN_PATHS:
@@ -1297,173 +1469,11 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
             return
         try:
             if p == "/get_schedule":
-                include_rows = _to_bool(b.get("include_rows", True))
-                include_details = _to_bool(b.get("include_details", True))
-                # 课表结果短 TTL 缓存：键 = 学号 + 学期 + 规范化周次 + 单双周 + 裁剪参数
-                # （不含密码）。课表一周内基本不变，重复查询直接命中缓存，减少学校上游压力；
-                # 学校侧偶发失败以短时负缓存防抖。缓存不落盘、重启即失效，与成绩缓存同级。
-                cache = getattr(self.server, "schedule_cache", None)
-                sem_raw = str(b.get("semester") or "").strip()
-                weeks_raw = b.get("weeks")
-                weeks_err = _weeks_param_error(weeks_raw)
-                if weeks_err:
-                    self._reply(400, {"success": False, "error": weeks_err,
-                                      "output": "", "count": 0, "rows": [],
-                                      "semester": sem_raw})
-                    return
-                odd_err = _odd_or_double_error(b.get("odd_or_double", 1))
-                if odd_err:
-                    self._reply(400, {"success": False, "error": odd_err,
-                                      "output": "", "count": 0, "rows": [],
-                                      "semester": sem_raw})
-                    return
-                odd_raw = _to_int(b.get("odd_or_double", 1), 1)
-                cache_u = u
-                if not cache_u and session:
-                    _c = self.server.sessions.get(session)
-                    if _c:
-                        cache_u = _c.get("username", "")
-                ck = None
-                if cache is not None and cache_u:
-                    ck = _schedule_cache_key(cache_u, sem_raw, weeks_raw, odd_raw,
-                                             include_rows, include_details)
-                    hit = cache.get(ck)
-                    if hit is not None:
-                        self._cache_hit = True
-                        hit_sid = session
-                        if hit_sid:
-                            self.server.sessions.touch(hit_sid)
-                        elif u and pw:
-                            # 密码路径命中缓存：尝试找回同账号会话，用于签发下载码
-                            hit_sid = self.server.sessions.find_reusable(
-                                u, _pwd_hash(u, pw), LOGIN_REUSE_MAX_AGE)
-                            if hit_sid:
-                                self.server.sessions.touch(hit_sid)
-                        with self.server.state.lock:
-                            self.server.state.last_real = {"at": int(time.time()),
-                                                           "endpoint": p,
-                                                           "ok": bool(hit.get("success")),
-                                                           "count": hit.get("count", 0),
-                                                           "cached": True}
-                        if not hit.get("success"):
-                            LOG.warning("业务失败（负缓存命中） endpoint=%s error=%s", p, hit.get("error"))
-                        if hit_sid and hit.get("success"):
-                            resp = dict(hit)
-                            code = self.server.export_codes.mint(hit_sid)
-                            suffix = _schedule_export_suffix(b, code, resp.get("semester", ""))
-                            base = public_url(self.headers)
-                            resp["download_url"] = base + suffix if base else suffix
-                            if getattr(self.server, "schedule_pdf_prewarm", False):
-                                try:
-                                    _background_executor().submit(
-                                        self._prewarm_schedule_pdf, hit_sid,
-                                        resp.get("semester", ""), weeks_raw, odd_raw)
-                                except PoolFullError:
-                                    LOG.warning("后台任务队列已满，跳过课表 PDF 预热")
-                            self._reply(200, resp)
-                            return
-                        self._reply(200, hit, body=cache.get_payload(ck))
-                        return
-                r, session, error_reply = self._execute_data_query(
-                    p, session, u, pw,
-                    lambda uu, pp, jj: main_schedule(
-                        uu, pp, sem_raw, weeks_raw, odd_raw, j=jj,
-                        include_rows=include_rows, include_details=include_details))
-                if error_reply is not None:
-                    status_code, body = error_reply
-                    if status_code is not None:
-                        self._reply(status_code, body)
-                    return
+                r = self._post_schedule(p, b, session, u, pw)
             else:
-                grades_include_rows = _to_bool(b.get("include_rows", True))
-                grades_include_output = _to_bool(b.get("include_output", True))
-                grades_include_all = _to_bool(b.get("include_all", False))
-                grades_include_sensitive = _to_bool(b.get("include_sensitive_info", False))
-                # 成绩查询结果短 TTL 缓存：键 = 学号 + 查询参数（不含密码）。
-                # session 查询时先从会话存储取学号，未登录成功过则不缓存。
-                cache = getattr(self.server, "grades_cache", None)
-                cache_u = u
-                if not cache_u and session:
-                    _c = self.server.sessions.get(session)
-                    if _c:
-                        cache_u = _c.get("username", "")
-                ck = None
-                if cache is not None and cache_u:
-                    ck = "%s|%s|%d|%d|%d|%d" % (cache_u, _norm_semesters_key(b.get("semesters")),
-                                                 grades_include_all, grades_include_rows,
-                                                 grades_include_output, grades_include_sensitive)
-                    hit = cache.get(ck)
-                    if hit is not None:
-                        self._cache_hit = True
-                        if session:
-                            self.server.sessions.touch(session)
-                        with self.server.state.lock:
-                            self.server.state.last_real = {"at": int(time.time()),
-                                                           "endpoint": p,
-                                                           "ok": bool(hit.get("success")),
-                                                           "count": hit.get("count", 0),
-                                                           "cached": True}
-                        if not hit.get("success"):
-                            LOG.warning("业务失败（负缓存命中） endpoint=%s error=%s", p, hit.get("error"))
-                        self._reply(200, hit, body=cache.get_payload(ck))
-                        return
-                r, session, error_reply = self._execute_data_query(
-                    p, session, u, pw,
-                    lambda uu, pp, jj: main(
-                        uu, pp, str(b.get("semesters") or ""),
-                        grades_include_all,
-                        include_rows=grades_include_rows,
-                        include_output=grades_include_output,
-                        include_sensitive=grades_include_sensitive, j=jj))
-                if error_reply is not None:
-                    status_code, body = error_reply
-                    if status_code is not None:
-                        self._reply(status_code, body)
-                    return
-                # 敏感字段（身份证/证件照）响应不缓存；失败结果仅当标记
-                # neg_cacheable（上游瞬时故障）时负缓存，凭据错误不缓存
-                if ck is not None and _cache_write_allowed(grades_include_sensitive, r):
-                    if r.get("success"):
-                        cache.set(ck, r, payload=json.dumps(r, ensure_ascii=False).encode("utf-8"))
-                    else:
-                        nf = dict(r)
-                        nf.setdefault("info", {})
-                        nf.setdefault("stats", None)
-                        nf.setdefault("rows", [])
-                        nf.pop("neg_cacheable", None)
-                        nf.pop("credential_error", None)
-                        cache.set(ck, nf, ttl=NEG_CACHE_TTL,
-                                  payload=json.dumps(nf, ensure_ascii=False).encode("utf-8"))
-            if not r.get("success"):
-                LOG.warning("业务失败 endpoint=%s error=%s", p, r.get("error"))
-            if p == "/get_schedule" and session and r.get("success"):
-                code = self.server.export_codes.mint(session)
-                suffix = _schedule_export_suffix(b, code, r.get("semester", ""))
-                base = public_url(self.headers)
-                r["download_url"] = base + suffix if base else suffix
-                if getattr(self.server, "schedule_pdf_prewarm", False):
-                    try:
-                        _background_executor().submit(
-                            self._prewarm_schedule_pdf, session,
-                            r.get("semester", ""), weeks_raw, odd_raw)
-                    except PoolFullError:
-                        LOG.warning("后台任务队列已满，跳过课表 PDF 预热")
-            if p == "/get_schedule" and ck is not None:
-                if _cache_write_allowed(False, r):
-                    if r.get("success"):
-                        cached_r = dict(r)
-                        cached_r.pop("download_url", None)  # 下载链接含短时 code，不入缓存
-                        cache.set(ck, cached_r,
-                                  payload=json.dumps(cached_r, ensure_ascii=False).encode("utf-8"))
-                    else:
-                        # 负缓存：仅上游瞬时故障才缓存，凭据错误不缓存
-                        nf = dict(r)
-                        nf.setdefault("rows", [])
-                        nf.pop("download_url", None)
-                        nf.pop("neg_cacheable", None)
-                        nf.pop("credential_error", None)
-                        cache.set(ck, nf, ttl=NEG_CACHE_TTL,
-                                  payload=json.dumps(nf, ensure_ascii=False).encode("utf-8"))
+                r = self._post_grades(p, b, session, u, pw)
+            if r is None:
+                return
             # 认证失败返回 401；其余失败（上游瞬时/学校业务错误）返回 200 + success:false，
             # 避免把“学校查询失败”误判成“凭据无效”
             auth = bool(r.pop("credential_error", None))
@@ -1677,13 +1687,8 @@ class FastHandler(Handler):
                  self.command, _sanitize_url(self.path), client)
 
     def _client_ip(self):
-        if TRUST_PROXY:
-            peer = self.client_address[0] if self.client_address else ""
-            if _trusted_proxy_ok(peer):
-                xff = self.headers.get("X-Forwarded-For", "")
-                if xff:
-                    return xff.split(",")[0].strip()
-        return self.client_address[0] if self.client_address else "-"
+        peer = self.client_address[0] if self.client_address else ""
+        return _client_ip_from(peer, self.headers)
 
     def _body(self):
         """与原实现语义一致：读已缓冲请求体，校验上限、宽容解析 JSON。"""
@@ -1730,14 +1735,25 @@ def _raw_target(request):
     return path + ("?" + qs.decode("latin-1") if qs else "")
 
 
-def _client_ip(request):
+def _client_ip_from(peer, headers):
+    """客户端 IP 提取的单一实现：TRUST_PROXY 且来源为可信代理网段时，
+    采信 X-Forwarded-For 首段；否则使用对端地址。
+
+    FastHandler（self.client_address/headers）与 ASGI 层（request.client/
+    request.headers）各包一层薄适配，避免两份重复逻辑漂移。
+    """
     if TRUST_PROXY:
-        peer = request.client.host if request.client else ""
         if _trusted_proxy_ok(peer):
-            xff = request.headers.get("X-Forwarded-For", "")
+            xff = headers.get("X-Forwarded-For", "")
             if xff:
                 return xff.split(",")[0].strip()
-    return request.client.host if request.client else "-"
+    return peer or "-"
+
+
+def _client_ip(request):
+    return _client_ip_from(
+        request.client.host if request.client else "",
+        request.headers)
 
 
 class ApiError(Exception):
@@ -1796,7 +1812,7 @@ def _token_required_for(payload):
                    credentials: HTTPAuthorizationCredentials = Security(
                        HTTPBearer(auto_error=False))):
         token = runtime.token
-        if token and (credentials is None or not secrets.compare_digest(
+        if token and (credentials is None or not _token_equal(
                 credentials.credentials, token)):
             _sync_trace(request)
             LOG.warning("未授权访问 path=%s client=%s",
@@ -1814,8 +1830,7 @@ def _export_code_or_token_required(request: Request,
     token = runtime.token
     if not token:
         return
-    if credentials is not None and secrets.compare_digest(
-            credentials.credentials, token):
+    if credentials is not None and _token_equal(credentials.credentials, token):
         return
     if request.method == "GET" and request.query_params.get("code"):
         # 只要带 code 就放行到 handler，由 _export 返回“链接已失效”等友好错误

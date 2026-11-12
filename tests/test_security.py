@@ -128,7 +128,8 @@ def test_runtime_memory_guardrails_are_configured():
     assert "mem_limit: ${FRONTEND_MEM_LIMIT:-64m}" in compose
     assert compose.count("MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}") == 1
     nginx = open("frontend/nginx.conf", encoding="utf-8").read()
-    assert "worker_processes auto;" in nginx
+    # worker_processes 固定值：auto 会按宿主核数 fork，与 pids_limit: 32 冲突
+    assert "worker_processes 2;" in nginx
 
 
 def test_only_frontend_publishes_host_port():
@@ -143,15 +144,17 @@ def test_only_frontend_publishes_host_port():
 
 
 def test_inline_script_hashes_are_covered_by_csp():
+    """查询页脚本已外置（CSP 走 'self'），残留的内联脚本必须全部被哈希覆盖。"""
     config = open("frontend/templates/default.conf.template", encoding="utf-8").read()
     declared_hashes = set(re.findall(r"'(sha256-[A-Za-z0-9+/=]+)'", config))
-    for page in ("frontend/static/index.html", "frontend/static/admin.html"):
-        html = open(page, encoding="utf-8").read()
-        inline_scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.S)
-        assert inline_scripts
-        for script in inline_scripts:
-            digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
-            assert f"sha256-{digest}" in declared_hashes
+    index_html = open("frontend/static/index.html", encoding="utf-8").read()
+    assert re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", index_html, re.S) == []
+    admin_html = open("frontend/static/admin.html", encoding="utf-8").read()
+    inline_scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", admin_html, re.S)
+    assert inline_scripts
+    for script in inline_scripts:
+        digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
+        assert f"sha256-{digest}" in declared_hashes
 
 
 def test_csp_does_not_allow_inline_styles():

@@ -1,7 +1,7 @@
 """异常分类器测试：验证规则表与原提示词速查表一致。"""
 from __future__ import annotations
 
-from app.classifier import classify_empty_result, classify_error
+from app.classifier import classify_empty_result, classify_error, is_session_invalid
 
 
 def test_pass_error_is_a_credential_failure_not_school_lock():
@@ -111,3 +111,21 @@ def test_error_response_summary_is_redacted_and_bounded():
     assert "super-secret-value" not in summary
     assert len(summary) <= 320
     assert "token" not in summary.lower()
+
+
+def test_is_session_invalid_covers_both_legacy_pattern_sources():
+    """会话失效判定统一：谓词取 pipeline 与 classifier 两份历史正则的超集。"""
+    # pipeline 历史口径：失效/过期（session 上下文）与「学校端会话」
+    assert is_session_invalid("session 无效或已过期，请重新登录")
+    assert is_session_invalid("User session 已过期")
+    assert is_session_invalid("session 失效")
+    assert is_session_invalid("学校端会话异常")          # 仅旧 pipeline 正则命中
+    # classifier 历史口径：SessionInvalid / TokenError / 重新登录
+    assert is_session_invalid("SessionInvalid: token rejected")  # 仅旧 classifier 规则命中
+    assert is_session_invalid("TokenError from upstream")
+    assert is_session_invalid("请重新登录后再查询")
+    # 大小写不敏感与无关文本
+    assert is_session_invalid("SESSION EXPIRED")
+    assert not is_session_invalid("成绩查询成功")
+    assert not is_session_invalid("")
+    assert not is_session_invalid(None)

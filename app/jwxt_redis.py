@@ -19,7 +19,7 @@ from app.jwxt_state import (
     KeyedLocks, RateLimiter, SessionStore, ShortCodeStore, TTLCache,
 )
 from app.jwxt_core import (
-    LOG, UPSTREAM_SEM_TIMEOUT, LockTimeoutError, UpstreamBusyError,
+    LOG, UPSTREAM_SEM_TIMEOUT, LOGIN_LOCK_LEASE, LockTimeoutError, UpstreamBusyError,
 )
 
 _DEFAULT_PREFIX = "jwxt"
@@ -273,9 +273,13 @@ class ResilientRedisRateLimiter:
 
 
 class ResilientRedisKeyedLocks:
-    """Redis 锁，获取失败时降级为本副本互斥锁。"""
+    """Redis 锁，获取失败时降级为本副本互斥锁。
 
-    def __init__(self, backend, lease_ms=30000, primary=None, fallback=None):
+    租约默认对齐登录关键段上界（见 RedisKeyedLocks 说明）。
+    """
+
+    def __init__(self, backend, lease_ms=max(30000, int(LOGIN_LOCK_LEASE * 1000)),
+                 primary=None, fallback=None):
         self.backend = backend
         self.primary = primary or RedisKeyedLocks(backend, lease_ms)
         self.fallback = fallback or KeyedLocks()
@@ -430,15 +434,20 @@ class RedisSessionStore:
             "pwd_hash": pwd_hash or "",
         }
         key = self._key(sid)
-        client.hset(key, mapping=mapping)
-        client.expire(key, self.ttl + _TTL_MARGIN)
-        client.sadd(self._user_key(username), sid)
-        client.expire(self._user_key(username), self.ttl + _TTL_MARGIN)
-        client.zadd(self._index_key(), {sid: now})
+        # 会话写入合并为一次 pipeline（原实现 6 次串行往返 = 6 RTT）：
+        # hset/expire/sadd/expire/zadd 相互独立，无需逐条确认；zcard 同批读取，
+        # 超限淘汰只要求“最终会收敛”，容忍多副本并发下的 ±1 竞态。
+        pipe = client.pipeline()
+        pipe.hset(key, mapping=mapping)
+        pipe.expire(key, self.ttl + _TTL_MARGIN)
+        pipe.sadd(self._user_key(username), sid)
+        pipe.expire(self._user_key(username), self.ttl + _TTL_MARGIN)
+        pipe.zadd(self._index_key(), {sid: now})
+        pipe.zcard(self._index_key())
+        count = pipe.execute()[-1]
         if warm_evt is not None:
             with self._local_lock:
                 self._warm_events[sid] = warm_evt
-        count = client.zcard(self._index_key())
         if count > self.max_sessions:
             evicted = client.zpopmin(self._index_key(), count=count - self.max_sessions)
             for member, _score in evicted:
@@ -771,9 +780,15 @@ class RedisKeyedLocks:
 
     加锁用 SET NX PX（带租约，进程崩溃后自动过期）；
     释放用 WATCH/MULTI 校验 token 后删除，避免误删他人锁。
+
+    租约默认对齐登录关键段上界（jwxt_core.LOGIN_LOCK_LEASE，约 8 个串行上游
+    请求 × TIMEOUT）：租约过短时，学校侧慢响应会让锁在持锁方仍在登录时提前
+    过期，同账号并发请求各自登录、互相顶下线。权衡：持锁副本若崩溃，该账号
+    的锁最长在租约期满后才自动释放（期间等待方按 timeout 得到 503）；内存
+    模式无租约概念，不受影响。
     """
 
-    def __init__(self, backend, lease_ms=30000):
+    def __init__(self, backend, lease_ms=max(30000, int(LOGIN_LOCK_LEASE * 1000))):
         self.backend = backend
         self._lease_ms = max(1000, int(lease_ms))
 

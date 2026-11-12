@@ -1,4 +1,5 @@
 from pathlib import Path
+import tempfile
 
 import pytest
 
@@ -42,7 +43,8 @@ def test_rtf_to_pdf_uses_writer_exporter_with_isolated_profile(monkeypatch):
     assert command[command.index("--convert-to") + 1] == "pdf:writer_pdf_Export"
     assert "--" not in command
     assert seen["kwargs"]["start_new_session"] is True
-    assert seen["kwargs"]["cwd"].startswith("/private/tmp") or seen["kwargs"]["cwd"].startswith("/tmp")
+    # 工作目录必须是系统临时目录下的隔离 workdir（macOS 为 /var/folders/...，Linux 为 /tmp）
+    assert seen["kwargs"]["cwd"].startswith(tempfile.gettempdir())
     assert seen["source"] == b"{\\rtf1 document}"
 
 

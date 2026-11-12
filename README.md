@@ -144,7 +144,7 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | --- | --- |
 | 页脚「📅 网络日历订阅」 | 复用页面上的学号与密码（仅内存，不写 localStorage）查询状态、开启、刷新、轮换、关闭 |
 | 课表结果区 | 查询成功即显示状态；密码刚被学校接受时为零额外登录的权威判定 |
-| 后台「网络日历」标签页 | 列出已开启的学号、状态、刷新间隔与失败次数；支持按学号查询、立即刷新、暂停/恢复、轮换地址、彻底删除（**不展示完整订阅地址**） |
+| 后台「网络日历」标签页 | 列出已开启的学号、状态、刷新间隔与失败次数；支持按学号查询、按状态筛选（SQL 内过滤，total 与分页一致）、立即刷新、暂停/恢复、轮换地址、彻底删除（**不展示完整订阅地址**） |
 | 后台「校历校准」标签页 | 校准各节次起止时间与来源（官方确认/推断）、定义每学期第一周（周一、正式上课首日、教学周数、节假日）；保存后持久化到后台数据库并立即生效，可一键恢复仓库默认值 |
 
 ### 添加到日历（设备识别 + 一键导入）
@@ -183,6 +183,9 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 - **服务端**按订阅的刷新间隔（默认 12 小时，下限 1 小时）重新登录学校并重建快照；
 - **客户端**何时来拉取由日历软件决定：Apple 日历较尊重 `REFRESH-INTERVAL`，Google 通常每天
   抓取一次，Outlook 常 ≥3 小时且不可配置；
+- **跨刷新 304 生效**：数据不变时 ICS 文本（含 DTSTAMP）逐字节稳定，ETag 不变，日历客户端的
+  `If-None-Match` 可命中 304；数据变化时 DTSTAMP/LAST-MODIFIED 重打为当前时间，
+  `SEQUENCE` 与 revision 同步推进（新建订阅 revision 从 1 开始）；
 - 因此课表变更通常需要数小时才能同步到日历，急用请在面板点「立即刷新」。
 
 ### 安全与数据
@@ -196,6 +199,10 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 - **关闭订阅 = 立即删除加密凭据与课表快照**，地址失效（404）；已同步到手机/日历软件的事件
   需在客户端自行删除；
 - 连续 3 次凭据失败会暂停刷新 24 小时并提示重新授权，避免反复撞学校风控；
+- rotate / qr 对**不存在的订阅**也先执行一次等量本地密钥校验再返回 404，
+  消除按响应差异/时序枚举学号是否开过订阅的信道；close 保持幂等（不存在返回 200）；
+- 审计与幂等键：`calendar_ops` 过期行由调度器每轮清理；`calendar_audit` 保留 **180 天**
+  （模块常量 `AUDIT_RETENTION_DAYS`），超期自动删除；
 - ICS 正文只含课程名 / 教师 / 教室 / 周次，**不含学号、姓名、学院、专业、班级**。
 
 ### 维护节次与学期
@@ -208,6 +215,8 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
   - `terms`：每学期第一周周一、正式上课首日、教学周上限与节假日 `exdates`；
 - **后台「校历校准」**：管理员可在 `/admin` 直接校准各节次起止时间与来源、定义每学期第一周，
   校验通过后写入 SQLite（`calendar_config` 单行快照），**重启后优先于文件基线生效**；
+  数值字段（weeks/block_codes 值/student_week_offset/version）非法时返回带字段路径的
+  `CalendarConfigError`（HTTP 422 语义），不再裸 ValueError；
   「恢复仓库默认值」会删除快照并回退到文件基线；
 - 事件时间按**课程自身节次集合**计算（`第3节` 不会按 3-4 节拉长），正式上课首日之前的实例自动丢弃。
 
@@ -222,7 +231,7 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | POST | `/api/v1/calendars/rotate` | 轮换订阅地址（旧地址立即失效） |
 | DELETE | `/api/v1/calendars` | 关闭订阅并彻底删除凭据与快照（幂等） |
 | POST | `/api/v1/calendars/qr` | 订阅二维码矩阵（本地生成 `webcal://` 二维码，仅返回模块矩阵，需 L1/L2 证明） |
-| GET | `/cal/{token}.ics` | 日历客户端订阅源（支持 ETag/304，无网关鉴权） |
+| GET | `/cal/{token}.ics` | 日历客户端订阅源（支持 ETag/304，`Last-Modified` 为 RFC 9110 HTTP-date，无网关鉴权） |
 | GET/DELETE | `/admin/api/calendars*` | 后台管理（需 `ADMIN_TOKEN`） |
 | GET | `/admin/api/calendar-config` | 当前生效的节次/学期配置（文件基线或后台校准快照） |
 | PUT | `/admin/api/calendar-config/periods` | 校准节次起止时间与来源（需 `ADMIN_TOKEN`） |
@@ -254,6 +263,8 @@ Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生�
 旧副本数据仍可见。全局锁不参与一致性保障，回填最多扫描 20,000 行。
 
 - 日志**不包含**密码 / session / token；白名单字段之外一律丢弃（`app/querylog.py`）。
+  session/一次性码类敏感值在日志中全掩码为 `***`；归档枚举忽略非数字后缀的杂散文件
+  （如 `queries.jsonl.tmp`），不会打断日志查询。
 - 文件通道只保留白名单字段，权限为 `0600`；按 `FILE_LOG_MAX_BYTES` 轮转并最多保留
   `FILE_LOG_BACKUP_COUNT` 个备份。Compose 默认挂载具名持久卷，容器与 Docker daemon
   重启后日志保留；更长期的审计与检索建议接入集中日志平台。
@@ -289,10 +300,11 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   标签页的 `sessionStorage` 中保留管理员凭据，退出即清除。
 - `GET /admin/api/metrics` 暴露容器 CPU、内存/RSS、日志磁盘、网络累计、运行时长、
   宿主机 CPU/内存/负载/磁盘 I/O/网络、日志文件存储增长和应用近 5 分钟负载；
-  编排内存按单体应用、前端入口分桶聚合（仅配置 `REDIS_URL` 时才追加 Redis 分桶），宿主 cgroup
-  不可读时按进程 RSS 估算并在界面标注；
+  编排内存按单体应用、前端入口分桶聚合（仅配置 `REDIS_URL` 时才追加 Redis 分桶），自动适配宿主
+  cgroup v1/v2 与 systemd/cgroupfs 驱动，宿主 cgroup 不可读时按进程 RSS 估算并在界面标注；
   后台资源采样默认每 `RESOURCE_MONITOR_INTERVAL_SECONDS=5` 秒一次，保留
-  `RESOURCE_MONITOR_HISTORY_SIZE=90` 个样本；并返回 `dependencies` 与 `degradations`，对编排 Redis、查询代理、
+  `RESOURCE_MONITOR_HISTORY_SIZE=90` 个样本；编排进程分桶扫描按 30 秒间隔限频缓存
+  （RSS 与 cgroup 内存值仍每次采样实时读取）；并返回 `dependencies` 与 `degradations`，对编排 Redis、查询代理、
   查询代理 Redis、学校服务和 LLM 展示状态与降级说明。后台 UI 每 5 秒刷新并绘制
   近期 CPU 趋势。
 - 管理端是单实例运维视图：读取当前副本文件和本地进程指标；Redis 仅在无文件通道时作
@@ -301,7 +313,7 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   并发等待和 Redis 降级）；它只在内网服务发现中抓取，不经 frontend 反代。
 - nginx 使用不含 query string 的隐私访问日志；携带个人票号的 `/jump/go` 与 `/get_schedule/export`
   不写 access log。边缘响应启用 CSP、反点击劫持与 Referrer 隔离，本地历史结果只保留 6 小时。
-- Compose 默认启用内存/PID 护栏：Python 服务 `256m / 64 PIDs`，Nginx `64m / 32 PIDs`，
+- Compose 默认启用内存/PID 护栏：Python 服务 `640m / 128 PIDs`（`APP_MEM_LIMIT` 可调），Nginx `64m / 32 PIDs`，
   并设置 `MALLOC_ARENA_MAX=2`；内存模式查询代理默认最多 1000 个会话与每类 1000 条缓存。
 
 ### 全站通知
@@ -345,12 +357,16 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 - 单次编排有总预算（默认 100 秒），避免学校上游或 LLM 故障长期占用连接。
 - `REDIS_URL` 配置后使用固定窗口共享限流；Redis 不可用时降级为本副本限流，优先保持查询可用。
 - 内嵌查询代理默认使用进程内存的会话/缓存/限流/短码；配置 `JWXT_REDIS_URL` 时采用熔断降级：
-  Redis 启动或运行中不可用时切回内存，恢复后自动切回，期间 `/health` 标记 `degraded`。
+  Redis 启动或运行中不可用时切回内存，恢复后自动切回，期间 `/health` 标记 `degraded`；
+  Redis 冷缓存首测交给后台探测线程，`/health` 先返回 `ok: null` 占位，不阻塞探测。
+  多副本下账号登录互斥锁的 Redis 租约对齐登录关键段上界（120 秒）：持锁副本崩溃后最长
+  120 秒自动解锁，期间等待方按自身超时得到 503；内存模式无租约不受影响。
 - 异步任务使用 Redis 排队和去重；`JOB_PENDING_LIMIT` 限制全局排队，worker 使用查询、LLM
   和 PDF 独立槽位，避免 500 个任务同时穿透到学校、模型或 CPU。
 - 使用外部 Redis 时需自行配置内存上限与淘汰策略（建议 `maxmemory` + `volatile-lru`），
   避免临时状态挤占内存。
-- 前端 Nginx 使用多 worker 与 4096 连接，静态响应压缩/短缓存；`/run` 与任务轮询响应不缓存。
+- 前端 Nginx 使用固定 2 worker 与 4096 连接（与 `pids_limit: 32` 匹配），静态响应压缩/短缓存；
+  `/run` 与任务轮询响应不缓存。
 
 ## 当前目标
 
@@ -360,7 +376,13 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 
 ## 路线图
 
-- 近期：真实账号端到端验收；异步任务多副本压测与学校上游安全并发标定
+- 近期：真实账号端到端验收；异步任务多副本压测与学校上游安全并发标定；
+  单二进制分发形态（计划书已出待评审；前置项为 LibreOffice 移除——纯 Python 课表 PDF，
+  同时是容器内存上限 640m → 256m 的钥匙）
+- 已完成：**全仓 65 项审查修复**（四子系统并行：编排 HTTP 层拆分 `create_app` 为
+  `context.py` + `routes_*.py`；查询代理内存上限与安全掩码收敛；日历跨刷新 304/分页/预言机修复；
+  前端内联脚本外置 `app.js` 与 CSP 整类哈希风险消除；compose 日志滚动、优雅停机与边缘限流；
+  测试基线 238 → 255 通过）
 - 已完成：**网络日历订阅**（页脚入口 + 查询结果区自动展示；只读 ICS 订阅、托管凭据加密存储、后台可查可管；
   设备识别一键导入 + 本地二维码扫码订阅）
 - 待办（本轮逻辑/安全审查发现，尚未修改）：状态派生统一（locked/expired/degraded 与 status/create 对齐）、
@@ -422,9 +444,11 @@ docker compose up -d --build
 > 前端令牌样式已预编译提交（`frontend/static/style.css`），普通部署无需 npm；修改
 > 样式后重新构建：`cd frontend && npm install && npm run build`。
 
-> 修改 `frontend/static/index.html` 内联脚本后，必须同步更新
-> `frontend/templates/default.conf.template` 中 `script-src` 对应内联脚本的 SHA-256
-> 哈希，否则 CSP 会拦截脚本导致查询页无法使用。
+> 查询页脚本已外置为 `frontend/static/app.js`（首屏主题预置为 `frontend/static/theme-init.js`），
+> 走 CSP `script-src 'self'`，改动后只需同步 bump 页内 `?v=N` 版本号；仅当修改
+> `frontend/static/admin.html` 的内联脚本时，才需要同步更新
+> `frontend/templates/default.conf.template` 中 `script-src` 的 SHA-256 哈希，
+> 否则 CSP 会拦截脚本导致后台无法使用。
 
 > 品牌文案（标题 / slogan / 页脚作者与 GitHub 链接）可由环境变量 `BRAND_NAME`、
 > `BRAND_SLOGAN`、`BRAND_DESCRIPTION`、`BRAND_AUTHOR`、`BRAND_GITHUB` 覆盖；留空即使用
@@ -457,7 +481,14 @@ cd frontend && npm install && npm run build
 ```text
 Stpt-Query/
 ├── app/                       # 单体应用（编排 + 渲染 + 分析 + PDF + 内嵌查询代理）
-│   ├── main.py                # HTTP 层：/run /notices /query-logs /health* /service-status
+│   ├── main.py                # 应用装配：Settings + create_app（路由按域拆分至 routes_*.py）
+│   ├── context.py             # AppContext 共享状态与请求期助手（限流/日志/服务状态/探针）
+│   ├── routes_run.py          # POST /run、/v1/workflows/run
+│   ├── routes_jobs.py         # 异步任务受理与轮询 /run/jobs*
+│   ├── routes_health.py       # /health*、/metrics、/query-logs、/service-status
+│   ├── routes_admin.py        # /admin/api/query-logs、/admin/api/metrics
+│   ├── routes_notices.py      # /notices/*、/admin/api/notices*
+│   ├── jobs_worker.py         # 异步任务 worker 循环、空闲退避与僵尸任务回收
 │   ├── metrics.py             # 容器 CPU/内存/磁盘/网络资源监控
 │   ├── notices.py             # 全站通知文件权威存储与 Redis 恢复副本
 │   ├── pipeline.py            # 固定工作流编排
@@ -479,16 +510,21 @@ Stpt-Query/
 ├── frontend/                  # 前端（nginx，默认唯一对外入口）
 │   ├── templates/default.conf.template  # 反代 /run 等并注入令牌
 │   ├── static/index.html      # 查询页面（Li-Design 令牌重构）
-│   ├── static/style.css       # Tailwind CSS 4 编译产物（自托管）
+│   ├── static/app.js          # 查询页主脚本（自 index.html 内联脚本外置，CSP 走 'self'）
+│   ├── static/theme-init.js   # 首屏主题预置（阻塞加载，防深色首绘闪白）
+│   ├── static/style.css       # Tailwind CSS 4 编译产物（自托管，查询页）
+│   ├── static/style-admin.css # 后台编译产物（admin 专属样式拆分）
 │   ├── static/brand.js        # 品牌单点（名称/slogan/页脚/备案占位）
 │   ├── static/image/          # 站点图标
 │   ├── src/index.css          # 令牌源（+ app.css，模板实例化）
+│   ├── src/admin.css          # 后台专属样式（import index.css 复用共享令牌）
 │   └── package.json           # npm run build 重新编译样式
 ├── design-system/edu-query-app/   # 项目内品牌方案（BRAND/MASTER，设计事实）
 ├── tests/                     # pytest（渲染/分类/编排/HTTP/查询日志）
 ├── docs/kubernetes-migration.md   # K8s 迁移指引
 ├── Li-Design/                 # Git 子模块：仅设计/README 规范参考，非运行时依赖
 ├── docker-compose.yml         # 两容器（app + frontend）单实例编排
+├── compose.review.yml         # 评审/演练栈卷名隔离覆盖（须与主 compose 叠加使用）
 ├── .env.example               # 环境变量模板
 ├── AGENTS.md                  # 项目协作手册
 ├── requirements-dev.txt       # 开发依赖

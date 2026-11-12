@@ -1,3 +1,13 @@
+# 评审/演练栈覆盖文件：仅替换三个具名卷的卷名为 edu-query-review_* 前缀，
+# 使评审环境的查询日志、通知降级文件与日历库与生产卷完全隔离，互不污染。
+#
+# 用法（必须与主 compose 文件叠加，不可单独使用）：
+#   docker compose -f docker-compose.yml -f compose.review.yml up -d --build
+#
+# 注意：
+# - 评审栈与主栈共用同一项目目录，不可与生产栈并行运行（端口、镜像、.env 均共享）。
+# - 评审卷的数据同样包含查询日志与日历库，演练结束请自行清理
+#   （docker volume rm edu-query-review_*）。
 volumes:
   app-query-logs:
     name: edu-query-review_query-logs-persistent

@@ -1,0 +1,2769 @@
+
+    // 页面不持有令牌：Authorization 由 nginx 反代时在服务端注入；
+    // 本地直开静态文件调试时该值为空，查询请求会被后端 401 拒绝
+    const GATEWAY_TOKEN = "";
+
+    const themeToggle = document.getElementById("themeToggle");
+    const SUN_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
+    const MOON_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+    function applyTheme(theme, persist) {
+      document.documentElement.classList.toggle("dark", theme === "dark");
+      themeToggle.innerHTML = theme === "dark" ? SUN_ICON : MOON_ICON;
+      themeToggle.setAttribute("aria-label", theme === "dark" ? "切换到浅色主题" : "切换到深色主题");
+      var bg = getComputedStyle(document.documentElement).getPropertyValue("--eduquery-bg").trim();
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta && bg) meta.setAttribute("content", bg);
+      if (persist) {
+        try { localStorage.setItem("eduquery-theme", theme); } catch (e) {}
+      }
+    }
+    themeToggle.addEventListener("click", function () {
+      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark", true);
+    });
+    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light", false);
+
+    const form = document.getElementById("queryForm");
+    const usernameInput = document.getElementById("username");
+    const usernameError = document.getElementById("usernameError");
+    const passwordError = document.getElementById("passwordError");
+    usernameInput.addEventListener("input", function () {
+      this.value = this.value.replace(/\D/g, "").slice(0, 10);
+      if (!usernameError.classList.contains("hidden")) clearFieldError(usernameInput, usernameError);
+    });
+    usernameInput.addEventListener("blur", function () {
+      if (this.value) validateUsernameField(false);
+    });
+    const passwordInput = document.getElementById("password");
+    passwordInput.addEventListener("input", function () {
+      if (!passwordError.classList.contains("hidden")) clearFieldError(passwordInput, passwordError);
+    });
+    passwordInput.addEventListener("blur", function () {
+      if (this.value) validatePasswordField(false);
+    });
+    const optionInput = document.getElementById("option");
+    const semestersInput = document.getElementById("semesters");
+    const weeksInput = document.getElementById("weeks");
+    const md2pdfInput = document.getElementById("md2pdf");
+    const checkInput = document.getElementById("check");
+    const submitBtn = document.getElementById("submitBtn");
+    const submitSpinner = document.getElementById("submitSpinner");
+    const submitBtnText = document.getElementById("submitBtnText");
+    const skeleton = document.getElementById("skeleton");
+    const statusBox = document.getElementById("status");
+    const progressTrack = document.getElementById("progressTrack");
+    const progressSteps = document.getElementById("progressSteps");
+    const resultCard = document.getElementById("resultCard");
+    const runIdMeta = document.getElementById("runIdMeta");
+    const runIdValue = document.getElementById("runIdValue");
+    const runIdCopy = document.getElementById("runIdCopy");
+    const runIdCopyState = document.getElementById("runIdCopyState");
+    const resultHtml = document.getElementById("resultHtml");
+    const resultBox = document.getElementById("result");
+    const resultTitle = document.getElementById("resultTitle");
+    const resultOverview = document.getElementById("resultOverview");
+    const layout = document.querySelector(".layout");
+    const serviceStatusBox = document.getElementById("serviceStatus");
+    const statusTooltip = document.getElementById("statusTooltip");
+    const toastWrap = document.getElementById("toastWrap");
+    const offlineBar = document.getElementById("offlineBar");
+
+    let queryController = null;
+    let resultContext = { option: "", semesters: "", weeks: "all" };
+    const historyTrigger = document.getElementById("historyTrigger");
+    const historyMenu = document.getElementById("historyMenu");
+    const historyClear = document.getElementById("historyClear");
+    const historySection = document.getElementById("historySection");
+
+    // Cookie 工具：历史查询记录（不含密码）
+    const HISTORY_KEY = "dify_query_results_v3";
+    const MAX_HISTORY = 5;
+    const MAX_CACHE_AGE_MS = 6 * 60 * 60 * 1000;
+
+    function setCookie(name, value, days) {
+      const date = new Date();
+      date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
+      document.cookie = name + "=" + encodeURIComponent(value) +
+        "; expires=" + date.toUTCString() + "; path=/; SameSite=Lax" +
+        (window.location.protocol === "https:" ? "; Secure" : "");
+    }
+
+    function getCookie(name) {
+      const m = document.cookie.match(new RegExp(
+        "(?:^|; )" + name.replace(/([.$?*|{}()\[\]\\\/\+^])/g, "\\$1") + "=([^;]*)"
+      ));
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+
+    function loadHistory() {
+      try {
+        const raw = getCookie(HISTORY_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function recordLabel(r) {
+      let label = (r.username || "?") + " · " + (r.option || "");
+      if (r.semesters) label += " · " + r.semesters;
+      if (r.weeks && r.weeks !== "all") label += " · 周" + r.weeks;
+      if (r.md2pdf) label += " · PDF";
+      if (r.check) label += " · 分析";
+      return label;
+    }
+
+    function storeResultText(id, text) {
+      try { localStorage.setItem("dify_query_result_" + id, text); } catch (e) {}
+    }
+
+    function getResultText(id) {
+      try { return localStorage.getItem("dify_query_result_" + id) || ""; } catch (e) { return ""; }
+    }
+
+    function removeResultText(id) {
+      try { localStorage.removeItem("dify_query_result_" + id); } catch (e) {}
+    }
+
+    function stripLoginNote(text) {
+      if (!text) return text;
+      var lines = String(text).split("\n");
+      var out = [];
+      var skipping = false;
+      lines.forEach(function (line) {
+        if (line.indexOf("> 🔗 免密登录教务系统") === 0) {
+          skipping = true;
+          return;
+        }
+        if (skipping) {
+          if (line.indexOf("> ") === 0) return;
+          skipping = false;
+        }
+        // 回看历史时同样隐藏课表下载链接与其令牌提示（下载码短时有效）
+        if (/^\[点击下载课表（(?:PDF|Word) 文件）\]\(/.test(line)) return;
+        if (line.indexOf("> ⚠️ 此链接含个人令牌，请勿外传。") === 0) return;
+        out.push(line);
+      });
+      return out.join("\n").replace(/^\s+/, "");
+    }
+
+    function saveResultRecord(record) {
+      let arr = loadHistory();
+      const dupIndex = arr.findIndex(function (r) {
+        return r.username === record.username &&
+          r.option === record.option &&
+          r.semesters === record.semesters &&
+          r.weeks === record.weeks;
+      });
+      if (dupIndex !== -1) {
+        removeResultText(arr[dupIndex].id);
+        arr.splice(dupIndex, 1);
+      }
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      storeResultText(id, stripLoginNote(String(record.resultText || "")));
+      arr.unshift({
+        id: id,
+        savedAt: Date.now(),
+        username: record.username,
+        option: record.option,
+        semesters: record.semesters || "",
+        weeks: record.weeks,
+        md2pdf: !!record.md2pdf,
+        check: !!record.check,
+        isMarkdown: !!record.isMarkdown
+      });
+      if (arr.length > MAX_HISTORY) {
+        arr.slice(MAX_HISTORY).forEach(function (r) { removeResultText(r.id); });
+        arr = arr.slice(0, MAX_HISTORY);
+      }
+      setCookie(HISTORY_KEY, JSON.stringify(arr), 30);
+    }
+
+    function pruneExpiredHistory() {
+      const now = Date.now();
+      const original = loadHistory();
+      const valid = original.filter(function (r) {
+        return typeof r.savedAt === "number" && now - r.savedAt < MAX_CACHE_AGE_MS;
+      });
+      if (valid.length !== original.length) {
+        original.filter(function (r) { return valid.indexOf(r) === -1; })
+          .forEach(function (r) { removeResultText(r.id); });
+        setCookie(HISTORY_KEY, JSON.stringify(valid), 30);
+      }
+      return valid;
+    }
+
+    function sanitizeStoredHistory() {
+      pruneExpiredHistory().forEach(function (r) {
+        const raw = getResultText(r.id);
+        const clean = stripLoginNote(raw);
+        if (clean !== raw) storeResultText(r.id, clean);
+      });
+    }
+
+    function renderHistorySelect() {
+      const arr = loadHistory();
+      historySection.classList.toggle("hidden", arr.length === 0);
+      historyClear.disabled = arr.length === 0;
+      const current = historyTrigger.getAttribute("data-label") || "";
+      historyMenu.innerHTML = arr.map(function (r, i) {
+        const label = recordLabel(r);
+        return '<button type="button" class="dropdown-item" role="option" aria-selected="false" data-index="' + i + '">' +
+          label.replace(/"/g, "&quot;") + "</button>";
+      }).join("");
+      if (current && arr.some(function (r) { return recordLabel(r) === current; })) {
+        historyTrigger.textContent = current;
+      } else {
+        historyTrigger.textContent = "— 选择历史查询结果 —";
+        historyTrigger.removeAttribute("data-label");
+      }
+    }
+
+    function displaySavedRecord(rec) {
+      if (!rec) return;
+      resultContext = {
+        option: rec.option || "",
+        semesters: rec.semesters || "",
+        weeks: rec.weeks || "all"
+      };
+      resultTitle.textContent = rec.option ? rec.option + "查询结果" : "查询结果";
+      clearLockTimer();
+      clearTimeout(resultTimer);
+      skeleton.hidden = true;
+      skeleton.setAttribute("aria-hidden", "true");
+      resultCard.classList.remove("hidden");
+      layout.classList.add("has-result");
+      resultCard.classList.remove("fade-in");
+      resultCard.classList.add("fade-out");
+      resultTimer = setTimeout(function () {
+        const text = getResultText(rec.id) || rec.resultText || "";
+        let note = "";
+        if (rec.savedAt) {
+          const mins = Math.max(0, Math.round((Date.now() - rec.savedAt) / 60000));
+          note = '<div class="badge badge-warning">已加载本地缓存 · 更新于 ' +
+            (mins < 1 ? "刚刚" : mins + " 分钟前") + "</div>";
+        }
+        if (rec.isMarkdown) {
+          setRunId(rec.runId);
+          resultHtml.classList.remove("hidden");
+          resultBox.classList.add("hidden");
+          resultHtml.innerHTML = note + renderResultMarkdown(stripLoginNote(text), {});
+          applyRenderedElementStyles(resultHtml);
+        } else {
+          resultHtml.classList.add("hidden");
+          resultBox.classList.remove("hidden");
+          resultBox.textContent = text || "（无返回内容）";
+        }
+        resultCard.classList.remove("fade-out");
+        resultCard.classList.add("fade-in");
+        resultTitle.focus({ preventScroll: true });
+      }, 180);
+    }
+
+    historyTrigger.addEventListener("click", function (e) {
+      e.stopPropagation();
+      const willOpen = historyMenu.classList.contains("hidden");
+      document.querySelectorAll(".dropdown-menu").forEach(function (m) {
+        m.classList.add("hidden");
+      });
+      document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
+        t.setAttribute("aria-expanded", "false");
+      });
+      if (willOpen) {
+        historyMenu.classList.remove("hidden");
+        historyTrigger.setAttribute("aria-expanded", "true");
+      }
+    });
+
+    function selectHistoryItem(item) {
+      const arr = loadHistory();
+      const rec = item ? arr[item.getAttribute("data-index")] : null;
+      if (rec) {
+        usernameInput.value = rec.username || "";
+        displaySavedRecord(rec);
+        const label = recordLabel(rec);
+        historyTrigger.textContent = label;
+        historyTrigger.setAttribute("data-label", label);
+      }
+      historyMenu.classList.add("hidden");
+      historyTrigger.setAttribute("aria-expanded", "false");
+    }
+
+    function openHistoryMenu() {
+      document.querySelectorAll(".dropdown-menu").forEach(function (m) {
+        m.classList.add("hidden");
+      });
+      document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
+        t.setAttribute("aria-expanded", "false");
+      });
+      historyMenu.classList.remove("hidden");
+      historyTrigger.setAttribute("aria-expanded", "true");
+      const first = historyMenu.querySelector(".dropdown-item");
+      if (first) first.focus();
+    }
+
+    historyMenu.addEventListener("click", function (e) {
+      const item = e.target.closest ? e.target.closest(".dropdown-item") : null;
+      if (!item) return;
+      selectHistoryItem(item);
+    });
+
+    historyTrigger.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (historyMenu.classList.contains("hidden")) openHistoryMenu();
+      } else if (e.key === "Escape") {
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+        historyTrigger.focus();
+      }
+    });
+
+    historyMenu.addEventListener("keydown", function (e) {
+      const list = Array.prototype.slice.call(historyMenu.querySelectorAll(".dropdown-item"));
+      if (!list.length) return;
+      const idx = list.indexOf(document.activeElement);
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        list[(idx + 1) % list.length].focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        list[(idx - 1 + list.length) % list.length].focus();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        list[0].focus();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        list[list.length - 1].focus();
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        const item = document.activeElement && document.activeElement.closest
+          ? document.activeElement.closest(".dropdown-item") : null;
+        if (item) selectHistoryItem(item);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+        historyTrigger.focus();
+      } else if (e.key === "Tab") {
+        historyMenu.classList.add("hidden");
+        historyTrigger.setAttribute("aria-expanded", "false");
+      }
+    });
+
+    historyClear.addEventListener("click", function () {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.indexOf("dify_query_result_") === 0) {
+          keys.push(key);
+        }
+      }
+      keys.forEach(function (key) { localStorage.removeItem(key); });
+      setCookie(HISTORY_KEY, JSON.stringify([]), 30);
+      renderHistorySelect();
+      historyTrigger.textContent = "— 选择历史查询结果 —";
+      historyTrigger.removeAttribute("data-label");
+      historySection.classList.add("hidden");
+      historyClear.disabled = true;
+      showToast("success", "历史记录已清空");
+    });
+
+    function showStatus(message, ok) {
+      statusBox.textContent = message;
+      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
+      statusBox.classList.add(ok ? "notice-success" : "notice-error");
+    }
+
+    function setFieldError(input, errorNode, message) {
+      input.setAttribute("aria-invalid", "true");
+      input.classList.add("input-invalid");
+      errorNode.textContent = message;
+      errorNode.classList.remove("hidden");
+    }
+
+    function clearFieldError(input, errorNode) {
+      input.removeAttribute("aria-invalid");
+      input.classList.remove("input-invalid");
+      errorNode.textContent = "";
+      errorNode.classList.add("hidden");
+    }
+
+    function validateUsernameField(showRequired) {
+      const value = usernameInput.value.trim();
+      let message = "";
+      if (!value && showRequired) message = "请输入 10 位数字学号";
+      else if (value && !/^\d{10}$/.test(value)) message = "学号应为 10 位数字";
+      if (message) {
+        setFieldError(usernameInput, usernameError, message);
+        return false;
+      }
+      clearFieldError(usernameInput, usernameError);
+      return true;
+    }
+
+    function validatePasswordField(showRequired) {
+      if (!passwordInput.value && showRequired) {
+        setFieldError(passwordInput, passwordError, "请输入教务系统密码");
+        return false;
+      }
+      clearFieldError(passwordInput, passwordError);
+      return true;
+    }
+
+    function validateCredentials() {
+      const usernameValid = validateUsernameField(true);
+      const passwordValid = validatePasswordField(true);
+      if (!usernameValid) {
+        usernameInput.focus();
+        return false;
+      }
+      if (!passwordValid) {
+        passwordInput.focus();
+        return false;
+      }
+      return true;
+    }
+
+    function queryButtonLabel() {
+      return "查询" + optionInput.value;
+    }
+
+    function syncOptionSeg() {
+      const isSchedule = optionInput.value === "课表";
+      document.querySelectorAll(".query-choice").forEach(function (btn) {
+        const active = btn.getAttribute("data-option") === optionInput.value;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+      document.getElementById("weeksField").classList.toggle("hidden", !isSchedule);
+      document.getElementById("gradeOptions").classList.toggle("hidden", isSchedule);
+      document.getElementById("queryScopeHint").textContent = isSchedule
+        ? "当前学期 · 全部周次"
+        : "当前学期";
+      if (!submitBtn.disabled) submitBtnText.textContent = queryButtonLabel();
+    }
+
+    function initDropdown(triggerId, menuId, inputId, defaultLabel) {
+      const trigger = document.getElementById(triggerId);
+      const menu = document.getElementById(menuId);
+      const input = document.getElementById(inputId);
+
+      function items() {
+        return Array.prototype.slice.call(menu.querySelectorAll(".dropdown-item"));
+      }
+
+      function openMenu() {
+        document.querySelectorAll(".dropdown-menu").forEach(function (m) {
+          m.classList.add("hidden");
+        });
+        document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
+          t.setAttribute("aria-expanded", "false");
+        });
+        menu.classList.remove("hidden");
+        trigger.setAttribute("aria-expanded", "true");
+        const current = items().find(function (item) {
+          return item.getAttribute("data-value") === input.value;
+        }) || items()[0];
+        if (current) current.focus();
+      }
+
+      function closeMenu(refocus) {
+        menu.classList.add("hidden");
+        trigger.setAttribute("aria-expanded", "false");
+        if (refocus) trigger.focus();
+      }
+
+      function selectItem(item) {
+        input.value = item.getAttribute("data-value");
+        syncLabel();
+        closeMenu(true);
+      }
+
+      function syncLabel() {
+        let found = false;
+        items().forEach(function (item) {
+          const active = item.getAttribute("data-value") === input.value;
+          item.setAttribute("role", "option");
+          item.classList.toggle("active", active);
+          item.setAttribute("aria-selected", active ? "true" : "false");
+          if (active) {
+            trigger.textContent = item.textContent.trim();
+            found = true;
+          }
+        });
+        if (!found) trigger.textContent = defaultLabel;
+      }
+
+      trigger.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (menu.classList.contains("hidden")) openMenu();
+        else closeMenu(true);
+      });
+
+      trigger.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (menu.classList.contains("hidden")) openMenu();
+        } else if (e.key === "Escape") {
+          closeMenu(true);
+        }
+      });
+
+      menu.addEventListener("keydown", function (e) {
+        const list = items();
+        if (!list.length) return;
+        const idx = list.indexOf(document.activeElement);
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          list[(idx + 1) % list.length].focus();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          list[(idx - 1 + list.length) % list.length].focus();
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          list[0].focus();
+        } else if (e.key === "End") {
+          e.preventDefault();
+          list[list.length - 1].focus();
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          const item = document.activeElement && document.activeElement.closest
+            ? document.activeElement.closest(".dropdown-item") : null;
+          if (item) selectItem(item);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          closeMenu(true);
+        } else if (e.key === "Tab") {
+          closeMenu(false);
+        }
+      });
+
+      menu.addEventListener("click", function (e) {
+        const item = e.target.closest ? e.target.closest(".dropdown-item") : null;
+        if (!item) return;
+        selectItem(item);
+      });
+
+      syncLabel();
+      return { sync: syncLabel };
+    }
+
+    const semestersDropdown = initDropdown("semestersTrigger", "semestersMenu", "semesters", "默认当前学期");
+    const weeksDropdown = initDropdown("weeksTrigger", "weeksMenu", "weeks", "全部");
+
+    document.addEventListener("click", function () {
+      document.querySelectorAll(".dropdown-menu").forEach(function (m) {
+        m.classList.add("hidden");
+      });
+      document.querySelectorAll(".dropdown-trigger").forEach(function (t) {
+        t.setAttribute("aria-expanded", "false");
+      });
+    });
+
+    function showLoading() {
+      statusBox.innerHTML = '<span class="spinner"></span>正在查询';
+      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
+    }
+
+    function showQueued(position) {
+      const suffix = position ? " · 第 " + position + " 位" : "";
+      statusBox.innerHTML = '<span class="spinner"></span>排队中' + suffix;
+      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
+    }
+
+    let progressStepStates = [];
+    let currentJobPhase = null;
+
+    function progressStepsFor(payload) {
+      const steps = [
+        { phase: "login", label: "登录验证" },
+        { phase: "queued", label: "排队等待" },
+        { phase: "dispatching", label: "等待槽位" },
+        { phase: "querying", label: payload.option === "课表" ? "查询课表" : "查询成绩" }
+      ];
+      if (payload.option === "成绩" && payload.check) {
+        steps.push({ phase: "analyzing", label: "成绩分析" });
+      }
+      if (payload.md2pdf) {
+        steps.push({ phase: "generating_pdf", label: "生成 PDF" });
+      }
+      steps.push({ phase: "done", label: "完成" });
+      return steps;
+    }
+
+    function renderJobProgress(phase, payload, jobState, position) {
+      const normalizedPhase = phase || "queued";
+      const steps = progressStepsFor(payload);
+      if (normalizedPhase === "queued" && position) {
+        steps[1].label = "第" + position + "位";
+      }
+      const currentIndex = Math.max(0, steps.findIndex(function (step) {
+        return step.phase === normalizedPhase;
+      }));
+      const failed = jobState === "failed";
+      const done = jobState === "success" || normalizedPhase === "done";
+      const wasHidden = progressTrack.classList.contains("hidden");
+      const states = steps.map(function (step, index) {
+        if (index < currentIndex || done) return "completed";
+        return index === currentIndex ? (failed ? "failed" : "active") : "pending";
+      });
+      const entering = states.map(function (state, index) {
+        return wasHidden || !progressStepStates[index] || progressStepStates[index] !== state;
+      });
+      const labelsChanged = steps.some(function (step, index) {
+        const node = progressSteps.children[index];
+        const label = node && node.querySelector(".query-step-label");
+        return !label || label.textContent !== step.label;
+      });
+      const needRebuild = wasHidden || states.length !== progressStepStates.length ||
+        entering.some(Boolean) || labelsChanged;
+      if (needRebuild) {
+        progressSteps.innerHTML = steps.map(function (step, index) {
+          const state = states[index];
+          const enterClass = entering[index] ? " query-step-enter" : "";
+          const ariaCurrent = state === "active" ? "step" : "false";
+          const dot = state === "active"
+            ? '<span class="query-step-dot"><span class="spinner"></span></span>'
+            : '<span class="query-step-dot"></span>';
+          return [
+            '<div class="query-step ', state, enterClass, '" aria-current="', ariaCurrent, '"',
+            ' data-step-index="', wasHidden ? index : 0, '">',
+            dot,
+            '<span class="query-step-label"></span>',
+            '</div>'
+          ].join("");
+        }).join("");
+        progressSteps.querySelectorAll(".query-step-label").forEach(function (node, index) {
+          node.textContent = steps[index].label;
+        });
+        progressSteps.querySelectorAll(".query-step").forEach(function (node, index) {
+          node.style.setProperty("--step-index", String(wasHidden ? index : 0));
+        });
+      }
+      progressTrack.classList.remove("hidden");
+      progressTrack.classList.toggle("query-progress-failed", failed);
+      progressTrack.classList.toggle("query-progress-done", done && !failed);
+      currentJobPhase = normalizedPhase;
+      progressStepStates = states;
+      progressSteps.style.setProperty("--step-font-size", "12px");
+    }
+
+    function hideJobProgress() {
+      progressTrack.classList.add("hidden");
+      progressTrack.classList.remove("query-progress-failed", "query-progress-done");
+      progressSteps.innerHTML = "";
+      progressStepStates = [];
+      currentJobPhase = null;
+    }
+
+    function markJobProgressFailed(payload) {
+      if (progressTrack.classList.contains("hidden")) return;
+      renderJobProgress(currentJobPhase || "querying", payload, "failed", 0);
+    }
+
+    function setRunId(value) {
+      const runId = String(value || "");
+      clearTimeout(runIdCopyTimer);
+      runIdCopyState.textContent = "复制";
+      runIdCopy.classList.remove("copied");
+      if (runId) {
+        runIdMeta.classList.remove("hidden");
+        runIdValue.textContent = runId;
+        runIdValue.title = runId;
+        runIdCopy.title = "点击复制运行ID";
+      } else {
+        runIdMeta.classList.add("hidden");
+        runIdValue.textContent = "—";
+        runIdValue.removeAttribute("title");
+        runIdCopy.removeAttribute("title");
+      }
+    }
+
+    async function copyRunId() {
+      const runId = runIdValue.textContent.trim();
+      if (!runId || runId === "—") return;
+      let copied = false;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(runId);
+          copied = true;
+        } else {
+          const helper = document.createElement("textarea");
+          helper.value = runId;
+          helper.setAttribute("readonly", "readonly");
+          helper.className = "sr-only";
+          document.body.appendChild(helper);
+          helper.select();
+          copied = document.execCommand("copy");
+          helper.remove();
+        }
+      } catch (error) {
+        copied = false;
+      }
+      runIdCopyState.textContent = copied ? "已复制" : "复制失败";
+      runIdCopy.classList.toggle("copied", copied);
+      clearTimeout(runIdCopyTimer);
+      runIdCopyTimer = window.setTimeout(function () {
+        runIdCopyState.textContent = "复制";
+        runIdCopy.classList.remove("copied");
+      }, 1600);
+    }
+
+    const TOAST_ICONS = {
+      success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>',
+      error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>',
+      info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>'
+    };
+    function showToast(type, message) {
+      const icon = TOAST_ICONS[type] || TOAST_ICONS.info;
+      const el = document.createElement("div");
+      el.className = "toast toast-" + type + " toast-enter";
+      el.setAttribute("role", type === "error" ? "alert" : "status");
+      el.innerHTML =
+        '<span class="toast-icon toast-icon-pop">' + icon + "</span>" +
+        '<span class="toast-message">' + escapeHtml(message) + "</span>" +
+        '<span class="toast-progress"></span>';
+      toastWrap.appendChild(el);
+      setTimeout(function () {
+        el.classList.remove("toast-enter");
+        el.classList.add("toast-leave");
+        setTimeout(function () { el.remove(); }, 220);
+      }, 3000);
+    }
+
+    function showOfflineBar(savedAt) {
+      let time = "";
+      if (savedAt) {
+        const mins = Math.max(0, Math.round((Date.now() - savedAt) / 60000));
+        time = " (" + (mins < 1 ? "刚刚" : mins + " 分钟前") + ")";
+      }
+      offlineBar.innerHTML = '<span class="status-dot status-invalid" aria-hidden="true"></span>当前离线，显示的是上次同步的数据' + time +
+        ' <button type="button" class="btn btn-ghost js-retry-query">手动刷新</button>';
+      offlineBar.classList.remove("hidden");
+    }
+
+    function hideOfflineBar() {
+      offlineBar.classList.add("hidden");
+    }
+
+    function setButtonLoading(loading) {
+      submitBtn.disabled = loading;
+      submitSpinner.classList.toggle("hidden", !loading);
+      submitBtnText.textContent = loading ? "正在查询..." : queryButtonLabel();
+    }
+
+    const ALERT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>';
+    const INBOX_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>';
+    const CLOUD_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>';
+
+
+    let lockTimer = 0;
+    function clearLockTimer() {
+      clearInterval(lockTimer);
+      lockTimer = 0;
+    }
+
+    function showStateCard(icon, title, desc, withRetry, kind, extraHtml) {
+      clearLockTimer();
+      clearTimeout(resultTimer);
+      setRunId("");
+      skeleton.hidden = true;
+      skeleton.setAttribute("aria-hidden", "true");
+      resultBox.classList.add("hidden");
+      resultHtml.classList.remove("hidden");
+      resultCard.classList.remove("hidden");
+      layout.classList.add("has-result");
+      const variantClass = kind === "error" ? " empty-state--error" : "";
+      const description = desc ? renderStateDescription(desc) : "";
+      resultHtml.innerHTML =
+        '<div class="empty-state' + variantClass + '">' +
+        '<div class="empty-state-art" aria-hidden="true">' + icon + "</div>" +
+        '<p class="empty-state-text">' + escapeHtml(title) + "</p>" +
+        description +
+        (extraHtml || "") +
+        (withRetry ? '<button type="button" class="empty-state-action btn btn-primary js-retry-query">重试</button>' : "") +
+        "</div>";
+      applyRenderedElementStyles(resultHtml);
+      renderStateOverview(kind, title, desc || "");
+      resultCard.classList.remove("fade-in");
+      resultCard.classList.add("fade-in");
+    }
+
+    function containsMarkdownSyntax(text) {
+      return /(^|\n)[ \t]*(?:[-*][ \t]|\d+\.[ \t]|#{1,6}[ \t]|>[ \t])/.test(text) ||
+        /\*\*[^*\n]+\*\*/.test(text) ||
+        /\[[^\]\n]+\]\([^)\n]+\)/.test(text) ||
+        /`[^`\n]+`/.test(text);
+    }
+
+    function renderStateDescription(text) {
+      if (!containsMarkdownSyntax(text)) {
+        return '<p class="empty-state-text">' + escapeHtml(text) + "</p>";
+      }
+      return '<div class="empty-state-detail">' + renderMarkdown(text) + "</div>";
+    }
+
+    function showErrorCard(message) {
+      showStateCard(ALERT_SVG, "数据加载失败", message, true, "error");
+      showStatus("查询失败", false);
+    }
+
+    function showEmptyState() {
+      showStateCard(INBOX_SVG, "没有找到相关记录", "请尝试更换学期或查询项目", false);
+    }
+
+    function formatLockCountdown(remainingMs) {
+      const totalSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const two = function (value) { return value < 10 ? "0" + value : String(value); };
+      if (days > 0) return days + " 天 " + two(hours) + ":" + two(minutes) + ":" + two(seconds);
+      return two(hours) + ":" + two(minutes) + ":" + two(seconds);
+    }
+
+    function showLockCard(lockUntil) {
+      const displayTime = escapeHtml(String(lockUntil || ""));
+      const desc = "学校端限制解除前不要重试，避免继续延长锁定。";
+      showStateCard(
+        ALERT_SVG,
+        "学校账号临时锁定",
+        desc,
+        true,
+        "error",
+        '<p class="empty-state-meta" aria-live="polite"><span data-lock-countdown>预计解除时间：' + displayTime + "</span></p>"
+      );
+      const countdown = resultHtml.querySelector("[data-lock-countdown]");
+      const retry = resultHtml.querySelector(".js-retry-query");
+      if (!countdown || !retry) return;
+      const target = new Date(String(lockUntil || "").replace(" ", "T"));
+      if (Number.isNaN(target.getTime())) {
+        countdown.textContent = "预计解除时间：" + displayTime;
+        retry.textContent = "重试查询";
+        retry.disabled = false;
+        return;
+      }
+      const renderCountdown = function () {
+        const remaining = target.getTime() - Date.now();
+        if (remaining > 0) {
+          countdown.textContent = "预计解除时间：" + displayTime +
+            " · 剩余 " + formatLockCountdown(remaining);
+          retry.textContent = "解除后可重试";
+          retry.disabled = true;
+          return;
+        }
+        countdown.textContent = "预计解除时间：" + displayTime + " · 已到，可重试";
+        retry.textContent = "重试查询";
+        retry.disabled = false;
+        clearLockTimer();
+      };
+      renderCountdown();
+      if (target.getTime() > Date.now()) {
+        lockTimer = window.setInterval(renderCountdown, 1000);
+      }
+    }
+
+    function looksEmptyMarkdown(text) {
+      if (!text || !text.trim()) return true;
+      const pipeLines = text.split("\n").filter(function (line) {
+        return line.trim().indexOf("|") === 0;
+      });
+      if (pipeLines.length >= 1 && pipeLines.length <= 2) return true;
+      if (tableRowsAllEmpty(text)) return true;
+      const plain = text.replace(/\|/g, " ").replace(/-{3,}/g, " ").trim();
+      if (!plain) return true;
+      const tokens = plain.split(/\s+/).filter(Boolean);
+      if (tokens.length) {
+        const restOnly = tokens.every(function (token) {
+          return /^\d+$/.test(token) || /^休息[～~]?$/.test(token);
+        });
+        if (restOnly) return true;
+      }
+      return false;
+    }
+
+    function countMarkdownTableRows(text) {
+      if (!text) return 0;
+      const lines = String(text).split("\n").filter(function (line) {
+        return line.trim().indexOf("|") === 0;
+      });
+      return Math.max(0, lines.length - 2);
+    }
+
+    function tableRowsAllEmpty(text) {
+      const lines = text.split("\n").filter(function (line) {
+        return line.trim().indexOf("|") === 0;
+      });
+      if (lines.length < 3) return false;
+      let meaningful = 0;
+      for (let i = 2; i < lines.length; i++) {
+        const cells = lines[i].trim().replace(/^\||\|$/g, "").split("|").map(function (c) {
+          return c.trim();
+        });
+        const rest = cells.length > 1 ? cells.slice(1) : cells;
+        if (rest.some(function (c) {
+          return c && c !== "休息" && c !== "休息～";
+        })) {
+          meaningful++;
+        }
+      }
+      return meaningful === 0;
+    }
+
+    function updateUrlParams(payload) {
+      const params = new URLSearchParams();
+      if (payload.option) params.set("option", payload.option);
+      if (payload.semesters) params.set("semesters", payload.semesters);
+      if (payload.weeks && payload.weeks !== "all") params.set("weeks", payload.weeks);
+      if (payload.md2pdf) params.set("md2pdf", "1");
+      if (payload.check) params.set("check", "1");
+      const qs = params.toString();
+      history.replaceState(null, "", qs ? "?" + qs : location.pathname);
+    }
+
+    function restoreUrlParams() {
+      const params = new URLSearchParams(location.search);
+      if (params.has("option")) optionInput.value = params.get("option");
+      if (params.has("semesters")) semestersInput.value = params.get("semesters");
+      if (params.has("weeks")) weeksInput.value = params.get("weeks");
+      md2pdfInput.checked = params.get("md2pdf") === "1";
+      checkInput.checked = params.get("check") === "1";
+      syncOptionSeg();
+      semestersDropdown.sync();
+      weeksDropdown.sync();
+    }
+
+    document.querySelectorAll(".query-choice").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        optionInput.value = this.getAttribute("data-option");
+        syncOptionSeg();
+      });
+    });
+
+    let serviceStatusSeq = 0;
+    function renderServiceStatus() {
+      const requestSeq = ++serviceStatusSeq;
+      fetch("/service-status", { headers: authHeaders() })
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          if (requestSeq !== serviceStatusSeq) return;
+          const results = data.results || [];
+          const acceptedTotal = Number(data.accepted_total || 0);
+          if (!results.length) {
+            serviceStatusBox.classList.add("hidden");
+            return;
+          }
+          // API 返回最新在前；状态条按时间从右到左展示。
+          const segments = results.slice().reverse().map(function (item) {
+            const cls = item ? (item.success ? "success" : "fail") : "";
+            const attrs = item
+              ? ' data-success="' + (item.success ? "1" : "0") +
+                '" data-kind="' + escapeHtml(item.kind || (item.success ? "success" : "business_error")) +
+                '" data-time="' + escapeHtml(item.time || "") + '"'
+              : "";
+            return '<span class="status-seg ' + cls + '"' + attrs + "></span>";
+          });
+          const total = results.length;
+          const okCount = data.success != null ? data.success : results.filter(function (item) { return item.success; }).length;
+          const failCount = total - okCount;
+          const availability = data.availability != null ? data.availability : (total ? Math.round(okCount / total * 1000) / 10 : 0);
+          const isMobile = window.matchMedia && window.matchMedia("(max-width: 600px)").matches;
+          let barHtml;
+          if (isMobile) {
+            const okPct = total ? Math.round(okCount / total * 100) : 0;
+            const failPct = total ? Math.round(failCount / total * 100) : 0;
+            barHtml = '<div class="status-bar-mobile">' +
+              '<span class="seg-success" data-width="' + okPct + '"></span>' +
+              '<span class="seg-fail" data-width="' + failPct + '"></span></div>';
+          } else {
+            barHtml = '<div class="status-bar">' + segments.join("") + "</div>";
+          }
+          let availClass = "avail-good";
+          if (availability < 70) availClass = "avail-bad";
+          else if (availability < 90) availClass = "avail-mid";
+          serviceStatusBox.classList.remove("hidden");
+          serviceStatusBox.innerHTML =
+            '<div class="status-title">服务状态 · 已受理 ' + acceptedTotal + ' 次</div>' +
+            barHtml +
+            '<div class="status-summary">' +
+            '<span class="' + availClass + '">最近 ' + total + ' 次可用性 ' +
+            availability.toFixed(1) + "%</span> · " + okCount + " 成功 · " + failCount + " 失败</div>";
+          serviceStatusBox.querySelectorAll("[data-width]").forEach(function (node) {
+            node.style.width = node.dataset.width + "%";
+          });
+        })
+        .catch(function () {
+          serviceStatusBox.classList.add("hidden");
+        });
+    }
+
+    function hideStatusTooltip() {
+      statusTooltip.classList.add("hidden");
+    }
+
+    function positionStatusTooltip(event) {
+      statusTooltip.classList.remove("hidden");
+      const pad = 12;
+      let x = event.clientX + pad;
+      let y = event.clientY + pad;
+      if (x + statusTooltip.offsetWidth > window.innerWidth - 4) {
+        x = event.clientX - statusTooltip.offsetWidth - pad;
+      }
+      if (y + statusTooltip.offsetHeight > window.innerHeight - 4) {
+        y = event.clientY - statusTooltip.offsetHeight - pad;
+      }
+      statusTooltip.style.left = Math.max(4, x) + "px";
+      statusTooltip.style.top = Math.max(4, y) + "px";
+    }
+
+    function showStatusTooltip(event) {
+      const seg = event.target.closest ? event.target.closest(".status-seg") : null;
+      if (!seg) return;
+      const time = seg.getAttribute("data-time");
+      if (!time) return;
+      const ok = seg.getAttribute("data-success") === "1";
+      const kind = seg.getAttribute("data-kind") || "";
+      let text = ok ? "成功" : "失败";
+      if (kind === "no_data") text = "成功 · 无数据";
+      else if (kind === "business_error") text = "失败 · 业务错误";
+      else if (kind === "upstream_error") text = "失败 · 上游错误";
+      statusTooltip.textContent = text + " · " + time;
+      positionStatusTooltip(event);
+    }
+
+    serviceStatusBox.addEventListener("mouseover", function (event) {
+      showStatusTooltip(event);
+    });
+    serviceStatusBox.addEventListener("mousemove", function (event) {
+      if (!statusTooltip.classList.contains("hidden")) {
+        positionStatusTooltip(event);
+      }
+    });
+    serviceStatusBox.addEventListener("mouseleave", hideStatusTooltip);
+    serviceStatusBox.addEventListener("touchstart", function (event) {
+      if (!event.touches.length) return;
+      const touch = event.touches[0];
+      const fakeEvent = { clientX: touch.clientX, clientY: touch.clientY, target: event.target };
+      if (!statusTooltip.classList.contains("hidden")) {
+        hideStatusTooltip();
+      } else {
+        showStatusTooltip(fakeEvent);
+      }
+    }, { passive: true });
+
+    function escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function inlineFormat(text) {
+      let html = escapeHtml(text);
+      html = html.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+      );
+      html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+      html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+      html = html.replace(/(^|[^"'=])(https?:\/\/[^\s<>"']+)/g, function (m, pre, url) {
+        url = url.replace(/[.,;:!?]+$/, "");
+        return pre + '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + "</a>";
+      });
+      return html;
+    }
+
+    const SAFE_TAGS = new Set([
+      "a", "abbr", "b", "blockquote", "br", "code", "del", "div", "em",
+      "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img",
+      "li", "ol", "p", "pre", "s", "span", "strong", "table", "tbody",
+      "td", "th", "thead", "tr", "ul"
+    ]);
+    const SAFE_ATTRS = new Set([
+      "href", "src", "alt", "title", "color", "face", "size", "align",
+      "colspan", "rowspan", "width", "height", "target", "rel"
+    ]);
+    const URL_ATTRS = new Set(["href", "src"]);
+
+    function sanitizeTag(rawTag) {
+      const match = rawTag.match(
+        /^<\/?([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>$/
+      );
+      if (!match) return escapeHtml(rawTag);
+      const tag = match[1].toLowerCase();
+      if (!SAFE_TAGS.has(tag)) return escapeHtml(rawTag);
+      if (rawTag.startsWith("</")) return "</" + tag + ">";
+
+      let attrs = "";
+      const attrRe = /([a-zA-Z-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+      let m;
+      while ((m = attrRe.exec(match[2]))) {
+        const name = m[1].toLowerCase();
+        const value = m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : "");
+        if (!SAFE_ATTRS.has(name)) continue;
+        if (URL_ATTRS.has(name) && !/^(https?:|mailto:|#|\/)/i.test(value)) continue;
+        attrs += " " + name + '="' + escapeHtml(value) + '"';
+      }
+      return "<" + tag + attrs + ">";
+    }
+
+    function renderInline(text) {
+      const parts = String(text).split(/(<[^>]+>)/g);
+      let html = "";
+      for (const part of parts) {
+        if (/^<\/?[a-zA-Z][^>]*>$/.test(part)) {
+          html += sanitizeTag(part);
+        } else {
+          html += inlineFormat(part);
+        }
+      }
+      return html;
+    }
+
+    function isTableSeparator(line) {
+      return /^\s*\|?[\s:|-]+\|?\s*$/.test(line) && line.includes("-");
+    }
+
+    function applyRenderedElementStyles(root) {
+      root.querySelectorAll("[data-score]").forEach(function (node) {
+        node.style.width = node.dataset.score + "%";
+      });
+      root.querySelectorAll("[data-width]").forEach(function (node) {
+        node.style.width = node.dataset.width + "%";
+      });
+    }
+
+    function renderMarkdown(text) {
+      const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+      const html = [];
+      let i = 0;
+
+      function renderList(startIndex, listType) {
+        const topLevelRe = listType === "ol" ? /^\d+\.\s+/ : /^[-*]\s+/;
+        const nestedRe = /^[ \t]+(?:[-*]|\d+\.)\s+/;
+        let cursor = startIndex;
+        const items = [];
+
+        while (cursor < lines.length && topLevelRe.test(lines[cursor].trim())) {
+          let content = lines[cursor].trim().replace(topLevelRe, "");
+          cursor++;
+          const children = [];
+          while (cursor < lines.length && nestedRe.test(lines[cursor])) {
+            children.push(lines[cursor].trim().replace(/^(?:[-*]|\d+\.)\s+/, ""));
+            cursor++;
+          }
+          items.push("<li>" + renderInline(content) +
+            (children.length
+              ? "<ul>" + children.map(function (item) { return "<li>" + renderInline(item) + "</li>"; }).join("") + "</ul>"
+              : "") +
+            "</li>");
+        }
+
+        return {
+          html: "<" + listType + ">" + items.join("") + "</" + listType + ">",
+          next: cursor
+        };
+      }
+
+      while (i < lines.length) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        if (!trimmed) { i++; continue; }
+
+        if (trimmed.startsWith("```")) {
+          const buf = [];
+          i++;
+          while (i < lines.length && !lines[i].trim().startsWith("```")) {
+            buf.push(lines[i]);
+            i++;
+          }
+          i++;
+          html.push("<pre><code>" + escapeHtml(buf.join("\n")) + "</code></pre>");
+          continue;
+        }
+
+        if (trimmed.startsWith("|")) {
+          const rows = [];
+          while (i < lines.length && lines[i].trim().startsWith("|")) {
+            rows.push(lines[i].trim());
+            i++;
+          }
+          if (rows.length >= 2 && isTableSeparator(rows[1])) {
+            const cells = function (row) {
+              return row.split("|").slice(1, -1).map(function (cell) {
+                return cell.trim();
+              });
+            };
+            const rawHeaders = cells(rows[0]);
+            const headers = rawHeaders.map(function (h) { return h.toLowerCase(); });
+            const scoreIdx = headers.findIndex(function (h) {
+              return h.indexOf("成绩") !== -1 || h.indexOf("分数") !== -1 || h === "score";
+            });
+            const typeIdx = headers.findIndex(function (h) {
+              return h.indexOf("课程类别") !== -1 || h.indexOf("类型") !== -1 || h === "course type";
+            });
+            function decorateCell(cell, colIdx) {
+              const plain = cell.trim();
+              const header = headers[colIdx] || "";
+              const label = escapeHtml(rawHeaders[colIdx] || header);
+              const semanticClasses = [];
+              if (/课程/.test(header)) semanticClasses.push("cell-course");
+              if (/学期/.test(header)) semanticClasses.push("cell-semester");
+              if (/GPA/i.test(header)) semanticClasses.push("cell-gpa");
+              if (/学分/.test(header)) semanticClasses.push("cell-credit");
+              if (/备注/.test(header)) semanticClasses.push("cell-note");
+              if (colIdx === scoreIdx) semanticClasses.push("cell-score");
+              if (colIdx === typeIdx) semanticClasses.push("cell-type");
+              const semanticClass = semanticClasses.length ? " " + semanticClasses.join(" ") : "";
+              if (colIdx === scoreIdx) {
+                if (plain === "--" || plain === "—" || /未发布|暂无成绩/.test(plain)) {
+                  return '<td data-label="' + label + '" class="score-unpub' + semanticClass + '" title="成绩尚未发布">--</td>';
+                }
+                const num = parseFloat(plain.replace(/[^\d.]/g, ""));
+                if (!isNaN(num)) {
+                  let cls = "score-low";
+                  if (num >= 90) cls = "score-high";
+                  else if (num >= 75) cls = "score-mid";
+                  const pct = Math.min(100, Math.max(0, num));
+                  return '<td data-label="' + label + '" class="' + cls + semanticClass + '">' +
+                    renderInline(cell) +
+                    '<div class="score-bar"><i data-score="' + pct + '"></i></div></td>';
+                }
+              }
+              if (colIdx === typeIdx) {
+                let cls = "other";
+                if (plain.indexOf("必修") !== -1) cls = "required";
+                else if (plain.indexOf("选修") !== -1 || plain.indexOf("任选") !== -1) cls = "elective";
+                else if (plain.indexOf("实践") !== -1 || plain.indexOf("实验") !== -1 || plain.indexOf("实训") !== -1) cls = "practice";
+                return '<td data-label="' + label + '" class="' + semanticClasses.join(" ") + '"><span class="badge ' + cls + '">' + renderInline(cell) + "</span></td>";
+              }
+              return '<td data-label="' + label + '" class="' + semanticClasses.join(" ") + '">' + renderInline(cell) + "</td>";
+            }
+            const tableClass = scoreIdx !== -1 ? "table-shell table-shell--grades" : "table-shell table-shell--schedule";
+            html.push('<div class="' + tableClass + '"><table aria-label="查询结果表格"><thead><tr>');
+            cells(rows[0]).forEach(function (cell) {
+              html.push("<th>" + renderInline(cell) + "</th>");
+            });
+            html.push("</tr></thead>");
+            if (rows.length > 2) {
+              html.push("<tbody>");
+              rows.slice(2).forEach(function (row) {
+                html.push("<tr>");
+                cells(row).forEach(function (cell, colIdx) {
+                  html.push(decorateCell(cell, colIdx));
+                });
+                html.push("</tr>");
+              });
+              html.push("</tbody>");
+            }
+            html.push("</table></div>");
+          } else {
+            html.push("<p>" + renderInline(rows.join("<br>")) + "</p>");
+          }
+          continue;
+        }
+
+        const heading = trimmed.match(/^(#{1,6})\s+(.*)$/);
+        if (heading) {
+          const level = heading[1].length;
+          html.push("<h" + level + ">" + renderInline(heading[2]) + "</h" + level + ">");
+          i++;
+          continue;
+        }
+
+        if (trimmed.startsWith(">")) {
+          const buf = [];
+          while (i < lines.length && lines[i].trim().startsWith(">")) {
+            buf.push(lines[i].trim().replace(/^>\s?/, ""));
+            i++;
+          }
+          html.push("<blockquote>" + buf.map(renderInline).join("<br>") + "</blockquote>");
+          continue;
+        }
+
+        if (/^[-*]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+          const list = renderList(i, /^\d+\.\s+/.test(trimmed) ? "ol" : "ul");
+          html.push(list.html);
+          i = list.next;
+          continue;
+        }
+
+        if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
+          html.push("<hr>");
+          i++;
+          continue;
+        }
+
+        const buf = [line];
+        i++;
+        while (i < lines.length) {
+          const next = lines[i].trim();
+          if (!next || /^(#{1,6}\s|>|[-*]\s|\d+\.\s|\||```|(-{3,}|\*{3,})$)/.test(next)) {
+            break;
+          }
+          buf.push(lines[i]);
+          i++;
+        }
+        html.push("<p>" + renderInline(buf.join(" ")) + "</p>");
+      }
+
+      return html.join("\n");
+    }
+
+    function extractMarkdownValue(body) {
+      if (!body || typeof body !== "object") return null;
+      let primary = null;
+      let fallback = null;
+      const extraLinks = [];
+      const extraMarkdown = [];
+      const seenUrls = new Set();
+      const seenMarkdown = new Set();
+
+      function extractMarkdownLinks(text) {
+        const links = [];
+        const re = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+        let m;
+        while ((m = re.exec(text))) {
+          links.push(m[0]);
+        }
+        return links;
+      }
+
+      function pushLink(link) {
+        const url = typeof link === "string" ? link : link.url;
+        if (!/^https?:\/\//i.test(url) || seenUrls.has(url)) return;
+        seenUrls.add(url);
+        extraLinks.push(link);
+      }
+
+      function walk(node, inOutputs) {
+        if (!node || typeof node !== "object") return;
+        if (Array.isArray(node)) {
+          for (const item of node) {
+            if (item && typeof item === "object" && (item.url || item.download_url)) {
+              const url = String(item.url || item.download_url || "");
+              if (/^https?:\/\//i.test(url)) {
+                pushLink({
+                  name: String(item.filename || item.name || "下载文件"),
+                  url: url
+                });
+              }
+            }
+            walk(item, inOutputs);
+          }
+          return;
+        }
+        for (const key of Object.keys(node)) {
+          const value = node[key];
+          const childOutputs = inOutputs || key === "outputs";
+          if (typeof value === "string" && value.trim()) {
+            if (key === "output_text") primary = primary || value;
+            else if (key === "output") fallback = fallback || value;
+            else if ((key === "result" || key === "markdown") && !primary && !fallback) {
+              fallback = value;
+            } else if (inOutputs && ["files", "download_url", "file_url", "url"].indexOf(key) !== -1) {
+              const s = value.trim();
+              const markdownLinks = extractMarkdownLinks(s);
+              if (markdownLinks.length) {
+                for (const link of markdownLinks) {
+                  if (!seenMarkdown.has(link)) {
+                    seenMarkdown.add(link);
+                    extraMarkdown.push(link);
+                  }
+                }
+              } else if (/^https?:\/\//i.test(s)) {
+                pushLink(s);
+              }
+            }
+          } else if (value && typeof value === "object") {
+            walk(value, childOutputs);
+          }
+        }
+      }
+
+      walk(body, false);
+      const parts = [];
+      if (primary) parts.push(primary);
+      if (
+        fallback &&
+        fallback !== primary &&
+        (primary === null || primary.indexOf(fallback) === -1)
+      ) {
+        parts.push(fallback);
+      }
+      for (const link of extraLinks) {
+        if (typeof link === "string") {
+          parts.push("[下载文件](" + link + ")");
+        } else {
+          parts.push("[" + link.name + "](" + link.url + ")");
+        }
+      }
+      parts.push.apply(parts, extraMarkdown);
+      return parts.length ? parts.join("\n\n") : null;
+    }
+
+    const RESULT_OVERVIEW_ICONS = {
+      success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>',
+      warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4M12 17h.01"></path></svg>',
+      info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg>',
+      error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="m15 9-6 6M9 9l6 6"></path></svg>'
+    };
+
+    function resultMeta(body) {
+      if (!body || typeof body !== "object") return {};
+      return body.meta || body._meta || {};
+    }
+
+    function parseResultTable(text) {
+      const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (!lines[i].trim().startsWith("|")) continue;
+        const rows = [];
+        while (i < lines.length && lines[i].trim().startsWith("|")) {
+          rows.push(lines[i].trim());
+          i++;
+        }
+        if (rows.length < 3 || !isTableSeparator(rows[1])) continue;
+        const cells = function (row) {
+          return row.split("|").slice(1, -1).map(function (cell) { return cell.trim(); });
+        };
+        return {
+          headers: cells(rows[0]),
+          rows: rows.slice(2).map(cells)
+        };
+      }
+      return null;
+    }
+
+    function gradeOverviewFacts(text) {
+      const table = parseResultTable(text);
+      if (!table) return [];
+      const scoreIdx = table.headers.findIndex(function (header) {
+        return /成绩|分数|score/i.test(header);
+      });
+      if (scoreIdx === -1) return [];
+      const scores = table.rows.map(function (row) {
+        const raw = String(row[scoreIdx] || "").replace(/<br\s*\/?>/gi, " ");
+        const value = parseFloat(raw.replace(/[^\d.]/g, ""));
+        return Number.isFinite(value) ? value : null;
+      }).filter(function (value) { return value !== null; });
+      if (!scores.length) return [];
+      const average = scores.reduce(function (sum, value) { return sum + value; }, 0) / scores.length;
+      return [
+        { label: "已发布", value: scores.length + " 门" },
+        { label: "平均分", value: average.toFixed(1) },
+        { label: "最高分", value: Math.max.apply(null, scores).toFixed(0) }
+      ];
+    }
+
+    function renderResultOverview(state, kicker, title, description, facts) {
+      const icon = RESULT_OVERVIEW_ICONS[state] || RESULT_OVERVIEW_ICONS.info;
+      const factItems = facts || [];
+      const safeFacts = factItems.map(function (fact) {
+        return '<div class="result-fact"><span>' + escapeHtml(fact.label) +
+          "</span><strong>" + escapeHtml(fact.value) + "</strong></div>";
+      }).join("");
+      resultOverview.className = "result-overview result-overview--" + state;
+      resultOverview.innerHTML =
+        '<span class="result-overview-icon">' + icon + "</span>" +
+        '<div class="result-overview-copy">' +
+          '<span class="result-overview-kicker">' + escapeHtml(kicker || "查询结果") + "</span>" +
+          '<strong class="result-overview-title">' + escapeHtml(title) + "</strong>" +
+          '<p class="result-overview-desc">' + escapeHtml(description) + "</p>" +
+        "</div>" +
+        (safeFacts
+          ? '<div class="result-facts' + (factItems.length === 3 ? " result-facts--three" : "") + '">' +
+            safeFacts + "</div>"
+          : "");
+      resultOverview.classList.remove("hidden");
+    }
+
+    function renderStateOverview(kind, title, description) {
+      renderResultOverview(
+        kind === "error" ? "error" : "info",
+        resultContext.option ? resultContext.option + "查询" : "查询结果",
+        title,
+        description,
+        resultContext.option ? [
+          { label: "学期", value: resultContext.semesters || "当前学期" },
+          { label: "范围", value: resultContext.weeks === "all" ? "全部周次" : resultContext.weeks }
+        ] : []
+      );
+    }
+
+    function parseDiagnosticReport(text) {
+      const lines = String(text || "").split("\n");
+      const categoryLine = lines.find(function (line) {
+        return /问题分类：/.test(line);
+      }) || "";
+      const kindLine = lines.find(function (line) {
+        return /^\s*-\s*环节：/.test(line);
+      }) || "";
+      const evidenceLine = lines.find(function (line) {
+        return /^\s*-\s*判断依据：/.test(line);
+      }) || "";
+      const category = categoryLine.replace(/.*问题分类：/, "").replace(/\*/g, "").trim();
+      if (!category) return null;
+      const userStart = lines.findIndex(function (line) { return /用户可自行处理：/.test(line); });
+      const adminStart = lines.findIndex(function (line) { return /需要管理员\/运维处理：/.test(line); });
+      const actions = function (start, end) {
+        if (start === -1) return [];
+        return lines.slice(start + 1, end === -1 ? lines.length : end)
+          .map(function (line) {
+            const match = line.match(/^\s*-\s+(.+)$/);
+            return match ? match[1].trim() : "";
+          })
+          .filter(function (item) { return item && item !== "无"; });
+      };
+      return {
+        category: category,
+        kind: kindLine.replace(/.*环节：/, "").trim() || "查询",
+        evidence: evidenceLine.replace(/.*判断依据：/, "").trim(),
+        userActions: actions(userStart, adminStart),
+        adminActions: actions(adminStart, -1)
+      };
+    }
+
+    function humanizeDiagnosticEvidence(evidence) {
+      const status = String(evidence || "").match(/HTTP\s*(\d{3})/i);
+      if (/暂时不可用|请稍后重试|上游服务/.test(evidence) && status && /^5/.test(status[1])) {
+        return "学校服务暂时不可用（HTTP " + status[1] + "）";
+      }
+      return String(evidence || "服务未返回可用的诊断信息").slice(0, 220);
+    }
+
+    function renderDiagnosticReport(report) {
+      const userItems = report.userActions.length
+        ? report.userActions.map(function (item) { return "<li>" + escapeHtml(item) + "</li>"; }).join("")
+        : "<li>稍后重新查询</li>";
+      const adminItems = report.adminActions.length
+        ? report.adminActions.map(function (item) { return "<li>" + escapeHtml(item) + "</li>"; }).join("")
+        : "<li>无需额外处理</li>";
+      return '<div class="diagnostic-report">' +
+        '<section class="diagnostic-guidance" aria-labelledby="diagnosticGuideTitle">' +
+          '<span class="diagnostic-guidance-icon" aria-hidden="true">' + RESULT_OVERVIEW_ICONS.info + "</span>" +
+          "<div>" +
+            '<h3 id="diagnosticGuideTitle">你可以先这样处理</h3>' +
+            '<ul class="diagnostic-action-list">' + userItems + "</ul>" +
+          "</div>" +
+        "</section>" +
+        '<details class="diagnostic-technical">' +
+          "<summary>查看诊断信息</summary>" +
+          '<dl class="diagnostic-facts">' +
+            "<div><dt>发生环节</dt><dd>" + escapeHtml(report.kind) + "</dd></div>" +
+            "<div><dt>系统判断</dt><dd>" + escapeHtml(humanizeDiagnosticEvidence(report.evidence)) + "</dd></div>" +
+          "</dl>" +
+          '<div class="diagnostic-admin"><strong>管理员核对项</strong><ul>' + adminItems + "</ul></div>" +
+        "</details>" +
+      "</div>";
+    }
+
+    function renderResultMarkdown(markdown, body) {
+      const report = parseDiagnosticReport(markdown);
+      if (report) {
+        renderResultOverview(
+          /账号或密码/.test(report.category) ? "error" : "warning",
+          (resultContext.option || report.kind) + "查询",
+          /账号或密码/.test(report.category)
+            ? "登录信息需要确认"
+            : (/暂时不可用|服务未开放/.test(humanizeDiagnosticEvidence(report.evidence))
+              ? "学校服务暂不可用"
+              : "本次查询未完成"),
+          /账号或密码/.test(report.category)
+            ? "请重新核对学校统一身份认证账号和密码后再试。"
+            : "学校服务这次没有正常返回，请稍后重新查询；不要连续快速重试。",
+          [
+            { label: "环节", value: report.kind },
+            { label: "状态", value: (/HTTP\s*\d{3}/i.exec(report.evidence) || ["未完成"])[0] }
+          ]
+        );
+        return renderDiagnosticReport(report);
+      }
+      const meta = resultMeta(body);
+      const option = resultContext.option || "查询";
+      const facts = option === "成绩" ? gradeOverviewFacts(markdown) : [
+        { label: "学期", value: resultContext.semesters || "当前学期" },
+        { label: "范围", value: resultContext.weeks === "all" ? "全部周次" : resultContext.weeks }
+      ];
+      renderResultOverview(
+        "success",
+        option + "查询",
+        option === "成绩" ? "成绩查询完成" : "课表查询完成",
+        option === "成绩"
+          ? (facts.length ? "已汇总本次查询结果，成绩概览只统计已发布的数值成绩。" : "查询已完成，本次结果中没有可汇总的已发布成绩。")
+          : "课程安排已整理完成，可在下方查看完整课表。",
+        facts
+      );
+      return renderMarkdown(markdown);
+    }
+
+    let resultTimer = 0;
+    let runIdCopyTimer = 0;
+    function showResult(statusCode, body) {
+      clearLockTimer();
+      clearTimeout(resultTimer);
+      const markdown = extractMarkdownValue(body);
+      setRunId(body && typeof body === "object" ? body.run_id : "");
+      skeleton.hidden = true;
+      skeleton.setAttribute("aria-hidden", "true");
+      resultCard.classList.remove("hidden");
+      layout.classList.add("has-result");
+      resultCard.classList.remove("fade-in");
+      resultCard.classList.add("fade-out");
+      if (body && typeof body === "object" && body.meta) {
+        calendarShowResultBlock(body.meta);
+      } else if (calendarEls.block) {
+        calendarEls.block.classList.add("hidden");
+      }
+      resultTimer = setTimeout(function () {
+        if (markdown !== null) {
+          resultHtml.classList.remove("hidden");
+          resultBox.classList.add("hidden");
+          resultHtml.innerHTML = renderResultMarkdown(markdown, body);
+          applyRenderedElementStyles(resultHtml);
+        } else {
+          resultHtml.classList.add("hidden");
+          resultBox.classList.remove("hidden");
+          const text = typeof body === "string" ? body : JSON.stringify(body, null, 2);
+          resultBox.textContent = "HTTP " + statusCode + "\n\n" + text;
+        }
+        resultCard.classList.remove("fade-out");
+        resultCard.classList.add("fade-in");
+      }, 200);
+    }
+
+    const DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>';
+
+    function pdfFilename(username) {
+      const d = new Date();
+      const pad = function (n) { return n < 10 ? "0" + n : String(n); };
+      return "成绩单_" + username + "_" + d.getFullYear() + pad(d.getMonth() + 1) +
+        pad(d.getDate()) + "_" + pad(d.getHours()) + pad(d.getMinutes()) +
+        pad(d.getSeconds()) + ".pdf";
+    }
+
+    function downloadPdfData(pdfBase64, username) {
+      if (!pdfBase64) return false;
+      try {
+        const bin = atob(pdfBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = pdfFilename(username);
+        document.body.appendChild(a);
+        a.click();
+        // 延迟清理：过早移除锚点/回收 blob 会中断浏览器的下载
+        setTimeout(function () {
+          a.remove();
+          URL.revokeObjectURL(url);
+        }, 60000);
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function autoDownloadPdf(pdfBase64, username) {
+      downloadPdfData(pdfBase64, username);
+    }
+
+    function renderPdfAction(pdfBase64, username) {
+      const box = document.getElementById("pdfActions");
+      if (!box) return;
+      box.classList.remove("hidden");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-primary btn-sm";
+      btn.innerHTML = DOWNLOAD_ICON + "<span>下载 PDF 文档</span>";
+      btn.addEventListener("click", function () {
+        if (downloadPdfData(pdfBase64, username)) showToast("success", "PDF 已开始下载");
+        else showToast("error", "PDF 生成失败，请重试");
+      });
+      box.innerHTML = "";
+      box.appendChild(btn);
+    }
+
+    function hidePdfAction() {
+      const box = document.getElementById("pdfActions");
+      if (box) {
+        box.classList.add("hidden");
+        box.innerHTML = "";
+      }
+    }
+
+    function authHeaders() {
+      // 令牌由 nginx 反代时注入 Authorization 头，页面不持有令牌
+      return GATEWAY_TOKEN ? { "Authorization": "Bearer " + GATEWAY_TOKEN } : {};
+    }
+
+    let querySeq = 0;
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      if (submitBtn.disabled) return;
+      if (!validateCredentials()) return;
+      const payload = {
+        username: usernameInput.value.trim(),
+        password: passwordInput.value,
+        option: optionInput.value,
+        weeks: weeksInput.value,
+        md2pdf: md2pdfInput.checked,
+        check: checkInput.checked
+      };
+      if (semestersInput.value) {
+        payload.semesters = semestersInput.value;
+      }
+      resultContext = {
+        option: payload.option,
+        semesters: payload.semesters || "",
+        weeks: payload.weeks
+      };
+
+      payload.username = String(payload.username);
+
+      const seq = ++querySeq;
+      if (queryController) queryController.abort();
+      queryController = new AbortController();
+
+      setButtonLoading(true);
+      hideOfflineBar();
+      hidePdfAction();
+      clearLockTimer();
+      clearTimeout(resultTimer);
+      skeleton.hidden = false;
+      skeleton.setAttribute("aria-hidden", "false");
+      resultHtml.classList.add("hidden");
+      resultBox.classList.add("hidden");
+      resultCard.classList.remove("hidden");
+      resultCard.setAttribute("aria-busy", "true");
+      resultTitle.textContent = payload.option + "查询结果";
+      layout.classList.add("has-result");
+      updateUrlParams(payload);
+      const savedScrollY = window.scrollY;
+      renderJobProgress("login", payload, "running", 0);
+      let rowCount = 0;
+      try {
+        let resp;
+        let data;
+        const jobSubmitResp = await fetch("/run/jobs", {
+          method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+          body: JSON.stringify(payload),
+          signal: queryController.signal
+        });
+        let jobSubmitText = await jobSubmitResp.text();
+        let jobSubmitData;
+        try { jobSubmitData = JSON.parse(jobSubmitText); } catch (err) { jobSubmitData = jobSubmitText; }
+        const jobFeatureUnavailable = jobSubmitResp.status === 404 ||
+          (jobSubmitResp.status === 503 &&
+            /REDIS_URL|异步查询未启用|排队服务暂时不可用/.test(
+              String(jobSubmitData && jobSubmitData.detail || jobSubmitData)));
+
+        if (jobSubmitResp.ok && jobSubmitData && jobSubmitData.job_id) {
+          renderJobProgress("queued", payload, "queued", jobSubmitData.position || 0);
+          let terminalJob = null;
+          while (seq === querySeq && !queryController.signal.aborted) {
+            await new Promise(function (resolve) { setTimeout(resolve, 2000); });
+            if (seq !== querySeq || queryController.signal.aborted) return;
+            const pollResp = await fetch("/run/jobs/" + encodeURIComponent(jobSubmitData.job_id), {
+              headers: authHeaders(),
+              cache: "no-store",
+              signal: queryController.signal
+            });
+            const pollText = await pollResp.text();
+            let pollData;
+            try { pollData = JSON.parse(pollText); } catch (err) { pollData = pollText; }
+            if (pollResp.status === 404) {
+              markJobProgressFailed(payload);
+              showErrorCard("任务不存在或已过期，请重新查询");
+              showToast("error", "查询任务已过期");
+              showStatus("查询失败", false);
+              renderServiceStatus();
+              return;
+            }
+            if (!pollResp.ok) {
+              throw new Error(pollData && pollData.detail || ("HTTP " + pollResp.status));
+            }
+            if (pollData.state === "queued") {
+              renderJobProgress(
+                pollData.phase || "queued", payload, pollData.state, pollData.position);
+            } else if (pollData.state === "running") {
+              renderJobProgress(pollData.phase || "querying", payload, pollData.state, 0);
+            } else {
+              terminalJob = pollData;
+              renderJobProgress(
+                terminalJob.phase || (terminalJob.result && terminalJob.result.success ? "done" : "querying"),
+                payload,
+                terminalJob.state,
+                terminalJob.position
+              );
+              break;
+            }
+          }
+          if (!terminalJob) return;
+          data = terminalJob.result || { success: false, kind: "internal_error", output: "查询任务失败" };
+          resp = new Response(JSON.stringify(data), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        } else if (jobSubmitResp.ok || jobFeatureUnavailable) {
+          hideJobProgress();
+          resp = await fetch("/run", {
+            method: "POST",
+            headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+            body: JSON.stringify(payload),
+            signal: queryController.signal
+          });
+          const text = await resp.text();
+          try { data = JSON.parse(text); } catch (err) { data = text; }
+        } else {
+          resp = jobSubmitResp;
+          data = jobSubmitData;
+        }
+
+        let businessFail = false;
+        if (!resp.ok) {
+          markJobProgressFailed(payload);
+          const detail = data && typeof data.detail === "object" ? data.detail : null;
+          const detailMeta = detail && detail.meta ? detail.meta : null;
+          if (detailMeta && detailMeta.lock_until) {
+            showLockCard(detailMeta.lock_until);
+            showToast("error", "学校账号临时锁定");
+          } else {
+            let message = "HTTP " + resp.status;
+            if (data && data.detail) {
+              if (typeof data.detail === "string") message = data.detail;
+              else if (detail && typeof detail.output === "string" && detail.output) {
+                message = detail.output;
+              } else if (Array.isArray(data.detail) && data.detail[0] && data.detail[0].msg) {
+                message = data.detail[0].msg;
+              }
+            }
+            showErrorCard(message);
+            showToast("error", "查询失败");
+          }
+        } else {
+          const meta = data && typeof data === "object"
+            ? (data._meta || data.meta || null) : null;
+          const markdown = extractMarkdownValue(data);
+          const kind = (meta && meta.kind) ||
+            (data && typeof data === "object" ? data.kind : "") || "";
+          const ERROR_KINDS = {
+            login_error: true, grades_error: true, schedule_error: true,
+            request_error: true, internal_error: true
+          };
+          businessFail = (data && typeof data === "object" && data.success === false) ||
+            (meta && (meta.kind === "business_error" || meta.kind === "upstream_error")) ||
+            ERROR_KINDS[kind] === true ||
+            (markdown !== null && /账号或密码错误|用户名或密码错误|服务异常|登录失败|会话失效|未登录|查询失败|数据获取失败|请求失败|获取失败|下载失败|解析失败|处理失败|操作失败|系统繁忙|请稍后重试|出错了/.test(markdown));
+          const noData = kind === "grades_empty" ||
+            (meta && meta.kind === "no_data") ||
+            (markdown !== null && (/尚未发布|暂无|没有找到|未查询到|无课/.test(markdown) || looksEmptyMarkdown(markdown)));
+          if (businessFail) {
+            markJobProgressFailed(payload);
+            hidePdfAction();
+            if (meta && meta.lock_until) {
+              showLockCard(meta.lock_until);
+            } else if (markdown !== null) {
+              // 展示后端确定性分类的友好报告（无密码/session/token）
+              showResult(resp.status, data);
+            } else {
+              showErrorCard("查询失败，请检查学号/密码或稍后重试");
+            }
+            if (markdown === null && !(meta && meta.lock_until)) {
+              showToast("error", "查询失败");
+            }
+          } else if (noData) {
+            hidePdfAction();
+            if (markdown !== null && /尚未发布/.test(markdown)) {
+              showStateCard(CLOUD_SVG, "成绩尚未发布", "成绩公布后会自动显示在这里", false);
+            } else {
+              showEmptyState();
+            }
+          } else {
+            showResult(resp.status, data);
+            rowCount = markdown !== null ? countMarkdownTableRows(markdown) : 0;
+            if (payload.md2pdf && data && typeof data === "object" && data.pdf_base64) {
+              renderPdfAction(data.pdf_base64, payload.username);
+              autoDownloadPdf(data.pdf_base64, payload.username);
+            }
+            saveResultRecord({
+              username: payload.username,
+              option: payload.option,
+              semesters: payload.semesters || "",
+              weeks: payload.weeks,
+              md2pdf: payload.md2pdf,
+              check: payload.check,
+              runId: data && typeof data === "object" ? data.run_id || "" : "",
+              isMarkdown: markdown !== null,
+              resultText: markdown !== null
+                ? stripLoginNote(markdown)
+                : (typeof data === "string" ? data : JSON.stringify(data, null, 2))
+            });
+            renderHistorySelect();
+            hideOfflineBar();
+          }
+        }
+        renderServiceStatus();
+        const queryOk = resp.ok && !businessFail;
+        showStatus(
+          queryOk
+            ? "查询完成" + (rowCount ? " · 共找到 " + rowCount + " 条记录" : "")
+            : "查询失败",
+          queryOk
+        );
+      } catch (err) {
+        if (err && err.name === "AbortError") return;
+        markJobProgressFailed(payload);
+        const cached = pruneExpiredHistory().find(function (r) {
+          return r.username === payload.username &&
+            r.option === payload.option &&
+            (r.semesters || "") === (payload.semesters || "");
+        });
+        if (cached) {
+          displaySavedRecord(cached);
+          showOfflineBar(cached.savedAt);
+          showStatus("网络异常，已展示缓存数据", false);
+          showToast("info", "网络异常，已展示本地缓存数据");
+        } else {
+          hideOfflineBar();
+          showErrorCard("网络请求失败，请稍后重试");
+          showToast("error", "网络请求失败");
+        }
+        renderServiceStatus();
+      } finally {
+        if (seq === querySeq) {
+          queryController = null;
+          resultCard.removeAttribute("aria-busy");
+          setButtonLoading(false);
+          window.scrollTo(0, savedScrollY);
+          if (layout.classList.contains("has-result")) {
+            resultTitle.focus({ preventScroll: true });
+          }
+        }
+      }
+    });
+
+    document.getElementById("resetBtn").addEventListener("click", function () {
+      usernameInput.value = "";
+      passwordInput.value = "";
+      optionInput.value = "课表";
+      semestersInput.value = "";
+      weeksInput.value = "all";
+      md2pdfInput.checked = false;
+      checkInput.checked = false;
+      passwordInput.type = "password";
+      document.getElementById("togglePassword").textContent = "显示";
+      document.getElementById("togglePassword").setAttribute("aria-pressed", "false");
+      clearFieldError(usernameInput, usernameError);
+      clearFieldError(passwordInput, passwordError);
+      historyTrigger.textContent = "— 选择历史查询结果 —";
+      historyTrigger.removeAttribute("data-label");
+      historyMenu.classList.add("hidden");
+      historyTrigger.setAttribute("aria-expanded", "false");
+      history.replaceState(null, "", location.pathname);
+      syncOptionSeg();
+      semestersDropdown.sync();
+      weeksDropdown.sync();
+      resultCard.classList.add("hidden");
+      resultTitle.textContent = "查询结果";
+      resultOverview.classList.add("hidden");
+      resultOverview.textContent = "";
+      resultContext = { option: "", semesters: "", weeks: "all" };
+      layout.classList.remove("has-result");
+      statusBox.classList.add("hidden");
+      hideOfflineBar();
+      hidePdfAction();
+    });
+
+    document.getElementById("backToQuery").addEventListener("click", function () {
+      if (submitBtn.disabled && queryController) queryController.abort();
+      clearTimeout(resultTimer);
+      resultCard.classList.add("hidden");
+      layout.classList.remove("has-result");
+      statusBox.classList.add("hidden");
+      hideOfflineBar();
+      hidePdfAction();
+      window.scrollTo(0, 0);
+      usernameInput.focus({ preventScroll: true });
+    });
+
+    document.getElementById("togglePassword").addEventListener("click", function () {
+      const show = passwordInput.type === "password";
+      passwordInput.type = show ? "text" : "password";
+      this.textContent = show ? "隐藏" : "显示";
+      this.setAttribute("aria-pressed", show ? "true" : "false");
+    });
+
+    runIdCopy.addEventListener("click", function () {
+      copyRunId().catch(function () {
+        runIdCopyState.textContent = "复制失败";
+        runIdCopy.classList.remove("copied");
+      });
+    });
+
+    document.addEventListener("mousedown", function (event) {
+      const btn = event.target.closest ? event.target.closest(".btn-primary, .btn-ghost") : null;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      const size = Math.max(rect.width, rect.height);
+      const span = document.createElement("span");
+      span.className = "btn-ripple";
+      span.style.width = size + "px";
+      span.style.height = size + "px";
+      span.style.left = event.clientX - rect.left - size / 2 + "px";
+      span.style.top = event.clientY - rect.top - size / 2 + "px";
+      btn.appendChild(span);
+      setTimeout(function () { span.remove(); }, 600);
+    });
+
+    document.addEventListener("click", function (event) {
+      const retry = event.target.closest ? event.target.closest(".js-retry-query") : null;
+      if (!retry || retry.disabled) return;
+      event.preventDefault();
+      const form = document.getElementById("queryForm");
+      if (!form) return;
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+    });
+
+
+    // ===== 网络日历订阅（页脚入口 + 结果区区块共用一套状态）=====
+    var calendarEls = {
+      entry: document.getElementById("calendarEntry"),
+      modal: document.getElementById("calendarModal"),
+      close: document.getElementById("calendarClose"),
+      dismiss: document.getElementById("calendarDismiss"),
+      username: document.getElementById("calendarUsername"),
+      password: document.getElementById("calendarPassword"),
+      semester: document.getElementById("calendarSemester"),
+      interval: document.getElementById("calendarInterval"),
+      check: document.getElementById("calendarCheck"),
+      useForm: document.getElementById("calendarUseForm"),
+      state: document.getElementById("calendarState"),
+      urlBox: document.getElementById("calendarUrlBox"),
+      url: document.getElementById("calendarUrl"),
+      reveal: document.getElementById("calendarReveal"),
+      copy: document.getElementById("calendarCopy"),
+      enable: document.getElementById("calendarEnable"),
+      refresh: document.getElementById("calendarRefreshNow"),
+      rotate: document.getElementById("calendarRotate"),
+      stop: document.getElementById("calendarStop"),
+      block: document.getElementById("calendarBlock"),
+      guideSection: document.getElementById("calendarGuideSection"),
+      guideDevice: document.getElementById("calendarGuideDevice"),
+      guideReach: document.getElementById("calendarGuideReach"),
+      guideWebview: document.getElementById("calendarGuideWebview"),
+      guidePrimary: document.getElementById("calendarGuidePrimary"),
+      guideSteps: document.getElementById("calendarGuideSteps"),
+      guideMore: document.getElementById("calendarGuideMore"),
+      guideTip: document.getElementById("calendarGuideTip"),
+      guidePrivacy: document.getElementById("calendarGuidePrivacy"),
+      qrButton: document.getElementById("calendarQrButton"),
+      qrBox: document.getElementById("calendarQrBox"),
+      qrCanvas: document.getElementById("calendarQrCanvas"),
+      qrStatus: document.getElementById("calendarQrStatus")
+    };
+    var calendarState = { state: "", feedUrl: "", verifiedToken: "", semester: "" };
+    var calendarFocus = null;
+    // 学期下拉：直接复用首页查询的同一份学期选项（克隆菜单项，避免两处维护）
+    (function syncCalendarSemesterOptions() {
+      var source = document.getElementById("semestersMenu");
+      var target = document.getElementById("calendarSemesterMenu");
+      if (!source || !target) return;
+      var clone = source.cloneNode(true);
+      clone.removeAttribute("id");
+      target.innerHTML = clone.innerHTML;
+    })();
+    var calendarSemesterDropdown = initDropdown(
+      "calendarSemesterTrigger", "calendarSemesterMenu", "calendarSemester", "默认当前学期");
+
+    function calendarSyncSemester(value) {
+      if (value) calendarEls.semester.value = value;
+      calendarSemesterDropdown.sync();
+    }
+    var calendarConfig = null;
+    var calendarUnavailable = false;   // 本次部署未启用网络日历（/config 返回 404）
+    var calendarUrlVisible = false;
+
+    function calendarMaskUrl(url) {
+      if (!url) return "";
+      var i = url.lastIndexOf("/");
+      if (i < 0) return "••••••";
+      return url.slice(0, i + 1) + "••••••••.ics";
+    }
+
+    function calendarFill(fill) {
+      if (!fill) return;
+      if (!calendarEls.username.value) calendarEls.username.value = usernameInput.value.trim();
+      if (!calendarEls.password.value) calendarEls.password.value = passwordInput.value;
+      if (!calendarEls.semester.value) {
+        calendarEls.semester.value = semestersInput.value || (calendarConfig && calendarConfig.default_semester) || "";
+      }
+    }
+
+    function calendarDisableEntry() {
+      // 部署未启用 CALENDAR_ENABLED：日历路由不存在（404），此时不应再露出入口，
+      // 否则用户点开只会看到加载失败（本轮线上日志即为此情况）。
+      calendarUnavailable = true;
+      if (calendarEls.entry) calendarEls.entry.classList.add("hidden");
+      if (calendarEls.block) calendarEls.block.classList.add("hidden");
+      if (calendarEls.modal) calendarEls.modal.classList.add("hidden");
+    }
+
+    function calendarFilterSemesterOptions() {
+      var allowed = (calendarConfig && calendarConfig.semesters) || [];
+      var menu = document.getElementById("calendarSemesterMenu");
+      if (!menu || !allowed.length) return;
+      Array.prototype.forEach.call(menu.querySelectorAll(".dropdown-item"), function (item) {
+        var value = item.getAttribute("data-value") || "";
+        if (value && allowed.indexOf(value) === -1) item.remove();
+      });
+    }
+
+    async function calendarLoadConfig() {
+      if (calendarConfig) return calendarConfig;
+      if (calendarUnavailable) return null;
+      try {
+        var resp = await fetch("/api/v1/calendars/config", { headers: authHeaders() });
+        if (resp.status === 404) { calendarDisableEntry(); return null; }
+        if (resp.ok) {
+          calendarConfig = await resp.json();
+          calendarFilterSemesterOptions();
+        }
+      } catch (e) { /* 网络异常时保持入口可用，仅缺少默认学期 */ }
+      return calendarConfig;
+    }
+
+    function calendarRender() {
+      var st = calendarState.state || "";
+      var labels = { active: "已开启", reauth_needed: "订阅用的是旧密码，需重新授权",
+                     none: "该学号当前学期未开启", locked: "订阅已暂停", expired: "订阅已失效" };
+      var text = st ? (labels[st] || st) : "尚未查询状态";
+      if (st === "active" || st === "reauth_needed") {
+        text += " · 每 " + Math.round((calendarState.refreshInterval || 43200) / 3600) + " 小时自动刷新";
+        if (calendarState.lastRefreshAt) text += " · 上次刷新 " + calendarState.lastRefreshAt;
+      }
+      var inferred = calendarConfig && calendarConfig.inferred_periods && calendarConfig.inferred_periods.length
+        ? "（第 " + calendarConfig.inferred_periods.join("、") + " 节时间为推算值，待学校官方确认）" : "";
+      calendarEls.state.textContent = text + inferred;
+      calendarEls.state.dataset.state = st || "none";
+      var hasUrl = Boolean(calendarState.feedUrl);
+      calendarEls.urlBox.classList.toggle("hidden", !hasUrl);
+      if (hasUrl) {
+        calendarEls.url.value = calendarUrlVisible ? calendarState.feedUrl : calendarMaskUrl(calendarState.feedUrl);
+        calendarEls.reveal.textContent = calendarUrlVisible ? "隐藏" : "显示";
+      }
+      var isEnabled = st === "active" || st === "reauth_needed";
+      var enableRow = document.getElementById("calendarEnableRow");
+      var manageRow = document.getElementById("calendarManageRow");
+      if (enableRow) enableRow.classList.toggle("hidden", isEnabled);
+      if (manageRow) manageRow.classList.toggle("hidden", !isEnabled);
+      calendarEls.enable.textContent = st === "reauth_needed" ? "用当前密码重新授权" : "一键开启订阅";
+      calendarEls.rotate.classList.toggle("hidden", !hasUrl);
+      calendarEls.refresh.classList.toggle("hidden", !hasUrl);
+      if (calendarEls.block && !calendarEls.block.classList.contains("hidden")) {
+        calendarEls.block.textContent = "网络日历订阅：" + text +
+          (hasUrl ? " · 已生成订阅地址，可在下方订阅面板中复制或关闭。" : " · 可一键开启。");
+      }
+      calendarGuideRender();
+    }
+
+    async function calendarRequest(path, body, method) {
+      var resp = await fetch(path, {
+        method: method || "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+        body: body ? JSON.stringify(body) : undefined
+      });
+      var data = null;
+      try { data = await resp.json(); } catch (e) { data = null; }
+      if (!resp.ok) {
+        var detail = (data && (data.detail || data.code)) || ("HTTP " + resp.status);
+        throw new Error(detail);
+      }
+      return data || {};
+    }
+
+    function calendarPayload() {
+      return {
+        username: (calendarEls.username.value || "").trim(),
+        password: calendarEls.password.value,
+        semester: (calendarEls.semester.value || "").trim(),
+        verified_token: calendarState.verifiedToken || null
+      };
+    }
+
+    function calendarGuard() {
+      var payload = calendarPayload();
+      if (!/^\d{10}$/.test(payload.username)) { calendarEls.state.textContent = "学号必须为 10 位数字"; return null; }
+      if (!payload.password) { calendarEls.state.textContent = "请填写教务系统密码"; return null; }
+      if (!payload.semester) {
+        var fallback = calendarConfig && calendarConfig.default_semester;
+        if (fallback) {
+          calendarSyncSemester(fallback);
+          payload.semester = fallback;
+        } else {
+          calendarEls.state.textContent = "正在加载学期列表，请稍后再试";
+          calendarLoadConfig();
+          return null;
+        }
+      }
+      return payload;
+    }
+
+    function calendarSyncInterval(seconds) {
+      if (!seconds || !calendarEls.interval) return;
+      calendarEls.interval.value = String(seconds);
+      document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (item) {
+        item.classList.toggle("active", Number(item.dataset.interval) === Number(seconds));
+      });
+    }
+
+    function calendarApply(data) {
+      calendarState.state = data.state || "";
+      calendarState.feedUrl = data.feed_url || "";
+      calendarState.semester = data.semester || calendarState.semester;
+      calendarState.refreshInterval = data.refresh_interval;
+      calendarState.lastRefreshAt = data.last_refresh_at;
+      if (data.verified_token) calendarState.verifiedToken = data.verified_token;
+      if (data.refresh_interval) calendarSyncInterval(data.refresh_interval);
+      if (data.semester) calendarSyncSemester(data.semester);
+      calendarRender();
+    }
+
+    async function calendarCheck() {
+      var payload = calendarGuard(); if (!payload) return;
+      calendarEls.state.textContent = "查询中…";
+      try { calendarApply(await calendarRequest("/api/v1/calendars/status", payload)); }
+      catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    async function calendarEnable() {
+      var payload = calendarGuard(); if (!payload) return;
+      payload.refresh_interval = Number(calendarEls.interval.value || 43200);
+      payload.reauthorize = calendarState.state === "reauth_needed";
+      calendarEls.state.textContent = "开启中（需要登录学校并生成首份课表）…";
+      try {
+        var data = await calendarRequest("/api/v1/calendars", payload);
+        calendarState.state = "active";
+        calendarState.feedUrl = data.feed_url || "";
+        calendarState.semester = data.semester || payload.semester;
+        calendarState.refreshInterval = data.refresh_interval;
+        calendarRender();
+      } catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    async function calendarRefreshNow() {
+      var payload = calendarGuard(); if (!payload) return;
+      calendarEls.state.textContent = "刷新中…";
+      try {
+        var data = await calendarRequest("/api/v1/calendars/refresh", payload);
+        calendarEls.state.textContent = data.skipped
+          ? ("距上次刷新过近，稍后再试（可于 " + (data.next_allowed_at || "") + " 后）")
+          : ("已刷新" + (data.changed ? "，课表有更新" : "，课表无变化"));
+      } catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    async function calendarRotate() {
+      var payload = calendarGuard(); if (!payload) return;
+      if (!window.confirm("轮换后旧订阅地址立即失效，需要在日历软件中重新添加。继续？")) return;
+      try {
+        var data = await calendarRequest("/api/v1/calendars/rotate", payload);
+        calendarState.feedUrl = data.feed_url || "";
+        calendarUrlVisible = false;     // 新地址仍先掩码展示，避免就地暴露长期密钥
+        calendarRender();
+        calendarEls.state.textContent = "订阅地址已轮换：旧地址立即失效，请在日历软件中重新添加";
+      } catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    async function calendarStop() {
+      var payload = calendarGuard(); if (!payload) return;
+      if (!window.confirm("关闭后将立即删除加密凭据与课表快照，订阅地址失效；已同步到日历软件的事件需在客户端自行删除。确认关闭？")) return;
+      try {
+        await calendarRequest("/api/v1/calendars", payload, "DELETE");
+        calendarState.state = "none"; calendarState.feedUrl = ""; calendarUrlVisible = false;
+        calendarRender();
+        calendarEls.state.textContent = "订阅已关闭，凭据与快照已删除";
+      } catch (e) { calendarEls.state.textContent = e.message; }
+    }
+
+    function calendarCopy() {
+      if (!calendarState.feedUrl) return;
+      navigator.clipboard.writeText(calendarState.feedUrl).then(function () {
+        calendarEls.copy.textContent = "已复制";
+        window.setTimeout(function () { calendarEls.copy.textContent = "复制"; }, 1200);
+      }).catch(function () { calendarEls.state.textContent = "复制失败，请点「显示」后手动复制"; });
+    }
+
+    // ===== 订阅指引：识别当前设备与内置浏览器，给出按平台的一键导入 =====
+    var calendarGuide = { env: null, reach: null, qrFor: "" };
+
+    function calendarDetectGuide() {
+      var ua = navigator.userAgent || "";
+      var low = ua.toLowerCase();
+      var raw = String((navigator.userAgentData && navigator.userAgentData.platform) ||
+                       navigator.platform || "").toLowerCase();
+      var platform = "unknown";
+      var touchMac = /macintosh|mac os x/.test(low) && (navigator.maxTouchPoints || 0) > 1;
+      if (/iphone|ipod/.test(low)) platform = "ios";
+      else if (/ipad/.test(low) || touchMac) platform = "ipados";
+      else if (/android/.test(low)) platform = "android";
+      else if (/mac os x|macintosh/.test(low) || /^mac/.test(raw)) platform = "macos";
+      else if (/windows/.test(low) || /^win/.test(raw)) platform = "windows";
+      else if (/linux|cros/.test(low) || /linux|cros|x11/.test(raw)) platform = "linux";
+      var env = {
+        platform: platform,
+        platformLabel: { ios: "iPhone", ipados: "iPad", android: "Android", macos: "macOS",
+                         windows: "Windows", linux: "Linux", unknown: "未知系统" }[platform],
+        browserLabel: "浏览器",
+        webview: "",
+        mobile: platform === "ios" || platform === "ipados" || platform === "android",
+        canShare: typeof navigator.share === "function" && typeof File === "function" &&
+                  typeof navigator.canShare === "function"
+      };
+      var webviews = [[/micromessenger/i, "微信"], [/wxwork/i, "企业微信"], [/\sqq\//i, "QQ"],
+                      [/dingtalk/i, "钉钉"], [/alipayclient/i, "支付宝"], [/weibo/i, "微博"],
+                      [/\blark\b/i, "飞书"]];
+      for (var i = 0; i < webviews.length; i++) {
+        if (webviews[i][0].test(ua)) { env.webview = webviews[i][1]; break; }
+      }
+      var browsers = [[/edgios|edga\/|edg\//i, "Edge"], [/crios|chrome\//i, "Chrome"],
+                      [/fxios|firefox\//i, "Firefox"], [/safari\//i, "Safari"]];
+      for (var j = 0; j < browsers.length; j++) {
+        if (browsers[j][0].test(ua)) { env.browserLabel = browsers[j][1]; break; }
+      }
+      if (env.webview) env.browserLabel = env.webview + "内置浏览器";
+      return env;
+    }
+
+    // 订阅地址可达性：日历客户端是"自己去取"地址，因此 loopback 只有本机可用，
+    // 内网地址只有同一局域网可用 —— 必须在使用前提示，避免扫码/云端订阅静默失败。
+    function calendarGuideReachability(feedUrl) {
+      var host = "";
+      try {
+        host = String(new URL(feedUrl).hostname || "").toLowerCase();
+      } catch (e) {
+        return { kind: "unknown", note: "" };
+      }
+      host = host.replace(/^\[|\]$/g, "");      // IPv6 字面量在 URL 里带方括号
+      var parts = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+      var a = parts ? Number(parts[1]) : -1;
+      var b = parts ? Number(parts[2]) : -1;
+      var isLoopback = host === "localhost" || host === "::1" || host === "0.0.0.0" || a === 127;
+      if (isLoopback) {
+        return { kind: "loopback",
+          note: "当前订阅地址是本机地址（" + host + "）：只有这台电脑能取到课表，手机扫码、" +
+                "其他设备或云端日历（Google/Outlook）都会失败。真机验收请把 PUBLIC_BASE_URL 改为" +
+                "本机局域网地址（如 http://192.168.x.x:8000）或 HTTPS 域名后重启编排。" };
+      }
+      var isPrivate = (a === 10) || (a === 192 && b === 168) ||
+        (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254) ||
+        /\.local$/.test(host) || /^f[cd][0-9a-f]{2}:/.test(host);
+      if (isPrivate) {
+        return { kind: "private",
+          note: "当前订阅地址是内网地址（" + host + "）：手机需连接同一 Wi-Fi 才能取到课表，" +
+                "离开该网络或交给 Google/Outlook 云端抓取会失败；生产请改用 HTTPS 域名。" };
+      }
+      return { kind: "public", note: "" };
+    }
+
+    // 各平台可用方式：本地方式（webcal / 复制 / 下载 / 分享 / 扫码）不经过第三方服务器；
+    // Google、Outlook 网页版会把订阅地址交给对应服务端抓取，必须显式提示。
+    function calendarGuideActions(env, feedUrl) {
+      var webcal = feedUrl.replace(/^https?:\/\//i, "webcal://");
+      var google = "https://calendar.google.com/calendar/render?cid=" + encodeURIComponent(feedUrl);
+      var outlook = "https://outlook.live.com/calendar/0/addfromweb?url=" + encodeURIComponent(feedUrl) +
+                    "&name=" + encodeURIComponent("我的课表");
+      var copy = { key: "copy", label: "复制订阅地址", kind: "copy" };
+      var download = { key: "download", label: "下载 .ics（一次性导入）", kind: "download",
+                       tip: "下载的是当前课表快照：导入后不会自动更新，需要自动更新请用订阅方式。" };
+      var share = { key: "share", label: "分享给已安装的日历 App", kind: "share" };
+      var apple = { key: "apple", label: "试着用系统日历打开", kind: "link", href: webcal,
+                    scheme: "webcal", attempt: true,
+                    tip: "webcal:// 是可选尝试：部分系统会把它当一次性导入、要求 HTTPS，" +
+                         "或在本地地址上直接报错；失败请用「复制订阅地址」手动订阅。" };
+      var outlookApp = { key: "outlook-app", label: "试着用 Outlook 打开", kind: "link", href: webcal,
+                         scheme: "webcal", attempt: true,
+                         tip: "同样走 webcal://；未安装 Outlook 时会交给系统日历，失败请手动订阅。" };
+      var thunderbird = { key: "thunderbird", label: "试着用 Thunderbird 打开", kind: "link", href: webcal,
+                          scheme: "webcal", attempt: true,
+                          tip: "同样走 webcal://；失败请在 Thunderbird 里手动新建网络日历。" };
+      var googleAction = { key: "google", label: "Google 日历（第三方抓取）", kind: "link", href: google,
+                           external: true, warn: "订阅地址会提交给 Google 服务器抓取；Google 约每天同步一次。" };
+      var outlookAction = { key: "outlook-web", label: "Outlook 网页版（第三方抓取）", kind: "link",
+                            href: outlook, external: true,
+                            warn: "订阅地址会提交给微软服务器抓取；Outlook 同步间隔常 ≥3 小时。" };
+      var plan = {
+        ios: {
+          primary: [copy],
+          more: [apple, googleAction, share, download],
+          steps: ["先点「复制订阅地址」",
+                  "在 iPhone/iPad 上：设置 → 日历 → 账户 → 添加账户 → 其他 → 添加已订阅的日历，粘贴地址并保存",
+                  "「试着用系统日历打开」是可选快捷方式：若提示导入错误或要求 HTTPS，请按上一步手动订阅"]
+        },
+        ipados: {
+          primary: [copy],
+          more: [apple, googleAction, share, download],
+          steps: ["先点「复制订阅地址」",
+                  "设置 → 日历 → 账户 → 添加账户 → 其他 → 添加已订阅的日历，粘贴地址并保存",
+                  "本地/内网地址只能在同一网络内订阅，离开该网络会同步失败"]
+        },
+        macos: {
+          primary: [copy],
+          more: [apple, outlookApp, thunderbird, googleAction, download],
+          steps: ["先点「复制订阅地址」",
+                  "Mac 上：日历 → 文件 → 新建日历订阅…，粘贴地址后选「订阅」",
+                  "「试着用系统日历打开」为可选快捷方式：webcal 深链在本地地址或缺 HTTPS 时可能报导入错误"]
+        },
+        android: {
+          primary: [copy],
+          more: [googleAction, share, download],
+          steps: ["先点「复制订阅地址」",
+                  "Google 日历网页版：其他日历 → 通过网址添加（需要地址公网可达）",
+                  "华为/小米/OPPO/vivo 等系统日历：用「分享给已安装的日历 App」，或在 App 的「订阅/网络日历」入口粘贴地址"]
+        },
+        windows: {
+          primary: [copy],
+          more: [outlookApp, outlookAction, googleAction, share, download],
+          steps: ["先点「复制订阅地址」",
+                  "Outlook 桌面端：添加日历 → 从 Internet 订阅，粘贴地址",
+                  "「试着用 Outlook 打开」走 webcal://，部分环境会直接报导入错误，失败请手动订阅"]
+        },
+        linux: {
+          primary: [copy],
+          more: [thunderbird, googleAction, download],
+          steps: ["先点「复制订阅地址」",
+                  "Thunderbird：日历 → 新建日历 → 在网络上 → 粘贴地址",
+                  "GNOME 日历 / Evolution：新建日历 → 从 URL 添加"]
+        },
+        unknown: {
+          primary: [copy],
+          more: [apple, googleAction, outlookAction, download],
+          steps: ["先点「复制订阅地址」",
+                  "在日历 App 中选择「订阅 / 添加网络日历 / 通过网址添加」后粘贴地址",
+                  "Apple 设备与 Outlook 也可先试上面的 webcal 快捷方式，失败就手动订阅"]
+        }
+      }[env.platform];
+      if (env.webview) {
+        plan.steps = ["当前在" + env.webview + "内置浏览器中：webcal 深链基本会被拦截，" +
+                      "请复制地址后到系统日历 App 里手动订阅，或点右上角「…」→「在浏览器中打开」",
+                      plan.steps[1] || plan.steps[0]];
+      }
+      plan.tip = "webcal:// 只是「试试交给系统日历」的快捷方式：不同系统可能把它当作一次性导入、" +
+        "要求 HTTPS，或对本地/内网地址直接报错 —— 手动「复制订阅地址」再添加网络日历最稳。";
+      plan.privacy = "本地方式（系统日历、复制、下载、分享、扫码）不会把订阅地址交给第三方；" +
+        "Google 与 Outlook 网页版会让对应服务端抓取该地址 —— 订阅地址即长期密钥，请自行判断是否接受。";
+      return plan;
+    }
+
+    function calendarWatchDeepLink(label) {
+      var left = document.visibilityState === "hidden";
+      function mark() { if (document.visibilityState === "hidden") left = true; }
+      document.addEventListener("visibilitychange", mark);
+      window.setTimeout(function () {
+        document.removeEventListener("visibilitychange", mark);
+        if (!left && document.visibilityState === "visible" && calendarEls.guideTip) {
+          calendarEls.guideTip.textContent = "没有检测到系统打开「" + label +
+            "」：当前设备可能没有对应日历 App，请改用下面的其他方式。";
+        }
+      }, 1500);
+    }
+
+    async function calendarShare() {
+      if (!calendarState.feedUrl) return;
+      if (!(navigator.share && navigator.canShare && typeof File === "function")) {
+        calendarEls.guideTip.textContent = "当前浏览器不支持系统分享，请改用「复制订阅地址」或「下载 .ics」。";
+        return;
+      }
+      calendarEls.guideTip.textContent = "正在读取课表快照…";
+      try {
+        var resp = await fetch(calendarState.feedUrl, { cache: "no-store" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        var blob = await resp.blob();
+        var file = new File([blob], "schedule.ics", { type: "text/calendar" });
+        if (!navigator.canShare({ files: [file] })) {
+          calendarEls.guideTip.textContent = "当前浏览器不支持分享文件，请改用「下载 .ics」后用日历 App 打开。";
+          return;
+        }
+        calendarEls.guideTip.textContent = "分享的是课表快照文件（不含订阅地址），系统会列出已安装的日历 App。";
+        await navigator.share({ files: [file], title: "我的课表" });
+      } catch (e) {
+        calendarEls.guideTip.textContent = (e && e.name === "AbortError")
+          ? "已取消分享。" : "分享失败：请改用「下载 .ics」或「复制订阅地址」。";
+      }
+    }
+
+    function calendarQrReset() {
+      calendarGuide.qrFor = "";
+      if (calendarEls.qrBox) calendarEls.qrBox.classList.add("hidden");
+      if (calendarEls.qrStatus) calendarEls.qrStatus.textContent = "";
+      if (calendarEls.qrCanvas) {
+        var ctx = calendarEls.qrCanvas.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, calendarEls.qrCanvas.width, calendarEls.qrCanvas.height);
+        calendarEls.qrCanvas.width = 1;
+        calendarEls.qrCanvas.height = 1;
+      }
+    }
+
+    function calendarDrawQr(canvas, data) {
+      var size = Number(data && data.size) || 0;
+      var rows = (data && data.rows) || [];
+      var quiet = Number((data && data.quiet_zone) || 4);
+      if (!canvas || !size || rows.length !== size) throw new Error("二维码数据不完整");
+      var total = size + quiet * 2;
+      var module = Math.max(2, Math.floor(220 / total));
+      var dim = total * module;
+      var dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+      canvas.width = dim * dpr;
+      canvas.height = dim * dpr;
+      var ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // 二维码必须保持最高对比度，这里固定纯黑/纯白（不参与主题令牌）
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, dim, dim);
+      ctx.fillStyle = "#000000";
+      for (var r = 0; r < size; r++) {
+        var row = String(rows[r] || "");
+        for (var c = 0; c < size; c++) {
+          if (row.charAt(c) === "1") {
+            ctx.fillRect((c + quiet) * module, (r + quiet) * module, module, module);
+          }
+        }
+      }
+      canvas.setAttribute("aria-label", "订阅地址二维码（版本 " + (data.version || "?") +
+        "，纠错等级 " + (data.ecc || "M") + "）");
+    }
+
+    async function calendarQrShow() {
+      var payload = calendarGuard();
+      if (!payload) return;
+      calendarEls.qrBox.classList.remove("hidden");
+      calendarEls.qrStatus.textContent = "正在本地生成二维码…";
+      try {
+        var data = await calendarRequest("/api/v1/calendars/qr", payload);
+        calendarDrawQr(calendarEls.qrCanvas, data);
+        calendarGuide.qrFor = calendarState.feedUrl;
+        var reach = calendarGuide.reach || calendarGuideReachability(calendarState.feedUrl);
+        calendarEls.qrStatus.textContent =
+          "用手机相机扫码即可订阅（" + (data.scheme || "webcal") + "://）；二维码包含订阅密钥，请勿截图转发。" +
+          (reach.kind === "loopback" ? "当前地址仅本机可达，手机扫码会失败（见上方提示）。" :
+           (reach.kind === "private" ? "手机需连接同一 Wi-Fi。" : ""));
+      } catch (e) {
+        calendarQrReset();
+        calendarEls.qrBox.classList.remove("hidden");
+        calendarEls.qrStatus.textContent = e.message;
+      }
+    }
+
+    // 订阅地址是长期密钥：渲染期只生成按钮，URL 在用户点击时才写入 DOM / 发起导航，
+    // 避免链接预取、浏览器扩展或安全扫描器提前拿到地址。
+    function calendarGuideButton(action, primary) {
+      var control = document.createElement("button");
+      control.type = "button";
+      control.className = "btn " + (primary ? "btn-primary" : "btn-ghost");
+      control.textContent = action.label;
+      if (action.tip) control.title = action.tip;
+      if (action.kind === "link") control.addEventListener("click", function () { calendarGuideOpen(action); });
+      else if (action.kind === "download") control.addEventListener("click", calendarGuideDownload);
+      else if (action.kind === "copy") control.addEventListener("click", calendarCopy);
+      else if (action.kind === "share") control.addEventListener("click", calendarShare);
+      return control;
+    }
+
+    function calendarGuideOpen(action) {
+      if (action.external &&
+          !window.confirm(action.warn + "\n\n订阅地址等同于长期访问凭据，确定继续？")) {
+        return;
+      }
+      if (action.external) {
+        window.open(action.href, "_blank", "noopener,noreferrer");
+        return;
+      }
+      if (action.attempt) {
+        calendarEls.guideTip.textContent = "已尝试用 webcal:// 唤起系统日历；若出现导入错误、订阅失败或没有反应，" +
+          "请改用「复制订阅地址」在日历 App 里手动添加网络日历。";
+      }
+      calendarWatchDeepLink(action.label);
+      window.location.href = action.href;      // webcal:// 交给系统日历
+    }
+
+    function calendarGuideDownload() {
+      var link = document.createElement("a");
+      link.href = calendarState.feedUrl;
+      link.download = "schedule.ics";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
+    function calendarGuideRender() {
+      if (!calendarEls.guideSection) return;
+      var hasUrl = Boolean(calendarState.feedUrl);
+      calendarEls.guideSection.classList.toggle("hidden", !hasUrl);
+      if (calendarGuide.qrFor && calendarGuide.qrFor !== calendarState.feedUrl) calendarQrReset();
+      if (!hasUrl) {
+        calendarEls.guidePrimary.textContent = "";
+        calendarEls.guideSteps.textContent = "";
+        calendarEls.guideMore.textContent = "";
+        calendarEls.guideWebview.classList.add("hidden");
+        calendarEls.guideReach.classList.add("hidden");
+        return;
+      }
+      var env = calendarDetectGuide();
+      calendarGuide.env = env;
+      calendarEls.guideDevice.textContent = "已识别：" + env.platformLabel + " · " + env.browserLabel;
+      var reach = calendarGuideReachability(calendarState.feedUrl);
+      calendarGuide.reach = reach;
+      calendarEls.guideReach.textContent = reach.note;
+      calendarEls.guideReach.classList.toggle("hidden", !reach.note);
+      var plan = calendarGuideActions(env, calendarState.feedUrl);
+      calendarEls.guideWebview.textContent = env.webview
+        ? ("当前在" + env.webview + "内置浏览器中打开，可能无法唤起日历 App：点右上角「…」→「在浏览器中打开」，或直接用手机相机扫码。")
+        : "";
+      calendarEls.guideWebview.classList.toggle("hidden", !env.webview);
+      calendarEls.guidePrimary.textContent = "";
+      plan.primary.forEach(function (action) {
+        calendarEls.guidePrimary.appendChild(calendarGuideButton(action, true));
+      });
+      calendarEls.guideMore.textContent = "";
+      plan.more.forEach(function (action) {
+        if (action.kind === "share" && !env.canShare) return;
+        calendarEls.guideMore.appendChild(calendarGuideButton(action, false));
+      });
+      calendarEls.guideSteps.textContent = "";
+      plan.steps.forEach(function (step) {
+        var li = document.createElement("li");
+        li.textContent = step;
+        calendarEls.guideSteps.appendChild(li);
+      });
+      calendarEls.guideTip.textContent = plan.tip || "";
+      calendarEls.guidePrivacy.textContent = plan.privacy || "";
+    }
+
+    function calendarOpen() {
+      if (calendarUnavailable) return;
+      calendarFocus = document.activeElement;
+      calendarUrlVisible = false;      // 面板每次打开都回到掩码状态，需显式点「显示」
+      calendarFill(true);
+      calendarLoadConfig().then(function (cfg) {
+        if (!calendarEls.semester.value && cfg && cfg.default_semester) {
+          calendarSyncSemester(cfg.default_semester);
+        }
+      });
+      calendarEls.modal.classList.remove("hidden");
+      calendarRender();
+      calendarEls.close.focus();
+    }
+
+    function calendarClosePanel() {
+      var wasOpen = !calendarEls.modal.classList.contains("hidden");
+      calendarEls.modal.classList.add("hidden");
+      calendarQrReset();          // 订阅密钥不进截图/演示残留：关闭即清除已生成的二维码
+      if (wasOpen && calendarFocus && document.contains(calendarFocus)) {
+        calendarFocus.focus();
+      }
+      calendarFocus = null;
+    }
+
+    function calendarShowResultBlock(meta) {
+      if (!calendarEls.block) return;
+      var info = meta && meta.calendar;
+      if (!info) { calendarEls.block.classList.add("hidden"); return; }
+      calendarState.state = info.state || "";
+      calendarState.feedUrl = info.feed_url || "";
+      calendarState.verifiedToken = info.verified_token || "";
+      calendarState.semester = info.semester || "";
+      calendarState.refreshInterval = info.refresh_interval;
+      calendarState.lastRefreshAt = info.last_refresh_at;
+      calendarEls.block.classList.remove("hidden");
+      calendarEls.block.textContent = "";
+      if (info.refresh_interval) calendarSyncInterval(info.refresh_interval);
+      if (info.semester) calendarSyncSemester(info.semester);
+      var text = document.createElement("span");
+      text.className = "calendar-block-text";
+      var label = info.state === "active" ? "已开启网络日历订阅"
+        : (info.state === "reauth_needed" ? "订阅存在但用的是旧密码，可重新授权" : "尚未开启网络日历订阅");
+      text.textContent = "网络日历 · " + label + "（" + (info.semester || "") + "）";
+      var open = document.createElement("button");
+      open.type = "button"; open.className = "btn btn-ghost"; open.textContent = "打开订阅面板";
+      open.addEventListener("click", calendarOpen);
+      calendarEls.block.appendChild(text);
+      calendarEls.block.appendChild(open);
+    }
+
+    if (calendarEls.entry) calendarEls.entry.addEventListener("click", calendarOpen);
+    if (calendarEls.close) calendarEls.close.addEventListener("click", calendarClosePanel);
+    if (calendarEls.dismiss) calendarEls.dismiss.addEventListener("click", calendarClosePanel);
+    if (calendarEls.modal) calendarEls.modal.addEventListener("click", function (event) {
+      if (event.target === calendarEls.modal) calendarClosePanel();
+    });
+    if (calendarEls.modal) calendarEls.modal.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        calendarClosePanel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      var focusable = Array.prototype.slice.call(calendarEls.modal.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter(function (node) {
+        return node.getClientRects().length > 0 && !node.classList.contains("hidden");
+      });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    if (calendarEls.useForm) calendarEls.useForm.addEventListener("click", function () {
+      calendarEls.username.value = usernameInput.value.trim();
+      calendarEls.password.value = passwordInput.value;
+      calendarSyncSemester(semestersInput.value || (calendarConfig && calendarConfig.default_semester) || "");
+      calendarEls.state.textContent = "已复用查询表单中的学号与密码（仅保存在当前页面内存）";
+    });
+    document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (button) {
+      button.addEventListener("click", function () {
+        document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (item) {
+          item.classList.toggle("active", item === button);
+        });
+        if (calendarEls.interval) calendarEls.interval.value = button.dataset.interval;
+      });
+    });
+    if (calendarEls.check) calendarEls.check.addEventListener("click", calendarCheck);
+    if (calendarEls.enable) calendarEls.enable.addEventListener("click", calendarEnable);
+    if (calendarEls.refresh) calendarEls.refresh.addEventListener("click", calendarRefreshNow);
+    if (calendarEls.rotate) calendarEls.rotate.addEventListener("click", calendarRotate);
+    if (calendarEls.stop) calendarEls.stop.addEventListener("click", calendarStop);
+    if (calendarEls.copy) calendarEls.copy.addEventListener("click", calendarCopy);
+    if (calendarEls.qrButton) calendarEls.qrButton.addEventListener("click", calendarQrShow);
+    if (calendarEls.reveal) calendarEls.reveal.addEventListener("click", function () {
+      calendarUrlVisible = !calendarUrlVisible; calendarRender();
+    });
+
+    calendarLoadConfig();            // 部署未启用日历时隐藏入口（404 探测）
+    sanitizeStoredHistory();
+    renderServiceStatus();
+    renderHistorySelect();
+    restoreUrlParams();
+    window.addEventListener("scroll", hideStatusTooltip, { passive: true });
+    window.addEventListener("resize", function () {
+      hideStatusTooltip();
+      renderServiceStatus();
+    }, { passive: true });
+    requestAnimationFrame(function () {
+      var shell = document.querySelector(".wrap");
+      if (shell) shell.classList.add("page-enter");
+    });
+  

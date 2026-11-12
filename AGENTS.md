@@ -58,16 +58,18 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 # 1. 编排配置合法
 docker compose config --quiet
 
-# 2. 单元测试（当前基线 153 个用例，全部通过）
+# 2. 单元测试（当前基线 255 通过 + 3 跳过，跳过为容器内无 node 的前端片段用例）
 docker build -q -t edu-query-app:test .
 docker run --rm -v "$PWD":/app -w /app edu-query-app:test \
   sh -c "pip install -q pytest pytest-asyncio && python -m pytest -q"
 
 # 2b. 前端令牌构建（改动 frontend/src/ 或 brand.js 后必须重编译）
 cd frontend && npm install && npm run build && cd ..
-# 改动 frontend/static/index.html 内联脚本后，必须同步更新
+# 查询页脚本已外置为 static/app.js（首屏主题预置为 static/theme-init.js），
+# CSP 的 script-src 对其走 'self'，无需哈希。唯一保留的内联脚本在
+# frontend/static/admin.html：改动后必须同步更新
 # frontend/templates/default.conf.template 中 script-src 对应内联脚本的
-# SHA-256 哈希（否则 CSP 拦截脚本，查询页无法使用）。
+# SHA-256 哈希（否则 CSP 拦截脚本，后台无法使用）。
 
 # 3. 两容器端到端冒烟（需 Docker daemon）
 API_TOKEN=smoke-token AUTO_ROTATE_TOKEN=false docker compose up -d --build

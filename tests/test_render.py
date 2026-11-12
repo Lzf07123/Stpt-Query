@@ -99,3 +99,25 @@ def test_upstream_markdown_is_sanitized_before_output():
     assert "![" not in rendered
     assert "javascript:" not in rendered
     assert "bad \\| course" in rendered
+
+
+def test_format_schedule_escapes_pipe_exactly_once():
+    r"""含竖线课程名回归：单元格与节次名只转义一次，不得出现双重转义。"""
+    data = {"success": True, "rows": [{
+        "timeCode": "1", "timeName": "第1节", "dayOfWeekCode": "1",
+        "dayOfWeekName": "周一", "courseName": "数学|分析",
+        "teacherName": "张老师", "classroomName": "A101", "weeks": "1-2",
+    }]}
+    out = format_schedule(data, "")
+    assert "数学\\|分析" in out          # 单次转义，表格结构不破坏
+    assert "数学\\\\|分析" not in out    # 双重转义历史缺陷：不得出现反斜杠加倍
+
+
+def test_format_schedule_escapes_pipe_in_time_name_once():
+    data = {"success": True, "rows": [{
+        "timeCode": "1", "timeName": "第1|节", "dayOfWeekCode": "1",
+        "dayOfWeekName": "周一", "courseName": "高数",
+    }]}
+    out = format_schedule(data, "")
+    assert "第1\\|节" in out
+    assert "第1\\\\|节" not in out

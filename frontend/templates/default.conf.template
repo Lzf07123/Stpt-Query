@@ -19,7 +19,7 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-XoVch2YEItynbKHaq6Zagc/5lDJBclyIEMKh0Td917A=' 'sha256-F69LsM7xT7R1u3HZjsVNz1ngwe9wYIl4aeXfK4KvLFc=' 'sha256-DIcJv9zUX/pnA3GFnUMOhDwaaS7IpPVKTp651n/piMc='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-DIcJv9zUX/pnA3GFnUMOhDwaaS7IpPVKTp651n/piMc='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
 
     root /usr/share/nginx/html;
     index index.html;
@@ -32,6 +32,18 @@ server {
     # 首页 HTML 承载缓存版本号，禁止浏览器长时间保留旧入口。
     location = / {
         try_files /index.html =404;
+        expires epoch;
+    }
+
+    # 直连 /index.html 与 /admin.html 同样禁止缓存（否则 1h 缓存会卡住新版入口）。
+    # 注意：这两个 location 不自建 add_header，继续继承 server 级 CSP/安全头。
+    location = /index.html {
+        try_files /index.html =404;
+        expires epoch;
+    }
+
+    location = /admin.html {
+        try_files /admin.html =404;
         expires epoch;
     }
 
@@ -73,6 +85,9 @@ server {
 
     # 日历订阅 API：浏览器调用，服务端注入网关令牌（与 /run 同级信任模型）。
     location ^~ /api/v1/calendars {
+        # 边缘限流挡板（10r/s burst=20，宽松值）：业务限流由 app 层负责，
+        # 只拦截突发刷量；订阅 ICS /cal/ 与公开只读路径不限流
+        limit_req zone=perip burst=20 nodelay;
         proxy_pass http://app:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -113,6 +128,8 @@ server {
     # 查询串包含一次性个人票号；不在边缘日志保留这些 URL。
     location = /jump/go {
         access_log off;
+        # 边缘限流挡板（10r/s burst=20，宽松值）：业务限流由 app 层负责
+        limit_req zone=perip burst=20 nodelay;
         # 桥接页是一次性内联脚本；精确哈希避免继承静态站点 CSP 后脚本被拦截。
         add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-OH8gUQ7Q9SYCDbphqBc7Cs4B7CWHxFl43qPdr39Enns='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
         proxy_pass http://app:8000;
@@ -137,6 +154,8 @@ server {
 
     location = /get_schedule/export {
         access_log off;
+        # 边缘限流挡板（10r/s burst=20，宽松值）：业务限流由 app 层负责
+        limit_req zone=perip burst=20 nodelay;
         proxy_pass http://app:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -156,8 +175,35 @@ server {
         proxy_hide_header Content-Security-Policy;
     }
 
-    # 反向代理到格式化后端；令牌由服务端注入，外部请求无需携带
-    location ~ ^/(run(?:/jobs(?:/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])?)?|v1/workflows/run|service-status|notices(?:/active|/history)|health(/.*)?|jump(/.*)?|get_schedule/export)$ {
+    # 业务查询/异步任务入口：边缘限流挡板（10r/s burst=20，宽松值）。
+    # 分工：这里只按真实客户端 IP 拦截突发刷量/重放；业务级限流（30/min/IP）
+    # 由 app 层 RATE_LIMIT 负责，两级互不替代。
+    location ~ ^/(run(?:/jobs(?:/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])?)?|v1/workflows/run)$ {
+        limit_req zone=perip burst=20 nodelay;
+        proxy_pass http://app:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Authorization "Bearer ${API_TOKEN}";
+        proxy_http_version 1.1;
+        proxy_read_timeout 300s;
+        client_max_body_size 2m;
+        proxy_hide_header X-Content-Type-Options;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Referrer-Policy;
+        proxy_hide_header Permissions-Policy;
+        proxy_hide_header Cross-Origin-Opener-Policy;
+        proxy_hide_header Content-Security-Policy;
+        expires epoch;
+    }
+
+    # 公开只读路径（健康检查/服务状态/通知轮询/课表导出别名）：不做边缘限流，
+    # 健康探针与日历客户端会高频轮询；/jump/* 与 /get_schedule/* 的具体入口
+    # 已在上方精确 location 单独限流
+    location ~ ^/(service-status|notices(?:/active|/history)|health(/.*)?|jump(/.*)?|get_schedule/export)$ {
         proxy_pass http://app:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -155,7 +156,11 @@ def _weeks_text(run: Sequence[date], term: Term) -> str:
 def render(events: Sequence[CalendarEvent], calendar_name: str = "我的课表",
            refresh_seconds: int = 43200, now: Optional[datetime] = None,
            timezone_id: str = "Asia/Shanghai") -> str:
-    """生成完整 ICS 文本（CRLF + 折叠 + VTIMEZONE）。"""
+    """生成完整 ICS 文本（CRLF + 折叠 + VTIMEZONE）。
+
+    `now` 是 DTSTAMP/LAST-MODIFIED 的时间源：刷新流程在数据未变化时传入上一份
+    快照的 DTSTAMP，保证「数据不变 → ICS 文本不变 → ETag 不变 → 客户端 304」。
+    """
     stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime(ICAL_TIMESTAMP) + "Z"
     hours = max(1, int(refresh_seconds) // 3600)
     lines: List[str] = [
@@ -200,3 +205,24 @@ def render(events: Sequence[CalendarEvent], calendar_name: str = "我的课表",
         lines.extend(["TRANSP:OPAQUE", "STATUS:CONFIRMED", "END:VEVENT"])
     lines.append("END:VCALENDAR")
     return CRLF.join(_fold(line) for line in lines) + CRLF
+
+
+_DTSTAMP_RE = re.compile(r"^DTSTAMP:(\d{8}T\d{6}Z)\r?$", re.MULTILINE)
+
+
+def extract_dtstamp(blob: object) -> Optional[datetime]:
+    """从既有 ICS 快照解析 DTSTAMP（UTC）；快照缺失或解析失败返回 None。
+
+    用途：刷新时若课程数据未变，复用上一份 DTSTAMP 使 ICS 文本逐字节稳定，
+    ETag 随之稳定，日历客户端的 If-None-Match 才能命中 304。
+    """
+    if not blob:
+        return None
+    match = _DTSTAMP_RE.search(bytes(blob).decode("utf-8", "replace"))
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), ICAL_TIMESTAMP + "Z").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None

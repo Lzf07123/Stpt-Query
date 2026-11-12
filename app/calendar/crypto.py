@@ -75,6 +75,19 @@ class CalendarCrypto:
         """256-bit 随机订阅令牌（base64url，约 43 字符）。"""
         return secrets.token_urlsafe(32)
 
+    def timing_dummy(self) -> None:
+        """一次与 decrypt+compare 等量的本地 AEAD 运算。
+
+        用于「订阅不存在」的分支：先做等量密钥校验再返回 404，抹平与
+        「密码错误」分支的耗时差，消除按响应时间枚举学号的侧信道。
+        """
+        nonce = secrets.token_bytes(12)
+        blob = self._aead.encrypt(nonce, b"timing-equalizer", b"v1|timing")
+        try:
+            self._aead.decrypt(nonce, blob, b"v1|timing")
+        except InvalidTag:                                   # pragma: no cover - 自加密必可解
+            pass
+
     @staticmethod
     def token_hash(token: str) -> str:
         return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()

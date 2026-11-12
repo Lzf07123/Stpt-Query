@@ -140,7 +140,11 @@ def parse_config(payload: Mapping) -> CalendarConfig:
         listed = value if isinstance(value, list) else None
         if listed is None:
             raise CalendarConfigError("block_codes.%s 必须是节次数组" % code)
-        nums = tuple(int(x) for x in listed)
+        try:
+            nums = tuple(int(x) for x in listed)
+        except (TypeError, ValueError) as exc:
+            raise CalendarConfigError(
+                "block_codes.%s 必须是节次编号数组：%r" % (code, listed)) from exc
         if not nums or any(n not in periods for n in nums):
             raise CalendarConfigError("block_codes.%s 引用了未定义的节次" % code)
         block_codes[str(code)] = nums
@@ -167,7 +171,11 @@ def parse_config(payload: Mapping) -> CalendarConfig:
             item.get("teaching_start", item.get("monday")), "terms.%s.teaching_start" % semester)
         if teaching_start < monday:
             raise CalendarConfigError("terms.%s.teaching_start 不能早于第一周周一" % semester)
-        weeks = int(item.get("weeks", 20))
+        try:
+            weeks = int(item.get("weeks", 20))
+        except (TypeError, ValueError) as exc:
+            raise CalendarConfigError(
+                "terms.%s.weeks 必须是整数：%r" % (semester, item.get("weeks"))) from exc
         if not 1 <= weeks <= 30:
             raise CalendarConfigError("terms.%s.weeks 应在 1-30" % semester)
         exdates = tuple(_parse_date(x, "terms.%s.exdates" % semester)
@@ -175,7 +183,11 @@ def parse_config(payload: Mapping) -> CalendarConfig:
         terms[str(semester)] = Term(str(semester), monday, teaching_start, weeks, exdates)
 
     offsets_raw = payload.get("student_week_offset") or {}
-    offsets = {str(k): int(v) for k, v in offsets_raw.items()}
+    try:
+        offsets = {str(k): int(v) for k, v in offsets_raw.items()}
+    except (TypeError, ValueError) as exc:
+        raise CalendarConfigError(
+            "student_week_offset 必须是整数映射：%r" % offsets_raw) from exc
     for name, offset in offsets.items():
         if not 0 <= offset <= 10:
             raise CalendarConfigError("student_week_offset.%s 超出 0-10" % name)
@@ -183,6 +195,12 @@ def parse_config(payload: Mapping) -> CalendarConfig:
     on_conflict = str(payload.get("on_conflict", "trust_course")).strip()
     if on_conflict not in ("trust_course", "skip"):
         raise CalendarConfigError("on_conflict 只支持 trust_course / skip")
+
+    try:
+        version = int(payload.get("version", 1))
+    except (TypeError, ValueError) as exc:
+        raise CalendarConfigError(
+            "version 必须是整数：%r" % payload.get("version")) from exc
 
     return CalendarConfig(
         periods=periods,
@@ -192,7 +210,7 @@ def parse_config(payload: Mapping) -> CalendarConfig:
         terms=terms,
         student_week_offset=offsets,
         on_conflict=on_conflict,
-        version=int(payload.get("version", 1)),
+        version=version,
     )
 
 

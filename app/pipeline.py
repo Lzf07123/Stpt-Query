@@ -11,12 +11,12 @@ from __future__ import annotations
 import base64
 import asyncio
 import time
-import re
 from typing import Any, Awaitable, Callable, Dict, Optional, Protocol
 
 import httpx
 
-from .classifier import classify_error, classify_empty_result, summarize_response
+from .classifier import (classify_error, classify_empty_result, is_session_invalid,
+                         summarize_response)
 from .dependencies import DependencyHealth
 from .llm import LLMClient, LLMError
 from .prompts import GRADE_ANALYSIS_SYSTEM, grade_analysis_user
@@ -34,13 +34,6 @@ class ServiceError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
-
-
-_SESSION_INVALID_RE = re.compile(
-    r"session.{0,32}(invalid|expired|失效|过期)|会话无效|会话已过期|"
-    r"学校端会话|TokenError|重新登录",
-    re.IGNORECASE,
-)
 
 
 class ServiceClient(Protocol):
@@ -69,12 +62,19 @@ class HTTPServiceClient:
     async def aclose(self) -> None:
         await self.client.aclose()
 
-    async def get(self, path: str) -> Dict[str, Any]:
-        headers = {"Accept": "application/json"}
+    async def _request(self, method: str, path: str,
+                       payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """GET/POST 共用请求通道：附加鉴权头、统一连接失败与 HTTP 状态码错误。"""
+        headers = ({"Content-Type": "application/json"}
+                   if payload is not None else {"Accept": "application/json"})
         if self.api_token:
             headers["Authorization"] = "Bearer %s" % self.api_token
         try:
-            resp = await self.client.get(self.base_url + path, headers=headers)
+            if payload is not None:
+                resp = await self.client.post(
+                    self.base_url + path, json=payload, headers=headers)
+            else:
+                resp = await self.client.get(self.base_url + path, headers=headers)
         except httpx.HTTPError as exc:
             raise ServiceError(0, None, "上游服务连接失败：%s" % exc.__class__.__name__) from exc
         try:
@@ -85,21 +85,11 @@ class HTTPServiceClient:
             raise ServiceError(resp.status_code, data, "上游服务 HTTP %s" % resp.status_code)
         return data if isinstance(data, dict) else {"body": data}
 
+    async def get(self, path: str) -> Dict[str, Any]:
+        return await self._request("GET", path)
+
     async def post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        headers = {"Content-Type": "application/json"}
-        if self.api_token:
-            headers["Authorization"] = "Bearer %s" % self.api_token
-        try:
-            resp = await self.client.post(self.base_url + path, json=payload, headers=headers)
-        except httpx.HTTPError as exc:
-            raise ServiceError(0, None, "上游服务连接失败：%s" % exc.__class__.__name__) from exc
-        try:
-            data = resp.json()
-        except ValueError:
-            data = {"raw": resp.text}
-        if resp.status_code >= 400:
-            raise ServiceError(resp.status_code, data, "上游服务 HTTP %s" % resp.status_code)
-        return data if isinstance(data, dict) else {"body": data}
+        return await self._request("POST", path, payload)
 
 
 def _analysis_usage(usage: object) -> Optional[int]:
@@ -121,7 +111,7 @@ class Pipeline:
         self,
         service: Optional[ServiceClient] = None,
         llm: Optional[LLMClient] = None,
-        base_url: str = "https://school.lizf.cn",
+        base_url: str = "",
         service_token: str = "",
         request_timeout: float = 100.0,
         llm_semaphore: Optional[asyncio.Semaphore] = None,
@@ -130,7 +120,17 @@ class Pipeline:
         dependency_health: Optional[DependencyHealth] = None,
         metrics: Optional[RuntimeMetrics] = None,
     ) -> None:
-        self.service = service or HTTPServiceClient(base_url, service_token)
+        if service is not None:
+            self.service = service
+        else:
+            # 不再静默回退到历史硬编码域名：HTTP 直连必须显式配置上游地址；
+            # 单体 ASGI 模式由调用方（app.main）构造带 ASGITransport 的客户端传入，
+            # 走的是 service 分支，不受影响。
+            if not str(base_url or "").strip():
+                raise RuntimeError(
+                    "未配置查询代理地址：HTTP 直连模式必须显式传入 base_url"
+                    "（对应 SERVICE_BASE_URL）；单体模式请传入内嵌 ASGI 客户端")
+            self.service = HTTPServiceClient(base_url, service_token)
         self.llm = llm or LLMClient()
         self.request_timeout = request_timeout
         self.llm_semaphore = llm_semaphore or asyncio.Semaphore(8)
@@ -359,7 +359,7 @@ class Pipeline:
             body.get("error") or body.get("message") or "",
             str(exc),
         ) if part)
-        return bool(_SESSION_INVALID_RE.search(message))
+        return is_session_invalid(message)
 
     async def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return await self.service.post(path, payload)
@@ -388,6 +388,10 @@ class Pipeline:
     async def _to_pdf_base64(self, markdown: str) -> str:
         # 延迟导入：reportlab 只在真正需要 PDF 时加载
         from .pdf import markdown_to_pdf
+        # 取舍说明（保持现状）：外层请求总预算超时（asyncio.wait_for）取消本协程时，
+        # run_in_executor 中的 PDF 线程无法中断、会把当前 PDF 跑完；此时 pdf 信号量
+        # 已随 async with 退出先行释放，属短暂超卖。PDF 为秒级 CPU 任务且有独立
+        # PDF_CONCURRENCY 槽位，可接受；不为秒级任务引入跨进程取消/杀线程的复杂度。
         raw = await _run_in_thread(lambda: markdown_to_pdf(markdown))
         return base64.b64encode(raw).decode("ascii")
 

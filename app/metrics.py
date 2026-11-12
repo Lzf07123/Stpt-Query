@@ -71,6 +71,11 @@ def _process_cgroup_id(process_path: Path) -> Optional[str]:
         if len(fields) != 3:
             continue
         candidate = fields[2].rstrip("/").rpartition("/")[2]
+        # systemd cgroup 驱动把容器挂在 docker-<id>.scope 下，剥掉前缀/后缀再匹配
+        if candidate.endswith(".scope"):
+            candidate = candidate[:-len(".scope")]
+        if candidate.startswith("docker-"):
+            candidate = candidate[len("docker-"):]
         if _CONTAINER_ID_RE.fullmatch(candidate):
             return candidate
     return None
@@ -87,23 +92,90 @@ def _process_rss_bytes(process_path: Path) -> Optional[int]:
 
 
 def _host_cgroup_values(cgroup_id: str) -> tuple[Optional[int], Optional[int]]:
-    root = _HOST_CGROUP_ROOT / "docker" / cgroup_id
-    current = _read_int(root / "memory.current")
-    limit = _read_int(root / "memory.max")
-    if limit is not None and limit >= (1 << 60):
-        limit = None
-    return current, limit
+    """按宿主 cgroup 布局探测编排内其它容器（frontend/redis）的内存。
+
+    兼容三种常见布局，按序探测到第一个可读的 memory.current：
+    - cgroup v2 + cgroupfs 驱动：/docker/<id>/memory.current
+    - cgroup v2 + systemd 驱动：/system.slice/docker-<id>.scope/memory.current
+    - cgroup v1：/memory/docker/<id>/memory.usage_in_bytes（含 systemd scope 变体）
+    """
+    candidates = (
+        (_HOST_CGROUP_ROOT / "docker" / cgroup_id,
+         "memory.current", "memory.max"),
+        (_HOST_CGROUP_ROOT / "system.slice" / f"docker-{cgroup_id}.scope",
+         "memory.current", "memory.max"),
+        (_HOST_CGROUP_ROOT / "memory" / "docker" / cgroup_id,
+         "memory.usage_in_bytes", "memory.limit_in_bytes"),
+        (_HOST_CGROUP_ROOT / "memory" / f"docker-{cgroup_id}.scope",
+         "memory.usage_in_bytes", "memory.limit_in_bytes"),
+    )
+    for root, current_name, limit_name in candidates:
+        current = _read_int(root / current_name)
+        if current is None:
+            continue
+        limit = _read_int(root / limit_name)
+        if limit is not None and limit >= (1 << 60):
+            limit = None
+        return current, limit
+    return None, None
 
 
 # 单体拓扑的期望分桶：默认 app + frontend；仅在配置外部 Redis 时追加 redis
 DEFAULT_ORCHESTRATION_SERVICES = ("app", "frontend")
+
+# 编排进程扫描限频：/proc 全 PID 扫描（每个 PID 读 cmdline + cgroup）代价高，
+# 分类结果缓存 30 秒；命中进程的 RSS/cgroup 内存值每次采样仍实时读取。
+ORCHESTRATION_SCAN_INTERVAL_SECONDS = 30.0
+_orchestration_scan_lock = Lock()
+_orchestration_scan_at: float = 0.0
+_orchestration_scan_valid = False
+_orchestration_scan_cache: dict[str, list[dict]] = {}
+
+
+def reset_orchestration_scan_cache() -> None:
+    """测试钩子：清空编排进程扫描缓存并重置限频时间戳。"""
+    global _orchestration_scan_at, _orchestration_scan_valid, _orchestration_scan_cache
+    with _orchestration_scan_lock:
+        _orchestration_scan_at = 0.0
+        _orchestration_scan_valid = False
+        _orchestration_scan_cache = {}
+
+
+def _scan_orchestration_processes() -> dict[str, list[dict]]:
+    """按服务分桶扫描编排进程（限频）；返回 {服务: [{pid, cgroup_id}]}。"""
+    global _orchestration_scan_at, _orchestration_scan_valid, _orchestration_scan_cache
+    with _orchestration_scan_lock:
+        now = time.monotonic()
+        if _orchestration_scan_valid and (
+                now - _orchestration_scan_at < ORCHESTRATION_SCAN_INTERVAL_SECONDS):
+            return {name: list(items) for name, items in _orchestration_scan_cache.items()}
+        proc_root = _proc_root()
+        try:
+            process_ids = [item.name for item in proc_root.iterdir() if item.name.isdigit()]
+        except OSError:
+            process_ids = []
+        buckets: dict[str, list[dict]] = {}
+        for pid in process_ids:
+            service = _classify_orchestration_process(_process_cmdline(proc_root / pid))
+            if service is None:
+                continue
+            buckets.setdefault(service, []).append({
+                "pid": int(pid),
+                "cgroup_id": _process_cgroup_id(proc_root / pid),
+            })
+        _orchestration_scan_at = now
+        _orchestration_scan_cache = buckets
+        _orchestration_scan_valid = True
+        return {name: list(items) for name, items in buckets.items()}
 
 
 def _classify_orchestration_process(command: str) -> Optional[str]:
     normalized = " ".join(command.split())
     if "uvicorn" in normalized and "app.main:app" in normalized:
         return "app"
-    if normalized.startswith("nginx:") and "master process" in normalized:
+    if normalized.startswith("nginx:"):
+        # master 与 worker（cache manager/loader）同属 frontend 容器；
+        # cgroup 不可读时按 RSS 估算需要把 worker 一并计入，否则严重低估
         return "frontend"
     if normalized.startswith("redis-server"):
         return "redis"
@@ -113,22 +185,14 @@ def _classify_orchestration_process(command: str) -> Optional[str]:
 def _orchestration_memory(expected: Optional[Iterable[str]] = None) -> dict:
     """按期望分桶聚合编排内存；未启用 Redis 时不再把它计入"期望服务"。"""
     services_expected = tuple(expected or DEFAULT_ORCHESTRATION_SERVICES)
+    discovered = _scan_orchestration_processes()
     service_processes: dict[str, list[dict]] = {name: [] for name in services_expected}
+    for name in services_expected:
+        service_processes[name] = [dict(item) for item in discovered.get(name, [])]
     proc_root = _proc_root()
-    try:
-        process_ids = [item.name for item in proc_root.iterdir() if item.name.isdigit()]
-    except OSError:
-        process_ids = []
-
-    for pid in process_ids:
-        service = _classify_orchestration_process(_process_cmdline(proc_root / pid))
-        if service is None or service not in service_processes:
-            continue
-        cgroup_id = _process_cgroup_id(proc_root / pid)
-        rss_bytes = _process_rss_bytes(proc_root / pid)
-        service_processes[service].append({
-            "pid": int(pid), "cgroup_id": cgroup_id, "rss_bytes": rss_bytes,
-        })
+    for processes in service_processes.values():
+        for item in processes:
+            item["rss_bytes"] = _process_rss_bytes(proc_root / str(item["pid"]))
 
     services: dict[str, dict] = {}
     total_bytes = 0
@@ -168,12 +232,12 @@ def _orchestration_memory(expected: Optional[Iterable[str]] = None) -> dict:
             "source": source,
         }
 
-    discovered = sum(1 for item in services.values() if item["memory_bytes"] is not None)
+    discovered_count = sum(1 for item in services.values() if item["memory_bytes"] is not None)
     return {
-        "memory_bytes": total_bytes if discovered else None,
+        "memory_bytes": total_bytes if discovered_count else None,
         "limit_bytes": total_limit,
-        "source": "cgroup" if cgroup_count else ("process_rss" if discovered else "unavailable"),
-        "discovered_services": discovered,
+        "source": "cgroup" if cgroup_count else ("process_rss" if discovered_count else "unavailable"),
+        "discovered_services": discovered_count,
         "expected_services": len(services),
         "services": services,
     }
@@ -268,10 +332,15 @@ def _host_uptime_seconds() -> Optional[int]:
         return None
 
 
-def _host_network_totals() -> dict[str, int]:
+def _network_totals(root: Optional[Path] = None) -> dict[str, int]:
+    """聚合 /proc/net/dev 收发字节数（排除回环口）。
+
+    `root` 缺省读容器自身视图（/proc）；传 `_proc_root()` 时读宿主机视图。
+    """
     totals = {"received_bytes": 0, "sent_bytes": 0}
     try:
-        for line in (_proc_root() / "net" / "dev").read_text(encoding="utf-8").splitlines()[2:]:
+        for line in ((root or Path("/proc")) / "net" / "dev").read_text(
+                encoding="utf-8").splitlines()[2:]:
             if ":" not in line:
                 continue
             name, columns_text = line.split(":", 1)
@@ -299,23 +368,6 @@ def _cpu_stats() -> tuple[int, int]:
     except (OSError, ValueError):
         pass
     return total // 1000, 0
-
-
-def _network_totals() -> dict[str, int]:
-    totals = {"received_bytes": 0, "sent_bytes": 0}
-    try:
-        for line in Path("/proc/net/dev").read_text(encoding="utf-8").splitlines()[2:]:
-            if ":" not in line:
-                continue
-            name, columns_text = line.split(":", 1)
-            if name.strip() == "lo":
-                continue
-            columns = columns_text.split()
-            totals["received_bytes"] += int(columns[0])
-            totals["sent_bytes"] += int(columns[8])
-    except (OSError, IndexError, ValueError):
-        pass
-    return totals
 
 
 def _rss_bytes() -> int:
@@ -406,7 +458,7 @@ class ResourceMonitor:
         if host_disk_activity is not None:
             self._last_disk_activity = (now, host_disk_activity)
 
-        host_network = _host_network_totals()
+        host_network = _network_totals(_proc_root())
         host_network_rates = {"received_bytes_per_second": None, "sent_bytes_per_second": None}
         if self._last_host_network is not None:
             previous_at, previous = self._last_host_network

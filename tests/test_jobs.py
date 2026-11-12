@@ -111,6 +111,10 @@ class _FakeRedis:
     async def zcard(self, key):
         return len(self.zsets.get(key, {}))
 
+    async def zrangebyscore(self, key, lo, hi):
+        members = sorted(self.zsets.get(key, {}).items(), key=lambda kv: kv[1])
+        return [member for member, score in members if lo <= score <= hi]
+
     async def zrank(self, key, member):
         members = sorted(self.zsets.get(key, {}), key=self.zsets[key].get)
         try:
@@ -218,3 +222,37 @@ async def test_enqueue_respects_pending_limit():
 
     with pytest.raises(QueueFullError):
         await store.enqueue(schedule, "session-2", "127.0.0.1", 1, 900)
+
+
+async def test_reaper_clears_zombie_pending_members():
+    """僵尸 pending 清理：入队早于 TTL 且状态键已消失的成员被移出索引，
+    合法的 queued/running 任务不受影响，pending_count 不再假满。"""
+    import time as time_module
+
+    redis = _FakeRedis()
+    store = JobStore(redis)
+    fresh_id, _, _ = await store.enqueue(
+        SessionWorkflowRequest(username="2023000001", password="secret", option="成绩"),
+        "session-1", "127.0.0.1", 10, 900)
+    zombie_id, _, _ = await store.enqueue(
+        SessionWorkflowRequest(username="2023000002", password="secret", option="成绩"),
+        "session-2", "127.0.0.1", 10, 900)
+    running_id, _, _ = await store.enqueue(
+        SessionWorkflowRequest(username="2023000003", password="secret", option="成绩"),
+        "session-3", "127.0.0.1", 10, 900)
+
+    stale_time = time_module.time() - 2000  # 早于 TTL(900s) 的入队时间
+    redis.zsets[store.pending_key][zombie_id] = stale_time
+    redis.data.pop(f"{store.status_prefix}:{zombie_id}", None)  # 状态键已过期
+    redis.zsets[store.pending_key][running_id] = stale_time
+    redis.data[f"{store.status_prefix}:{running_id}"] = json.dumps(
+        {"state": "running"}, separators=(",", ":"))
+
+    reaped = await store.reap_stale(200, 900)
+
+    members = redis.zsets[store.pending_key]
+    assert zombie_id not in members, "状态键已消失的滞留成员应被清理"
+    assert fresh_id in members
+    assert running_id in members, "仍在执行的合法任务不得误清"
+    assert reaped == 1
+    assert await store.pending_count() == 2

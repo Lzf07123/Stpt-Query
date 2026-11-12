@@ -84,6 +84,28 @@ _RULES: Tuple[Tuple[str, str, List[str], List[str]], ...] = (
     ),
 )
 
+# 会话失效/过期信号：classifier 规则 6 与编排层重登判定共用。
+# 这是 pipeline 旧正则与 classifier 规则 6 的超集（含 失效/过期/学校端会话/SessionInvalid）；
+# is_session_invalid 是唯一事实来源，pipeline._can_relogin_after_session_error 复用它。
+# 注意：规则 6 的匹配串保持更窄的历史口径，classify_error 行为不变。
+_SESSION_INVALID_PATTERN = (
+    r"session.{0,32}(invalid|expired|失效|过期)|会话无效|会话已过期|"
+    r"学校端会话|SessionInvalid|TokenError|重新登录"
+)
+_SESSION_INVALID_RE = re.compile(_SESSION_INVALID_PATTERN, re.IGNORECASE)
+
+
+def is_session_invalid(text: str) -> bool:
+    """响应文本是否表示会话失效/过期（供编排层与分类器统一判定）。"""
+    return bool(_SESSION_INVALID_RE.search(str(text or "")))
+
+
+# 启动时一次性编译规则正则，classify_error 热路径不再逐请求 re.search 编译
+_COMPILED_RULES: Tuple[Tuple[str, "re.Pattern[str]", List[str], List[str]], ...] = tuple(
+    (cat, re.compile(pattern, re.IGNORECASE), ua, aa)
+    for cat, pattern, ua, aa in _RULES
+)
+
 _SENSITIVE_NAME = (
     r"(?:password|passwd|pwd|authorization|api[_-]?key|access[_-]?token|"
     r"refresh[_-]?token|secret|session|token|jump[_-]?code)"
@@ -173,8 +195,8 @@ def classify_error(
     ) if x)
 
     category, user_actions, admin_actions = "", [], []
-    for cat, pattern, ua, aa in _RULES:
-        if re.search(pattern, text, re.IGNORECASE):
+    for cat, pattern, ua, aa in _COMPILED_RULES:
+        if pattern.search(text):
             category, user_actions, admin_actions = cat, list(ua), list(aa)
             break
     if not category:
@@ -214,7 +236,6 @@ def classify_empty_result(kind: str, body: Any) -> bool:
     """success:true 且 count:0 → 查询成功但无数据，不是故障。"""
     data = body if isinstance(body, dict) else {}
     if not data and isinstance(body, str):
-        import json
         try:
             parsed = json.loads(body)
             data = parsed if isinstance(parsed, dict) else {}

@@ -12,7 +12,7 @@ from urllib.parse import quote
 import requests
 
 from app.jwxt_core import (
-    J, BASE, UA, TIMEOUT, VERIFY_TLS, LOG, UPSTREAM_SEM, JUMP_PAGES,
+    J, BASE, UA, TIMEOUT, VERIFY_TLS, LOG, JUMP_PAGES,
     LOGIN_REUSE, WARM_WAIT, VERSION, MAX_SESSIONS, JUMP_CODE_TTL, SessionInvalidError,
     TokenError, UpstreamBusyError, LockTimeoutError, LATENCY_BUCKETS_MS, to_webvpn,
     WarmPendingError,
@@ -97,6 +97,7 @@ class SessionStore:
                 "cookies": cookies,
                 "portal": portal or {},
                 "at": now,
+                "lat": now,   # 最后活跃时间（touch 时更新），满载淘汰依据
                 "exp": now + self.ttl,
                 "pwd_hash": pwd_hash,
             }
@@ -105,7 +106,9 @@ class SessionStore:
             self.sessions[sid] = rec
             self.by_user.setdefault(username, set()).add(sid)
             if len(self.sessions) > self.max_sessions:
-                oldest = min(self.sessions, key=lambda k: self.sessions[k]["at"])
+                # 按最后活跃时间淘汰（LRU）：最活跃的老会话不再因创建早被先踢
+                oldest = min(self.sessions, key=lambda k: self.sessions[k].get(
+                    "lat", self.sessions[k].get("at", 0)))
                 self._drop(oldest)
         return sid
 
@@ -141,16 +144,19 @@ class SessionStore:
             return True
 
     def touch(self, sid):
-        """滑动续期：成功使用后把过期时间顺延为 now+ttl。
+        """滑动续期：成功使用后把过期时间顺延为 now+ttl，并刷新最后活跃时间。
 
         与学校会话生命周期对齐：活跃会话不会被服务端 TTL 提前掐断，
         闲置会话按 SESSION_TTL 自然过期，过期后由调用方重新 /login。
+        最后活跃时间同时作为满载淘汰依据（而非创建时间）。
         """
         with self.lock:
             s = self.sessions.get(sid)
             if s is None:
                 return False
-            s["exp"] = time.time() + self.ttl
+            now = time.time()
+            s["exp"] = now + self.ttl
+            s["lat"] = now
             return True
 
     def get(self, sid):
@@ -320,15 +326,22 @@ class RateLimiter:
 class TTLCache:
     """线程安全的进程内短 TTL 缓存（不落盘、重启即失效）。
 
-    用于缓存成绩查询结果：成绩数据在一天内基本不变，短 TTL 可显著减少
+    用于缓存成绩/课表查询结果：数据在一天内基本不变，短 TTL 可显著减少
     对学校上游的重复查询压力。ttl<=0 表示关闭缓存。
+
+    内存模式：JSON 类缓存 set() 不传 payload（只存 value dict），
+    get_payload() 命中时按需序列化——同一份结果不再同时保存 dict 与 bytes
+    两份，避免大响应（ grades/schedule 默认各 max_items=1000）的内存放大；
+    PDF 等二进制缓存仍可显式传 payload（value 只是元数据、字节流即主体）。
+    满载时先惰性清理过期项（OrderedDict 原地删除，不再整表重建），
+    仍超限按插入序淘汰最旧一条。
     """
 
     def __init__(self, ttl=0, max_items=2000):
         self.ttl = max(0, int(ttl))
         self.max_items = max(1, int(max_items))
         self.lock = threading.Lock()
-        self.data = {}
+        self.data = OrderedDict()
 
     def get(self, key):
         if not self.ttl or not key:
@@ -339,12 +352,12 @@ class TTLCache:
             if hit is None:
                 return None
             if hit[0] <= now:
-                self.data.pop(key, None)
+                del self.data[key]
                 return None
             return hit[1]
 
     def get_payload(self, key):
-        """取缓存项对应的预序列化响应体（可能为 None，表示未预序列化）。"""
+        """取缓存项对应的序列化响应体；未显式存储 payload 时按需从 value 序列化。"""
         if not self.ttl or not key:
             return None
         now = time.time()
@@ -352,7 +365,13 @@ class TTLCache:
             hit = self.data.get(key)
             if hit is None or hit[0] <= now:
                 return None
-            return hit[2]
+            payload = hit[2]
+            if payload is None:
+                try:
+                    payload = json.dumps(hit[1], ensure_ascii=False).encode("utf-8")
+                except (TypeError, ValueError):
+                    return None
+            return payload
 
     def delete(self, key):
         """主动删除缓存项（如会话失效时废弃对应跳转缓存）。"""
@@ -368,10 +387,13 @@ class TTLCache:
         with self.lock:
             if len(self.data) >= self.max_items:
                 now = time.time()
-                # 先清过期项；仍超限则按插入序淘汰最旧的一条
-                self.data = {k: v for k, v in self.data.items() if v[0] > now}
+                # 先惰性清理过期项（原地删除，避免旧实现的整表 dict 重建）；
+                # 仍超限则按插入序淘汰最旧的一条
+                dead = [k for k, v in self.data.items() if v[0] <= now]
+                for k in dead:
+                    self.data.pop(k, None)
                 if len(self.data) >= self.max_items:
-                    self.data.pop(next(iter(self.data)), None)
+                    self.data.popitem(last=False)
             self.data[key] = (time.time() + ttl, value, payload)
 
     def sweep(self, now=None):
@@ -477,8 +499,8 @@ def _ensure_warmed(sessions, sid, c):
     c2 = sessions.get(sid)
     if c2 is not None and (c2.get("portal") or {}).get("stu"):
         return
-    LOG.info("会话预热未在 %ss 内完成，按需同步补齐 session=%s***",
-             WARM_WAIT, str(sid)[:6])
+    LOG.info("会话预热未在 %ss 内完成，按需同步补齐 session=***",
+             WARM_WAIT)
     j = None
     try:
         j = _session_j(sessions, sid, require_stu=False)
@@ -566,7 +588,7 @@ def _warm_background(sessions, sid, j, evt, app_list=None, trace=None):
         j.student()
         sessions.refresh(sid, dump_session_cookies(j), dump_portal(j))
     except Exception as e:
-        LOG.warning("后台预热学生门户失败 session=%s*** error=%s", str(sid)[:6], e)
+        LOG.warning("后台预热学生门户失败 session=*** error=%s", e)
     finally:
         evt.set()
         j.close()
@@ -765,12 +787,13 @@ def health_payload(state, server, now=None):
     backend = getattr(server, "_redis_backend", None)
     if backend is not None:
         if cached_redis is None:
-            redis_ok = backend.probe()
-            cached_redis = backend.status_info(now)
-            with state.lock:
-                state.redis = cached_redis
-        redis_info = dict(cached_redis)
-        redis_info.pop("at", None)
+            # 冷缓存：健康路径不做同步探测（backend.probe() 可能阻塞一个
+            # socket_timeout），先返回“未知”占位；首测交由后台探测线程
+            # （_health_probe_loop）填充 state.redis，下一轮起读缓存。
+            redis_info = {"ok": None, "mode": "redis", "starting": True}
+        else:
+            redis_info = dict(cached_redis)
+            redis_info.pop("at", None)
     else:
         redis_info = {"ok": None, "mode": "memory"}
     if net.get("ok") is True:

@@ -118,8 +118,11 @@ class JSONLFileWriter:
         prefix = os.path.basename(self.path) + "."
         parent = os.path.dirname(self.path)
         try:
+            # 只认纯数字后缀的轮转备份（queries.jsonl.1）；杂散文件如
+            # queries.jsonl.tmp 不参与排序，避免 int() 崩溃。
             names = sorted(
-                (name for name in os.listdir(parent) if name.startswith(prefix)),
+                (name for name in os.listdir(parent)
+                 if name.startswith(prefix) and name[len(prefix):].isdigit()),
                 key=lambda name: int(name[len(prefix):]),
                 reverse=True,
             )
@@ -132,7 +135,6 @@ class JSONLFileWriter:
 
     def iter_recent_lines(self) -> Iterator[str]:
         """按最新到最旧流式遍历 JSONL 行，避免一次性载入全部备份。"""
-        chunk_size = 64 * 1024
         yield from self._iter_file_lines(self.archive_files())
 
     def collection_files(self) -> list[str]:

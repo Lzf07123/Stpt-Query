@@ -53,9 +53,21 @@ class FakeSchool(SchoolPort):
 
     async def schedule_rows(self, username, password, semester):   # type: ignore[override]
         self.calls += 1
+        await asyncio.sleep(0)          # 让出事件循环：并发用例需要真实的交错点
         if self.error is not None:
             raise self.error
         return list(self.rows)
+
+
+class MutatingSchool(FakeSchool):
+    """每次调用返回不同课程名：保证每次刷新的 ICS 内容都真实变化。"""
+
+    async def schedule_rows(self, username, password, semester):   # type: ignore[override]
+        self.calls += 1
+        await asyncio.sleep(0)
+        if self.error is not None:
+            raise self.error
+        return [dict(ROWS[0], courseName="课程%d" % self.calls)]
 
 
 ROWS = [
@@ -515,3 +527,281 @@ def test_build_service_prefers_database_calibration(tmp_path):
     assert second.admin_config()["source"] == "database"
     assert second.config.periods[11] == ("20:50", "21:40")
     assert second.config.inferred_periods() == ()
+
+
+# ---------------- 回归：DTSTAMP 稳定化与跨刷新 304 ----------------
+def _build_feed_client(service):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.calendar.routes import build_router
+
+    app = FastAPI()
+    app.include_router(build_router(service, lambda: None, lambda: None))
+    return TestClient(app)
+
+
+def test_feed_etag_stable_across_unchanged_refresh(store, crypto, config):
+    """数据不变 → ICS 文本/ETag 不变：If-None-Match 命中 304，revision 不自增。"""
+    import re
+
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    created = _run(service.create("2023000001", "pw", "2026-2027-1"))
+    token = created["feed_url"].rsplit("/", 1)[-1][:-4]
+    client = _build_feed_client(service)
+
+    first = client.get("/cal/%s.ics" % token)
+    assert first.status_code == 200
+    etag = first.headers["ETag"]
+    assert etag.startswith('W/"') and etag.endswith('"')
+    assert first.headers["Last-Modified"].endswith(" GMT")   # RFC 9110 HTTP-date
+    stamp_before = re.search(r"DTSTAMP:(\d{8}T\d{6}Z)", first.text).group(1)
+
+    owner = crypto.owner_hash("2023000001")
+    record = store.get_by_owner_semester(owner, "2026-2027-1")
+    assert record["revision"] == 1
+
+    # 后台刷新（无冷却限制）：数据未变 → changed=False、ETag/DTSTAMP 稳定
+    assert _run(service.refresh_record(store.get_by_id(record["id"]))) == "ok"
+    unchanged = store.get_by_id(record["id"])
+    assert unchanged["revision"] == 1
+    assert unchanged["ics_etag"] == etag.split('"')[1]
+    stamp_after = re.search(r"DTSTAMP:(\d{8}T\d{6}Z)", unchanged["ics_blob"].decode("utf-8"))
+    assert stamp_after.group(1) == stamp_before
+
+    second = client.get("/cal/%s.ics" % token, headers={"If-None-Match": etag})
+    assert second.status_code == 304
+
+    # 数据真实变化 → revision 前进、产出新 ETag，旧 ETag 不再命中 304
+    school.rows = [dict(ROWS[0], courseName="新课程名")]
+    assert _run(service.refresh_record(store.get_by_id(record["id"]))) == "ok"
+    changed = store.get_by_id(record["id"])
+    assert changed["revision"] == 2
+    third = client.get("/cal/%s.ics" % token, headers={"If-None-Match": etag})
+    assert third.status_code == 200
+    assert third.headers["ETag"] != etag
+    # 新内容以当前时间重打 DTSTAMP，变化前后文本不同
+    assert re.search(r"DTSTAMP:(\d{8}T\d{6}Z)", third.text).group(1) >= stamp_before
+
+
+def test_http_date_outputs_rfc9110_format():
+    from app.calendar.routes import _http_date
+
+    assert _http_date("2026-11-13T11:22:33+08:00") == "Fri, 13 Nov 2026 03:22:33 GMT"
+    naive = _http_date("2026-11-13T11:22:33")            # naive 按本地时区解释
+    assert naive.endswith(" GMT") and naive.endswith(":22:33 GMT")
+    assert _http_date("") is None
+    assert _http_date(None) is None
+    assert _http_date("not-a-date") is None
+
+
+# ---------------- 回归：后台列表 state 过滤进 SQL（分页一致性） ----------------
+def test_admin_list_state_filter_paginates_consistently(store, crypto, config):
+    service = _service(store, crypto, config, FakeSchool(ROWS))
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    _run(service.create("2023000002", "pw", "2026-2027-1"))
+    _run(service.create("2023000003", "pw", "2026-2027-1"))
+    store._exec("UPDATE calendars SET last_fetch_status = 'upstream_error' WHERE owner_hash = ?",
+                (crypto.owner_hash("2023000002"),))
+    store._exec("UPDATE calendars SET last_fetch_status = 'credential_error' WHERE owner_hash = ?",
+                (crypto.owner_hash("2023000003"),))
+
+    degraded = service.admin_list(state="degraded")
+    assert degraded["total"] == 1
+    assert [item["state"] for item in degraded["items"]] == ["degraded"]
+
+    # 过滤后分页：页内条目与 total 一致，翻页不重复、不越界
+    page1 = service.admin_list(state="active", page=1, size=1)
+    page2 = service.admin_list(state="active", page=2, size=1)
+    assert page1["total"] == 1 and len(page1["items"]) == 1
+    assert page1["items"][0]["state"] == "active"
+    assert page2["total"] == 1 and page2["items"] == []
+
+    # 暂停中的订阅映射为 locked，同样可在 SQL 内过滤
+    record = store.get_by_owner_semester(crypto.owner_hash("2023000001"), "2026-2027-1")
+    store.set_paused(record["id"], (datetime.now().astimezone()
+                                    + timedelta(hours=2)).isoformat(timespec="seconds"))
+    locked = service.admin_list(state="locked")
+    assert locked["total"] == 1 and locked["items"][0]["state"] == "locked"
+    assert service.admin_list()["total"] == 3
+
+
+def test_stats_counts_states_without_loading_blobs(store, crypto, config):
+    service = _service(store, crypto, config, FakeSchool(ROWS))
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    record = store.get_by_owner_semester(crypto.owner_hash("2023000001"), "2026-2027-1")
+    store._exec("UPDATE calendars SET ics_blob = NULL WHERE id = ?", (record["id"],))
+    stats = service.store.stats()
+    assert stats["total"] == 1
+    assert stats["states"] == {"active": 1}
+    assert stats["paused"] == 0
+
+
+# ---------------- 回归：过期幂等键与审计保留期清理 ----------------
+def test_cleanup_expired_removes_ops_and_stale_audit(store):
+    store.ops_put("k1", "owner1", None, "create", b"resp", ttl_seconds=-1)   # 已过期
+    store.ops_put("k2", "owner1", None, "create", b"resp", ttl_seconds=3600)
+    fresh = (datetime.now().astimezone() - timedelta(days=1)).isoformat(timespec="seconds")
+    stale = (datetime.now().astimezone() - timedelta(days=200)).isoformat(timespec="seconds")
+    for at in (stale, fresh):
+        store._exec(
+            "INSERT INTO calendar_audit (at, calendar_id, action, actor, result)"
+            " VALUES (?,?,?,?,?)", (at, None, "create", "user", "ok"))
+
+    removed = store.cleanup_expired()
+    assert removed["ops_removed"] == 1
+    assert removed["audit_removed"] == 1
+    assert store.ops_get("k1", "owner1") is None
+    assert store.ops_get("k2", "owner1")["idem_key"] == "k2"
+    remaining = store._conn.execute(
+        "SELECT COUNT(*) AS c FROM calendar_audit").fetchone()["c"]
+    assert remaining == 1          # 保留期内（<180 天）的审计行不动
+
+
+def test_scheduler_tick_cleans_expired_rows(store, crypto, config):
+    from app.calendar.scheduler import CalendarScheduler
+
+    service = _service(store, crypto, config, FakeSchool(ROWS))
+    store.ops_put("k1", "owner1", None, "create", b"resp", ttl_seconds=-1)
+    stale = (datetime.now().astimezone() - timedelta(days=200)).isoformat(timespec="seconds")
+    store._exec(
+        "INSERT INTO calendar_audit (at, calendar_id, action, actor, result)"
+        " VALUES (?,?,?,?,?)", (stale, None, "create", "user", "ok"))
+
+    _run(CalendarScheduler(service).tick())
+
+    assert store.ops_get("k1", "owner1") is None
+    remaining = store._conn.execute(
+        "SELECT COUNT(*) AS c FROM calendar_audit").fetchone()["c"]
+    assert remaining == 0
+
+
+# ---------------- 回归：订阅存在性预言机（rotate/qr） ----------------
+def test_rotate_and_qr_missing_record_do_dummy_verification(store, crypto, config, monkeypatch):
+    service = _service(store, crypto, config, FakeSchool(ROWS))
+    dummy_calls = {"n": 0}
+    original_dummy = crypto.timing_dummy
+
+    def counting_dummy():
+        dummy_calls["n"] += 1
+        return original_dummy()
+
+    monkeypatch.setattr(crypto, "timing_dummy", counting_dummy)
+
+    with pytest.raises(CalendarError) as missing:
+        _run(service.rotate("2023000001", "pw", "2026-2027-1"))
+    assert missing.value.status_code == 404
+    assert dummy_calls["n"] == 1          # 返回 404 前做了一次等量本地密钥校验
+
+    with pytest.raises(CalendarError) as missing_qr:
+        service.qr("2023000001", "pw", "2026-2027-1")
+    assert missing_qr.value.status_code == 404
+    assert dummy_calls["n"] == 2
+
+    # 存在订阅 + 密码错误：走真实本地解密比对（L2）→ 401，不经 dummy 分支
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    decrypt_calls = {"n": 0}
+    original_decrypt = crypto.decrypt
+
+    def counting_decrypt(blob, aad):
+        decrypt_calls["n"] += 1
+        return original_decrypt(blob, aad)
+
+    monkeypatch.setattr(crypto, "decrypt", counting_decrypt)
+    service.school.error = CalendarAuthError()      # L3 证明失败 → 401
+    with pytest.raises(CalendarAuthError):
+        _run(service.rotate("2023000001", "wrong", "2026-2027-1"))
+    assert decrypt_calls["n"] >= 1
+    assert dummy_calls["n"] == 2
+
+
+# ---------------- 回归：并发配额与并发刷新 ----------------
+def _two_term_config(config):
+    from app.calendar.config import load_config_dict
+    payload = config.to_dict()
+    payload["terms"]["2026-2027-2"] = {
+        "monday": "2027-02-22", "teaching_start": "2027-03-01", "weeks": 19}
+    return load_config_dict(payload)
+
+
+def test_concurrent_create_same_owner_respects_quota(store, crypto, config):
+    service = _service(store, crypto, _two_term_config(config), FakeSchool(ROWS),
+                       max_per_owner=1)
+
+    async def scenario():
+        return await asyncio.gather(
+            service.create("2023000001", "pw", "2026-2027-1"),
+            service.create("2023000001", "pw", "2026-2027-2"),
+            return_exceptions=True,
+        )
+
+    results = _run(scenario())
+    created = [r for r in results if isinstance(r, dict) and r.get("created")]
+    conflicts = [r for r in results if isinstance(r, CalendarError)]
+    assert len(created) == 1
+    assert len(conflicts) == 1 and conflicts[0].status_code == 409
+    assert conflicts[0].code == "too_many_subscriptions"
+    assert len(store.list_by_owner(crypto.owner_hash("2023000001"))) == 1
+
+
+def test_concurrent_refresh_does_not_lose_revision(store, crypto, config):
+    school = MutatingSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    record = store.get_by_owner_semester(crypto.owner_hash("2023000001"), "2026-2027-1")
+    stale = dict(record)              # 两个并发调用都拿着锁外旧快照
+
+    async def scenario():
+        return await asyncio.gather(
+            service.refresh_record(stale),
+            service.refresh_record(stale),
+            return_exceptions=True,
+        )
+
+    results = _run(scenario())
+    assert results == ["ok", "ok"]
+    final = store.get_by_id(record["id"])
+    # 锁内按 id 重读 → 每次刷新各自增一次：1(创建) + 2(刷新) = 3，不丢计
+    assert final["revision"] == 3
+    assert school.calls == 3
+
+
+# ---------------- 回归：配置数值字段非法值返回 422 语义 ----------------
+def test_config_rejects_non_integer_numeric_fields(config):
+    base = config.to_dict()
+
+    bad_weeks = dict(base)
+    bad_weeks["terms"] = dict(base["terms"])
+    bad_weeks["terms"]["2026-2027-1"] = dict(base["terms"]["2026-2027-1"], weeks="abc")
+    with pytest.raises(CalendarConfigError) as exc:
+        load_config_dict(bad_weeks)
+    assert "weeks" in str(exc.value)
+
+    # 编码格式合法（N_M）但值不是数字：必须在 block_codes 路径上给出可读错误
+    bad_block_nums = dict(base)
+    bad_block_nums["block_codes"] = dict(base["block_codes"], **{"9_9": ["第1节"]})
+    with pytest.raises(CalendarConfigError) as exc_block_num:
+        load_config_dict(bad_block_nums)
+    assert "block_codes" in str(exc_block_num.value)
+
+    bad_offset = dict(base)
+    bad_offset["student_week_offset"] = {"2026-2027-1": "many"}
+    with pytest.raises(CalendarConfigError):
+        load_config_dict(bad_offset)
+
+    bad_version = dict(base)
+    bad_version["version"] = "v2"
+    with pytest.raises(CalendarConfigError):
+        load_config_dict(bad_version)
+
+
+def test_admin_terms_with_non_integer_weeks_returns_422(store, crypto, config):
+    service = _service(store, crypto, config, FakeSchool(ROWS))
+    terms = config.to_dict()["terms"]
+    terms["2026-2027-1"] = dict(terms["2026-2027-1"], weeks="abc")
+    with pytest.raises(CalendarError) as exc:
+        service.admin_update_terms(terms)
+    assert exc.value.status_code == 422
+    assert exc.value.code == "invalid_calendar_config"
+    # 校准失败不得污染运行时配置
+    assert service.config.term("2026-2027-1").weeks == 20
