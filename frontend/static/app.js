@@ -1003,6 +1003,16 @@
       statusTooltip.classList.add("hidden");
     }
 
+    // 返回顶部浮钮：页面没有可回滚距离时隐藏（短页会悬浮在表单字段上，
+    // 见评审 focus-not-obscured 项）；visibility:hidden 同步移出焦点与无障碍树
+    function syncBackToTopVisibility() {
+      var btn = document.querySelector(".back-to-top");
+      if (!btn) return;
+      var scrollable = document.documentElement.scrollHeight >
+        window.innerHeight + 8;
+      btn.classList.toggle("back-to-top-hidden", !scrollable);
+    }
+
     function positionStatusTooltip(event) {
       statusTooltip.classList.remove("hidden");
       const pad = 12;
@@ -2222,7 +2232,9 @@
       if (!seconds || !calendarEls.interval) return;
       calendarEls.interval.value = String(seconds);
       document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (item) {
-        item.classList.toggle("active", Number(item.dataset.interval) === Number(seconds));
+        var match = Number(item.dataset.interval) === Number(seconds);
+        item.classList.toggle("active", match);
+        item.setAttribute("aria-pressed", match ? "true" : "false");
       });
     }
 
@@ -2737,6 +2749,7 @@
       button.addEventListener("click", function () {
         document.querySelectorAll("#calendarIntervalGroup .seg-btn").forEach(function (item) {
           item.classList.toggle("active", item === button);
+          item.setAttribute("aria-pressed", item === button ? "true" : "false");
         });
         if (calendarEls.interval) calendarEls.interval.value = button.dataset.interval;
       });
@@ -2757,11 +2770,17 @@
     renderServiceStatus();
     renderHistorySelect();
     restoreUrlParams();
+    syncBackToTopVisibility();
     window.addEventListener("scroll", hideStatusTooltip, { passive: true });
     window.addEventListener("resize", function () {
       hideStatusTooltip();
       renderServiceStatus();
+      syncBackToTopVisibility();
     }, { passive: true });
+    // 内容高度变化（结果卡渲染/收起）也要重估“是否有可回滚距离”
+    if (window.ResizeObserver && document.body) {
+      new ResizeObserver(syncBackToTopVisibility).observe(document.body);
+    }
     requestAnimationFrame(function () {
       var shell = document.querySelector(".wrap");
       if (shell) shell.classList.add("page-enter");

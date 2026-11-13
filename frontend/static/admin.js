@@ -32,6 +32,9 @@
     detailValueModal: $("detailValueModal"), detailValueTitle: $("detailValueTitle"),
     detailValueText: $("detailValueText"), detailValueClose: $("detailValueClose"),
     detailValueDismiss: $("detailValueDismiss"),
+    confirmModal: $("confirmModal"), confirmTitle: $("confirmTitle"),
+    confirmMessage: $("confirmMessage"), confirmOk: $("confirmOk"),
+    confirmCancel: $("confirmCancel"),
     detailScopes: $("detailScopes"), relatedStatus: $("relatedStatus"), relatedBody: $("relatedBody"),
     detailJson: $("detailJson"),
     total: $("statTotal"), success: $("statSuccess"), failure: $("statFailure"),
@@ -636,7 +639,11 @@
       return;
     }
     if (action === "delete") {
-      if (!window.confirm("确定删除这份草稿？")) return;
+      if (!(await confirmDialog({
+        title: "删除草稿",
+        message: "确定删除这份草稿？删除后不可恢复。",
+        confirmText: "删除",
+      }))) return;
       await request("notices/" + id, { method: "DELETE" });
       if (state.noticeEditingId === id) resetNoticeForm();
       showNoticeMessage("草稿已删除");
@@ -997,7 +1004,11 @@
   }
 
   async function resetCalibration() {
-    if (!window.confirm("将删除后台校准快照，恢复仓库文件默认值。确认？")) return;
+    if (!(await confirmDialog({
+      title: "恢复仓库默认值",
+      message: "将删除后台校准快照并恢复仓库文件默认值，自定义的节次时间与学期基准会被覆盖。",
+      confirmText: "恢复默认",
+    }))) return;
     var payload = await request("calendar-config/reset", { method: "POST" });
     state.calibration = payload;
     renderCalibration(payload);
@@ -1094,7 +1105,12 @@
     else if (action === "pause") await request("calendars/" + id + "/pause?hours=24", { method: "POST" });
     else if (action === "resume") await request("calendars/" + id + "/resume", { method: "POST" });
     else if (action === "rotate") {
-      if (!window.confirm("轮换后原订阅地址立即失效，需在日历软件中重新添加。继续？")) return;
+      if (!(await confirmDialog({
+        title: "轮换订阅地址",
+        message: "轮换后原订阅地址立即失效，需在日历软件中重新添加。",
+        confirmText: "轮换",
+        danger: false,
+      }))) return;
       var rotated = await request("calendars/" + id + "/rotate", { method: "POST" });
       if (rotated && rotated.feed_url) {
         showCalendarMessage("已轮换订阅地址，请在用户端重新添加（后台不展示完整地址）");
@@ -1102,7 +1118,11 @@
         return;
       }
     } else if (action === "delete") {
-      if (!window.confirm("将彻底删除该订阅的加密凭据与课表快照，且不可恢复。确认删除？")) return;
+      if (!(await confirmDialog({
+        title: "删除订阅",
+        message: "将彻底删除该订阅的加密凭据与课表快照，地址立即失效且不可恢复。",
+        confirmText: "删除",
+      }))) return;
       await request("calendars/" + id, { method: "DELETE" });
     }
     await loadCalendars();
@@ -1336,6 +1356,74 @@
       detailValueLastFocused.focus();
     }
     detailValueLastFocused = null;
+  }
+
+  // ---- 确认对话框：替代原生 window.confirm（焦点圈定 + Escape + 焦点恢复）----
+  var confirmLastFocused = null;
+  var confirmSettled = false;
+  var confirmResolve = null;
+
+  function settleConfirm(result) {
+    if (confirmSettled) return;
+    confirmSettled = true;
+    elements.confirmModal.classList.add("hidden");
+    document.body.style.overflow = "";
+    if (confirmLastFocused && document.contains(confirmLastFocused)) {
+      confirmLastFocused.focus();
+    }
+    confirmLastFocused = null;
+    if (confirmResolve) { confirmResolve(result); confirmResolve = null; }
+  }
+
+  function confirmDialog(options) {
+    if (!elements.confirmModal) return Promise.resolve(window.confirm(options.message));
+    confirmLastFocused = document.activeElement;
+    confirmSettled = false;
+    elements.confirmTitle.textContent = options.title || "确认操作";
+    elements.confirmMessage.textContent = options.message || "";
+    elements.confirmOk.textContent = options.confirmText || "确认";
+    elements.confirmOk.className = options.danger === false ? "btn btn-primary" : "btn btn-danger";
+    elements.confirmModal.classList.remove("hidden", "modal-backdrop-out");
+    elements.confirmModal.classList.add("modal-backdrop-in");
+    document.body.style.overflow = "hidden";
+    return new Promise(function (resolve) {
+      confirmResolve = resolve;
+      elements.confirmCancel.focus();
+    });
+  }
+
+  if (elements.confirmModal) {
+    elements.confirmModal.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") { event.preventDefault(); settleConfirm(false); return; }
+      if (event.key !== "Tab") return;
+      var focusable = Array.prototype.slice.call(elements.confirmModal.querySelectorAll(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (node) { return node.getClientRects().length > 0; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    elements.confirmModal.addEventListener("click", function (event) {
+      if (event.target === elements.confirmModal) settleConfirm(false);
+    });
+    elements.confirmCancel.addEventListener("click", function () { settleConfirm(false); });
+    elements.confirmOk.addEventListener("click", function () { settleConfirm(true); });
+  }
+
+  // 返回顶部浮钮：页面没有可回滚距离时隐藏（visibility:hidden 同步移出焦点与无障碍树）
+  function syncBackToTopVisibility() {
+    var btn = elements.backToTop || document.querySelector(".back-to-top");
+    if (!btn) return;
+    var scrollable = document.documentElement.scrollHeight >
+      window.innerHeight + 8;
+    btn.classList.toggle("back-to-top-hidden", !scrollable);
   }
 
   if (elements.detailValueModal) {
@@ -1659,6 +1747,12 @@
           if (main) main.focus({ preventScroll: true });
         });
       });
+      // 页面内容不足一屏（如登录态）时隐藏浮钮，避免遮挡表单字段
+      syncBackToTopVisibility();
+      window.addEventListener("resize", syncBackToTopVisibility, { passive: true });
+      if (window.ResizeObserver && document.body) {
+        new ResizeObserver(syncBackToTopVisibility).observe(document.body);
+      }
     }
     if (elements.adminHealth) {
       elements.adminHealth.addEventListener("click", function () {
@@ -1761,6 +1855,7 @@
         elements.noticeStatusFilter.value = button.dataset.status || "";
         document.querySelectorAll(".notice-status-filter .seg-btn").forEach(function (item) {
           item.classList.toggle("active", item === button);
+          item.setAttribute("aria-pressed", item === button ? "true" : "false");
         });
         state.noticeOffset = 0;
         loadNotices().catch(function (error) { showNoticeMessage(error.message, "error"); });

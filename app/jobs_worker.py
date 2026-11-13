@@ -19,6 +19,10 @@ async def _run_one_job(app, ctx: AppContext) -> None:
     while True:
         claimed = None
         try:
+            if app.state.job_store is None:
+                # 无 Redis 部署下异步任务禁用（/run/jobs 返回 503），worker 休眠等重启
+                await asyncio.sleep(5)
+                continue
             claimed = await app.state.job_store.claim(cfg.job_result_ttl_seconds)
         except Exception as exc:
             LOG.warning("异步任务领取失败：%s", exc.__class__.__name__)
@@ -81,6 +85,10 @@ async def _run_one_job(app, ctx: AppContext) -> None:
 async def _reap_stale_jobs(app, ctx: AppContext) -> None:
     while True:
         try:
+            if app.state.job_store is None:
+                # 无 Redis 部署下异步任务整体禁用；避免 None.claim 每秒空转报错
+                await asyncio.sleep(30)
+                continue
             stale_after = max(
                 ctx.cfg.job_stale_after_seconds, ctx.cfg.request_timeout + 30)
             await app.state.job_store.reap_stale(
@@ -91,7 +99,12 @@ async def _reap_stale_jobs(app, ctx: AppContext) -> None:
 
 
 def start_job_workers(app, ctx: AppContext) -> None:
-    """创建 worker 与 reaper 后台任务；调用顺序与拆分前 _startup 保持一致。"""
+    """创建 worker 与 reaper 后台任务；调用顺序与拆分前 _startup 保持一致。
+
+    无 Redis（job_store=None）时异步任务整体禁用，不创建空转任务。
+    """
+    if app.state.job_store is None:
+        return
     app.state.job_worker_tasks = [
         asyncio.create_task(_run_one_job(app, ctx),
                             name=f"query-job-worker-{index}")

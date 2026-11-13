@@ -822,6 +822,18 @@
   max-width: min(920px, 100%);
 }
 
+/* 确认对话框：窄面板 + 影响说明，替代原生 window.confirm */
+.admin-confirm-panel {
+  max-width: min(460px, calc(100% - 32px));
+}
+
+.admin-confirm-message {
+  color: var(--eduquery-muted);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  margin: 8px 0 0;
+}
+
 .admin-modal-body {
   min-height: 0;
   overflow: auto;

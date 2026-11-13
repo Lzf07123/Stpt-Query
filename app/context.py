@@ -236,6 +236,7 @@ def _dependency_public_state(payload: dict) -> tuple[str, str, str]:
     """从 /health/public 载荷解析依赖态，返回 (query_proxy, school_service, query_proxy_redis)。
 
     供 admin_metrics 复用；映射口径与 public_health 记录 dependency_health 时保持一致。
+    查询代理内存模式（mode=memory）映射为 not-configured，不再被布尔投影误判为 error。
     """
     proxy = payload.get("proxy") if isinstance(payload, dict) else None
     school = payload.get("school") if isinstance(payload, dict) else None
@@ -244,11 +245,13 @@ def _dependency_public_state(payload: dict) -> tuple[str, str, str]:
     school_status = str((school or {}).get("status") or "unknown")
     redis_state = "unknown"
     if isinstance(redis_info, dict):
-        if redis_info.get("ok") is True:
+        if redis_info.get("mode") == "memory":
+            redis_state = "not-configured"
+        elif redis_info.get("ok") is True:
             redis_state = "ok"
         elif redis_info.get("degraded") is True:
             redis_state = "degraded"
-        elif redis_info.get("ok") is False:
+        elif redis_info.get("error") is True:
             redis_state = "error"
     query_proxy_state = {
         "up": "ok", "degraded": "degraded"}.get(proxy_status, "error")
@@ -572,6 +575,7 @@ class AppContext:
         started = time.perf_counter()
         proxy_status, school_status = "down", "unknown"
         proxy_redis_state = "unknown"
+        upstream_redis: dict | None = None
         proxy_latency: int | None = None
         school_latency: int | None = None
         try:
@@ -587,7 +591,10 @@ class AppContext:
                 proxy_status = "up" if upstream.get("status") == "ok" else "degraded"
                 upstream_redis = upstream.get("redis")
                 if isinstance(upstream_redis, dict):
-                    if upstream_redis.get("ok") is True:
+                    if upstream_redis.get("mode") == "memory":
+                        # 查询代理运行在内存模式：这是“未配置”而非故障
+                        proxy_redis_state = "not-configured"
+                    elif upstream_redis.get("ok") is True:
                         proxy_redis_state = "ok"
                     elif upstream_redis.get("degraded") is True:
                         proxy_redis_state = "degraded"
@@ -627,8 +634,13 @@ class AppContext:
             "proxy": {
                 **_public_dependency(proxy_status, proxy_latency),
                 "redis": {
-                    "ok": proxy_redis_state in ("ok", "degraded"),
-                    "degraded": proxy_redis_state in ("degraded", "error"),
+                    # 三态布尔 + mode：布尔投影必须能区分 ok/degraded/error/unknown，
+                    # 否则 error 会被下游 _dependency_public_state 误读回 error/unknown 之外的状态
+                    "ok": proxy_redis_state == "ok",
+                    "degraded": proxy_redis_state == "degraded",
+                    "error": proxy_redis_state == "error",
+                    "mode": (upstream_redis or {}).get("mode")
+                    if isinstance(upstream_redis, dict) else None,
                 },
             },
             "school": _public_dependency(school_status, school_latency),

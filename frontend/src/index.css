@@ -125,10 +125,11 @@
 
   --eduquery-ring: #25786d;
 
-  /* 主按钮：半透明单色着色 + 细描边 + 斜向扫光（浅色侧，扫光为白） */
-  --eduquery-btn-primary-bg: rgba(47, 127, 116, 0.1);
-  --eduquery-btn-primary-bg-hover: rgba(47, 127, 116, 0.17);
-  --eduquery-btn-primary-border: rgba(47, 127, 116, 0.26);
+  /* 主按钮：半透明单色着色 + 细描边 + 斜向扫光（浅色侧，扫光为白）
+     浓度取 0.17/0.26/0.4：保持玻璃语言的同时让主 CTA 与输入框拉开权重 */
+  --eduquery-btn-primary-bg: rgba(47, 127, 116, 0.17);
+  --eduquery-btn-primary-bg-hover: rgba(47, 127, 116, 0.26);
+  --eduquery-btn-primary-border: rgba(47, 127, 116, 0.4);
   --eduquery-btn-sweep: rgba(255, 255, 255, 0.42);
   --eduquery-brand-fg: #24433e;
 
@@ -218,9 +219,9 @@
 
   --eduquery-ring: #7fd4c6;
 
-  --eduquery-btn-primary-bg: rgba(127, 212, 198, 0.13);
-  --eduquery-btn-primary-bg-hover: rgba(127, 212, 198, 0.21);
-  --eduquery-btn-primary-border: rgba(127, 212, 198, 0.3);
+  --eduquery-btn-primary-bg: rgba(127, 212, 198, 0.19);
+  --eduquery-btn-primary-bg-hover: rgba(127, 212, 198, 0.28);
+  --eduquery-btn-primary-border: rgba(127, 212, 198, 0.4);
   --eduquery-btn-sweep: rgba(255, 255, 255, 0.18);
   --eduquery-brand-fg: #d7efea;
 
@@ -2395,6 +2396,14 @@ html { scroll-behavior: smooth; }
 .site-footer > .back-to-top {
   position: absolute;
   bottom: calc(100% + 12px + env(safe-area-inset-bottom, 0px));
+}
+/* 页面内容不足一屏（无可回滚距离）时隐藏浮钮：
+   短页下它会悬浮在表单/字段上方，违反 focus-not-obscured。
+   visibility:hidden 同步移出键盘焦点与无障碍树。 */
+.back-to-top.back-to-top-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .back-to-top svg { width: 20px; height: 20px; }
 .back-to-top:hover,

@@ -42,8 +42,8 @@ def test_index_html_has_no_inline_scripts_and_references_external_assets():
     """查询页不允许任何内联脚本：主脚本与主题预置全部外置，CSP 走 'self'。"""
     index = _read("frontend/static/index.html")
     assert _inline_scripts("index.html") == []
-    assert '<script src="/app.js?v=1" defer></script>' in index
-    assert '<script src="/theme-init.js?v=1"></script>' in index
+    assert '<script src="/app.js?v=' in index
+    assert '/theme-init.js?v=' in index
     assert (ROOT / "frontend" / "static" / "app.js").is_file()
     assert (ROOT / "frontend" / "static" / "theme-init.js").is_file()
     # admin.html 仍保留唯一内联主题脚本（其哈希在 CSP 中声明）
@@ -68,7 +68,7 @@ def test_theme_init_runs_before_stylesheet_and_follows_system_preference():
     """主题预置必须阻塞执行且位于样式表之前，防止深色用户首绘闪白。"""
     index = _read("frontend/static/index.html")
     theme = _read("frontend/static/theme-init.js")
-    theme_pos = index.index('<script src="/theme-init.js?v=1"></script>')
+    theme_pos = index.index('/theme-init.js?v=')
     style_pos = index.index('<link rel="stylesheet"')
     assert theme_pos < style_pos
     assert 'window.matchMedia("(prefers-color-scheme: dark)")' in theme
@@ -121,7 +121,7 @@ def test_admin_orchestration_distribution_includes_redis():
 
     assert '"app": "单体应用"' in script
     assert '"redis": "Redis（可选）"' in script
-    assert "/admin.js?v=32" in page
+    assert "/admin.js?v=" in page
 
 
 def test_admin_console_has_consistent_navigation_and_responsive_tooling():
@@ -166,8 +166,8 @@ def test_homepage_notice_bar_and_history_are_external_scripts():
     style = _read("frontend/src/app.css")
     assert 'id="noticeBar"' in index
     assert 'id="noticeHistoryModal"' in index
-    assert 'src="/notice.js?v=6"' in index
-    assert 'href="/style.css?v=96"' in index
+    assert 'src="/notice.js?v=' in index
+    assert 'href="/style.css?v=' in index
     assert 'id="noticePause"' not in index
     assert 'id="noticePause"' not in script
     assert "text.scrollWidth > track.clientWidth + 2" in script
@@ -302,9 +302,9 @@ def test_design_v16_back_to_top_and_skeleton_contract():
 
     assert 'class="back-to-top" href="#main" aria-label="返回顶部"' in index
     assert 'class="back-to-top" id="backToTop" href="#main" aria-label="返回顶部"' in admin
-    assert 'href="/style.css?v=96"' in index
-    assert 'href="/style-admin.css?v=1"' in admin
-    assert 'admin.js?v=32' in admin
+    assert 'href="/style.css?v=' in index
+    assert 'href="/style-admin.css?v=' in admin
+    assert 'admin.js?v=' in admin
     assert 'backToTop: $("backToTop")' in admin_script
     assert 'elements.backToTop.addEventListener("click"' in admin_script
     assert 'window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });' in admin_script

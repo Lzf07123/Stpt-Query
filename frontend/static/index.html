@@ -3,17 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title></title>
+  <title>教务信息查询</title>
   <link rel="icon" href="/image/icon.svg">
-  <meta name="description" content="">
+  <!-- 默认文案兜底：brand.js 加载后按 BRAND_* 环境变量覆盖 -->
+  <meta name="description" content="通过学校统一身份认证查询成绩与课表，支持成绩分析与 PDF 导出。">
   <meta name="theme-color" content="#3A3F45">
   <meta name="color-scheme" content="light dark">
   <script src="/health-status.js?v=1" defer></script>
   <script src="/theme-init.js?v=1"></script>
-  <link rel="stylesheet" href="/style.css?v=96">
+  <link rel="stylesheet" href="/style.css?v=97">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/notice.js?v=6" defer></script>
+  <script src="/notice.js?v=7" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳到查询区域</a>
@@ -48,6 +49,9 @@
         <span id="noticeText" class="notice-text"></span>
       </div>
       <div class="notice-actions">
+        <button type="button" id="noticeToggle" class="notice-btn" aria-label="暂停通知轮播" aria-pressed="false" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5v14M15 5v14"></path></svg>
+        </button>
         <button type="button" id="noticeHistory" class="notice-btn" aria-label="查看历史通知" aria-haspopup="dialog">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9"></path><path d="M12 7v5l3 3"></path></svg>
         </button>
@@ -341,9 +345,9 @@
           <h3 class="calendar-section-title">刷新策略</h3>
           <div class="calendar-field">
             <div class="segmented" id="calendarIntervalGroup" role="group" aria-label="刷新间隔">
-              <button type="button" class="seg-btn" data-interval="21600">6 小时</button>
-              <button type="button" class="seg-btn active" data-interval="43200">12 小时</button>
-              <button type="button" class="seg-btn" data-interval="86400">24 小时</button>
+              <button type="button" class="seg-btn" data-interval="21600" aria-pressed="false">6 小时</button>
+              <button type="button" class="seg-btn active" data-interval="43200" aria-pressed="true">12 小时</button>
+              <button type="button" class="seg-btn" data-interval="86400" aria-pressed="false">24 小时</button>
             </div>
             <input type="hidden" id="calendarInterval" value="43200">
           </div>
@@ -368,6 +372,6 @@
       </div>
     </div>
   </div>
-  <script src="/app.js?v=1" defer></script>
+  <script src="/app.js?v=2" defer></script>
 </body>
 </html>

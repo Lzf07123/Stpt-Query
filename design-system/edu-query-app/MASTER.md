@@ -28,8 +28,9 @@
 - 深色带文字软底：`*-soft-solid` 实色粉彩 + `*-soft-fg` 深字
   （primary `#D9F4EE`/`#17332E`，success `#E3F6E9`/`#14532D`，warning `#FDF3D8`/`#78350F`，
   destructive `#FDEEEE`/`#7F1D1D`）。
-- 按钮：浅 bg `rgba(47,127,116,.10)` / hover `.17` / 描边 `.26`；
-  深 bg `rgba(127,212,198,.13)` / hover `.21` / 描边 `.30`；扫光 `--eduquery-btn-sweep`。
+- 按钮：浅 bg `rgba(47,127,116,.17)` / hover `.26` / 描边 `.40`；
+  深 bg `rgba(127,212,198,.19)` / hover `.28` / 描边 `.40`；扫光 `--eduquery-btn-sweep`。
+  （2026-11-13 UI 评审上调浓度：保持玻璃语言的同时拉开主 CTA 与输入框的视觉权重）
 - 液态玻璃：`--eduquery-glass-*` 八件套 + `blur 18px` / `saturate 150%`（明暗两套）。
 - 阴影三档（水绿 tint，透明度总和 < 0.1）、缓动 `--ease-out` / `--ease-spring`、
   时长 `--motion-fast/base/slow = 150/250/350ms`；前缀对齐别名
@@ -45,7 +46,7 @@
 | 认证表单卡 | `.card.card-signature.card-halo` | 签名描边 9s + 呼吸辉光 4.5s；内边距 24px（≥640px 为 24×28） |
 | 输入/下拉 | `.input`、`.dropdown` / `.dropdown-trigger` / `.dropdown-menu` / `.dropdown-item` | 触发器 48px、选项 44px 触达；菜单 `max-height:min(320px,40vh)` 滚动、不超出视口；焦点 ring 主色；键盘契约由既有 JS 提供 |
 | 查询类型卡 | `.query-kind-grid` / `.query-choice` | 课表/成绩两张语义入口卡，含像素图标、用途短说明与 `aria-pressed`；active 半透明主色底 |
-| 日期段选择 | `.segmented` / `.seg-btn` | 仅用于网络日历刷新间隔，不再与查询类型共享事件选择器 |
+| 日期段选择 | `.segmented` / `.seg-btn` | 仅用于网络日历刷新间隔，不再与查询类型共享事件选择器；选中态必须同步 `aria-pressed`（2026-11-13 UI 评审统一：刷新间隔、后台通知级别与状态筛选） |
 | 复选框 | `input[type=checkbox]` + `.field-check` | 18px、accent-color 主色 |
 | 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪；查询/清空整行 7:3，控件统一 48px |
 | 结果卡 | `.project-card`（液态玻璃） | hover 上浮 3px、顶部主色细线展开 |
@@ -54,6 +55,7 @@
 | 空状态 | `.empty-state` / `.empty-state-art` / `.empty-state-text` | SVG 小图 + 引导文案 |
 | 提示/状态 | `.notice` 变体、`.status`（ok/error）、`.status-dot` | 语义色只表状态 |
 | Toast | `.toast` / `.toast-success` / `.toast-error` / `.toast-info` | 进度条 + 进入/离开动画 |
+| 确认对话框 | `#confirmModal`（admin）| 替代原生 `confirm()`：焦点圈定 + Escape + 焦点恢复；破坏性操作用 `.btn-danger`，普通确认用 `.btn-primary` |
 | 服务状态 | `.service-status` / `.status-seg` / `.status-bar` | 最近 100 次查询可用性 |
 | 页脚 | `.site-footer` / `.site-footer-inner` / `.filing-icon-placeholder` | 56px 单行、muted 链接、brand.js 驱动 |
 | 返回顶部 | `.back-to-top`（位于固定页脚内） | 44×44 锚点；后台保留视图哈希，自页脚上边缘再上移 12px，避免遮挡 |
@@ -98,6 +100,9 @@
 - V1.6 返回顶部在查询页直接跳转 `#main`；后台的哈希已用于视图深链，因此由 `admin.js`
   拦截锚点默认行为，仅平滑滚顶并恢复主区域焦点，保留 `#notices/#logs` 等当前视图。
   两页按钮均作为 `.site-footer` 子项向上偏移，不覆盖版权或网络日历入口。
+- 返回顶部可见性（2026-11-13 UI 评审）：页面无可回滚距离（`scrollHeight <= innerHeight + 8`）时
+  加 `back-to-top-hidden`（opacity 0 + visibility hidden），短页不悬浮在表单字段上
+  （focus-not-obscured）；由 ResizeObserver + resize 监听驱动。
 - 文字居中：表单标签、输入值/占位符、下拉触发器与选项、提示条、复选框文案均居中；
   服务状态条未捕获格子以 `--eduquery-border` 显示占位。
 
@@ -130,6 +135,16 @@
 **上游对齐结论**：`Li-Design` 本地与 `origin/main` 均位于 `a5cfcd5`，子模块无漂移；
 本轮按 V1.6 精确契约复核后，修复返回顶部缺失与骨架屏参数漂移。固定页脚、无瀑布流、
 无站内搜索与后台非卡片式导航属于已记录的项目适配，不复制无关组件。
+
+**UI/UX 评审修复验收（2026-11-13，ui-ux-pro-max 评审 8 项全修复）**：
+① 通知轮播新增暂停控件（`#noticeToggle`，动态 aria-label/aria-pressed/图标切换，
+悬停与键盘焦点进入即停、离开恢复，`notices.length < 2` 时隐藏）——补齐 WCAG
+auto-rotation-controls；② segmented 选中态统一同步 `aria-pressed`；③ 主 CTA 浓度上调
+（浅 .17/.26/.40、深 .19/.28/.40）并重验 AA；④ 入口卡副文案 `text-wrap: balance`；
+⑤ 后台 `window.confirm` ×4 替换为 `#confirmModal` 确认对话框；⑥ 返回顶部短页隐藏；
+⑦ index.html 默认 title/description 兜底（brand.js 仍为唯一品牌事实源，运行时覆盖）；
+⑧ 后台「查询代理 Redis」内存模式由红色异常改判灰色未配置（后端依赖态映射修复）。
+测试契约同步：资产版本钉死断言放宽为 `?v=` 前缀匹配；全量 255 通过 ×3。
 
 **V1.6 增量验收**：首页与后台均存在 `.back-to-top` 锚点；按钮 44×44、圆角 14px、
 玻璃 `blur(18px) saturate(150%)`，通过页脚相对偏移避开 57–85px 的固定页脚；

@@ -256,3 +256,34 @@ async def test_reaper_clears_zombie_pending_members():
     assert running_id in members, "仍在执行的合法任务不得误清"
     assert reaped == 1
     assert await store.pending_count() == 2
+
+
+def test_worker_tasks_not_created_without_job_store():
+    """无 Redis（job_store=None）时不创建空转 worker/reaper 任务。
+
+    曾在单实例部署下每秒产生「异步任务领取失败：AttributeError」日志空转。
+    """
+    import asyncio
+
+    from app.jobs_worker import start_job_workers
+
+    class _State:
+        job_store = None
+
+    class _App:
+        state = _State()
+
+    class _Cfg:
+        job_workers = 2
+
+    class _Ctx:
+        cfg = _Cfg()
+
+    app = _App()
+
+    async def _run():
+        start_job_workers(app, _Ctx())
+
+    asyncio.run(_run())
+    assert not hasattr(app.state, "job_worker_tasks")
+    assert not hasattr(app.state, "job_reaper_task")

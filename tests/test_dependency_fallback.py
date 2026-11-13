@@ -134,3 +134,36 @@ def test_admin_metrics_degrades_when_redis_history_hangs(tmp_path):
 
     assert body["services"]["redis"] == "degraded"
     assert any(item["key"] == "redis" for item in body["degradations"])
+
+
+def test_dependency_public_state_memory_mode_is_not_configured():
+    """查询代理内存模式必须映射为灰色未配置，不得被布尔投影误判为红色异常。
+
+    曾因 /health/public 的 redis 布尔投影区分不出 unknown 与 error，
+    单实例部署下后台把「查询代理 Redis」显示成异常。
+    """
+    from app.context import _dependency_public_state
+
+    memory_payload = {
+        "proxy": {"status": "up",
+                  "redis": {"ok": False, "degraded": False,
+                            "error": False, "mode": "memory"}},
+        "school": {"status": "down"},
+    }
+    _, _, redis_state = _dependency_public_state(memory_payload)
+    assert redis_state == "not-configured"
+
+    broken_payload = {
+        "proxy": {"status": "up",
+                  "redis": {"ok": False, "degraded": False,
+                            "error": True, "mode": "redis"}},
+        "school": {"status": "unknown"},
+    }
+    assert _dependency_public_state(broken_payload)[2] == "error"
+
+    unknown_payload = {
+        "proxy": {"status": "up",
+                  "redis": {"ok": None, "mode": "redis", "starting": True}},
+        "school": {"status": "unknown"},
+    }
+    assert _dependency_public_state(unknown_payload)[2] == "unknown"

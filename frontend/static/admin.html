@@ -19,7 +19,7 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style-admin.css?v=1">
+  <link rel="stylesheet" href="/style-admin.css?v=2">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到后台内容</a>
@@ -257,10 +257,10 @@
             <div class="filter-control">
               <span class="field-label">状态</span>
               <div class="segmented notice-status-filter" aria-label="通知状态筛选">
-                <button type="button" class="seg-btn active" data-status="">全部</button>
-                <button type="button" class="seg-btn" data-status="draft">草稿</button>
-                <button type="button" class="seg-btn" data-status="active">已发布</button>
-                <button type="button" class="seg-btn" data-status="archived">已下线</button>
+                <button type="button" class="seg-btn active" data-status="" aria-pressed="true">全部</button>
+                <button type="button" class="seg-btn" data-status="draft" aria-pressed="false">草稿</button>
+                <button type="button" class="seg-btn" data-status="active" aria-pressed="false">已发布</button>
+                <button type="button" class="seg-btn" data-status="archived" aria-pressed="false">已下线</button>
               </div>
               <input type="hidden" id="noticeStatusFilter" value="">
             </div>
@@ -519,6 +519,20 @@
     </section>
   </main>
 
+  <div class="modal-backdrop hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+    <div class="modal-panel modal-info admin-modal-panel admin-confirm-panel">
+      <div class="modal-accent"></div>
+      <div class="admin-modal-body">
+        <h3 class="admin-modal-title" id="confirmTitle">确认操作</h3>
+        <p class="admin-confirm-message" id="confirmMessage"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary-btn" id="confirmCancel" type="button">取消</button>
+        <button class="btn btn-danger" id="confirmOk" type="button">确认</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="detailValueModal" role="dialog" aria-modal="true" aria-labelledby="detailValueTitle">
     <div class="modal-panel modal-info admin-modal-panel">
       <div class="modal-accent"></div>
@@ -543,6 +557,6 @@
   </footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=32" defer></script>
+  <script src="/admin.js?v=33" defer></script>
 </body>
 </html>
