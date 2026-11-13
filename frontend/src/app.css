@@ -73,6 +73,49 @@
   .layout.has-result #queryForm {
     display: none;
   }
+  /* B1 提交让位：查询受理瞬间表单卡失焦淡出（240ms 后 JS 才切 has-result），
+     空间连续性 —— 骨架屏在结果位淡入而非瞬时替换 */
+  #queryForm {
+    transition: opacity 240ms var(--ease-out),
+      filter 240ms var(--ease-out),
+      transform 240ms var(--ease-out);
+  }
+  body.querying #queryForm {
+    opacity: 0.55;
+    filter: blur(2px);
+    transform: scale(0.985);
+    pointer-events: none;
+  }
+  /* B4 结果行级联：20ms/行、总延迟封顶 320ms（检索定标：长表 ≤30ms/项）。
+     仅限成绩表 —— 课表的粘性首列依赖无 transform 祖先，tr 动画会临时破坏 sticky */
+  .markdown-body .table-shell--grades tbody tr {
+    animation: row-cascade var(--motion-base) var(--ease-out) both;
+    animation-delay: min(calc(var(--row-i, 0) * 20ms), 320ms);
+  }
+  /* 数字等宽（number-tabular）：成绩分数/耗时列对齐稳定，不因数字宽度抖动 */
+  .markdown-body .table-shell td {
+    font-variant-numeric: tabular-nums;
+  }
+  @keyframes row-cascade {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+  /* B5 数字落定：结果概览的事实数字用微回弹强调“得到答案” */
+  .result-facts strong {
+    animation: fact-pop 350ms var(--ease-spring) 120ms both;
+  }
+  @keyframes fact-pop {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.92);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
   .layout > *:first-child {
     align-self: start;
   }
@@ -195,10 +238,13 @@
       box-shadow var(--motion-fast) var(--ease-out),
       transform var(--motion-fast) var(--ease-out);
   }
-  .query-choice:hover {
-    background: var(--eduquery-surface);
-    border-color: color-mix(in srgb, var(--eduquery-primary) 58%, var(--eduquery-border));
-    transform: translateY(-1px);
+  /* hover 门控：触屏无 hover 态，粘滞 hover 会卡住高亮（ui-ux-pro-max hover-vs-tap） */
+  @media (hover: hover) and (pointer: fine) {
+    .query-choice:hover {
+      background: var(--eduquery-surface);
+      border-color: color-mix(in srgb, var(--eduquery-primary) 58%, var(--eduquery-border));
+      transform: translateY(-1px);
+    }
   }
   .query-choice:active {
     transform: translateY(0) scale(0.995);
@@ -893,9 +939,35 @@
   #resultCard.project-card {
     padding: 24px 28px;
   }
-  #resultCard.project-card:hover {
-    box-shadow: var(--shadow-sm), inset 0 1px 0 var(--eduquery-glass-highlight);
-    transform: none;
+  /* E2 玻璃微响应：hover 时 blur/saturate 轻抬（材质反馈，不改变上浮语义） */
+  #resultCard.project-card {
+    transition: backdrop-filter var(--motion-base) var(--ease-out),
+      box-shadow var(--motion-base) var(--ease-out);
+  }
+  /* E2 玻璃微响应：hover 门控（触屏无粘滞玻璃变化） */
+  @media (hover: hover) and (pointer: fine) {
+    #resultCard.project-card:hover {
+      box-shadow: var(--shadow-sm), inset 0 1px 0 var(--eduquery-glass-highlight);
+      transform: none;
+      backdrop-filter: blur(22px) saturate(165%);
+      -webkit-backdrop-filter: blur(22px) saturate(165%);
+    }
+  }
+  /* B2 结果生长：表单让位后结果卡自骨架位展开（blur+位移，CLS=0） */
+  #resultCard.project-card.is-growing {
+    animation: result-grow var(--motion-slow) var(--ease-out) both;
+  }
+  @keyframes result-grow {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+      filter: blur(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      filter: blur(0);
+    }
   }
   #resultCard h2 {
     @apply m-0 text-lg;

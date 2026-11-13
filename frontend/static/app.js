@@ -18,7 +18,31 @@
       }
     }
     themeToggle.addEventListener("click", function () {
-      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark", true);
+      var target = document.documentElement.classList.contains("dark") ? "light" : "dark";
+      // E3 主题水波：View Transitions 从按钮位置圆形展开（不支持的浏览器静默降级）
+      var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!document.startViewTransition || reduceMotion) {
+        applyTheme(target, true);
+        return;
+      }
+      var rect = themeToggle.getBoundingClientRect();
+      var x = rect.left + rect.width / 2;
+      var y = rect.top + rect.height / 2;
+      var radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+      var transition = document.startViewTransition(function () {
+        applyTheme(target, true);
+      });
+      transition.ready.then(function () {
+        document.documentElement.animate(
+          {
+            clipPath: [
+              "circle(0px at " + x + "px " + y + "px)",
+              "circle(" + radius + "px at " + x + "px " + y + "px)"
+            ]
+          },
+          { duration: 420, easing: "ease-out", pseudoElement: "::view-transition-new(root)" }
+        );
+      }).catch(function () { /* 转场被打断时静默 */ });
     });
     applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light", false);
 
@@ -232,6 +256,7 @@
       skeleton.hidden = true;
       skeleton.setAttribute("aria-hidden", "true");
       resultCard.classList.remove("hidden");
+      resultCard.classList.add("is-growing");
       layout.classList.add("has-result");
       resultCard.classList.remove("fade-in");
       resultCard.classList.add("fade-out");
@@ -772,6 +797,7 @@
       skeleton.setAttribute("aria-hidden", "true");
       resultBox.classList.add("hidden");
       resultHtml.classList.remove("hidden");
+      resultCard.classList.add("is-growing");
       resultCard.classList.remove("hidden");
       layout.classList.add("has-result");
       const variantClass = kind === "error" ? " empty-state--error" : "";
@@ -1262,8 +1288,8 @@
             html.push("</tr></thead>");
             if (rows.length > 2) {
               html.push("<tbody>");
-              rows.slice(2).forEach(function (row) {
-                html.push("<tr>");
+              rows.slice(2).forEach(function (row, rowIdx) {
+                html.push('<tr style="--row-i:' + rowIdx + '">');
                 cells(row).forEach(function (cell, colIdx) {
                   html.push(decorateCell(cell, colIdx));
                 });
@@ -1620,6 +1646,7 @@
       const markdown = extractMarkdownValue(body);
       setRunId(body && typeof body === "object" ? body.run_id : "");
       skeleton.hidden = true;
+      resultCard.classList.add("is-growing");
       skeleton.setAttribute("aria-hidden", "true");
       resultCard.classList.remove("hidden");
       layout.classList.add("has-result");
@@ -1747,14 +1774,21 @@
       hidePdfAction();
       clearLockTimer();
       clearTimeout(resultTimer);
-      skeleton.hidden = false;
-      skeleton.setAttribute("aria-hidden", "false");
-      resultHtml.classList.add("hidden");
-      resultBox.classList.add("hidden");
-      resultCard.classList.remove("hidden");
-      resultCard.setAttribute("aria-busy", "true");
-      resultTitle.textContent = payload.option + "查询结果";
-      layout.classList.add("has-result");
+      // B1 提交让位：表单卡先失焦淡出（240ms），再切结果态让骨架屏淡入 —— 空间连续性
+      document.body.classList.add("querying");
+      form.classList.add("is-yielding");
+      window.setTimeout(function () {
+        if (seq !== querySeq) return;
+        skeleton.hidden = false;
+        skeleton.setAttribute("aria-hidden", "false");
+        resultHtml.classList.add("hidden");
+        resultBox.classList.add("hidden");
+        resultCard.classList.remove("hidden");
+        resultCard.classList.add("is-growing");
+        resultCard.setAttribute("aria-busy", "true");
+        resultTitle.textContent = payload.option + "查询结果";
+        layout.classList.add("has-result");
+      }, 240);
       updateUrlParams(payload);
       const savedScrollY = window.scrollY;
       renderJobProgress("login", payload, "running", 0);
@@ -1951,6 +1985,8 @@
       } finally {
         if (seq === querySeq) {
           queryController = null;
+          document.body.classList.remove("querying");
+          form.classList.remove("is-yielding");
           resultCard.removeAttribute("aria-busy");
           setButtonLoading(false);
           window.scrollTo(0, savedScrollY);
@@ -1982,6 +2018,7 @@
       syncOptionSeg();
       semestersDropdown.sync();
       weeksDropdown.sync();
+      resultCard.classList.remove("is-growing");
       resultCard.classList.add("hidden");
       resultTitle.textContent = "查询结果";
       resultOverview.classList.add("hidden");
@@ -1996,6 +2033,7 @@
     document.getElementById("backToQuery").addEventListener("click", function () {
       if (submitBtn.disabled && queryController) queryController.abort();
       clearTimeout(resultTimer);
+      resultCard.classList.remove("is-growing");
       resultCard.classList.add("hidden");
       layout.classList.remove("has-result");
       statusBox.classList.add("hidden");
@@ -2771,6 +2809,31 @@
     renderHistorySelect();
     restoreUrlParams();
     syncBackToTopVisibility();
+    // P1 氛围微视差：栅格 0.06 / 前景 0.12（检索边界内：仅装饰层、位移封顶 140px、
+    // will-change 滚动停止 300ms 后移除）；prefers-reduced-motion 下完全跳过
+    var parallaxReduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+    var parallaxTicking = false;
+    var parallaxResetTimer = 0;
+    function applyParallax() {
+      parallaxTicking = false;
+      if (parallaxReduce.matches) return;
+      var y = window.scrollY;
+      var grid = document.querySelector(".tech-grid");
+      var fore = document.querySelector(".tech-ambience-fore");
+      if (grid) grid.style.transform = "translate3d(0," + Math.min(y * 0.06, 140).toFixed(1) + "px,0)";
+      if (fore) fore.style.transform = "translate3d(0," + Math.min(y * 0.12, 140).toFixed(1) + "px,0)";
+      document.body.classList.add("is-parallaxing");
+      clearTimeout(parallaxResetTimer);
+      parallaxResetTimer = window.setTimeout(function () {
+        document.body.classList.remove("is-parallaxing");
+      }, 300);
+    }
+    window.addEventListener("scroll", function () {
+      if (!parallaxTicking) {
+        parallaxTicking = true;
+        window.requestAnimationFrame(applyParallax);
+      }
+    }, { passive: true });
     window.addEventListener("scroll", hideStatusTooltip, { passive: true });
     window.addEventListener("resize", function () {
       hideStatusTooltip();

@@ -19,14 +19,17 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style-admin.css?v=2">
+  <link rel="stylesheet" href="/style-admin.css?v=4">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到后台内容</a>
   <div class="tech-ambience tech-ambience--soft" aria-hidden="true">
     <div class="tech-grid"></div>
-    <span class="tech-beam"></span>
-    <span class="tech-beam tech-beam--violet"></span>
+    <div class="tech-aurora-core"></div>
+    <div class="tech-ambience-fore">
+      <span class="tech-beam"></span>
+      <span class="tech-beam tech-beam--violet"></span>
+    </div>
   </div>
 
   <main class="wrap" id="main" tabindex="-1">
@@ -151,7 +154,8 @@
           <article class="card metric-card metric-card-wide">
             <span>CPU 趋势（3 分钟 · 当前）</span>
             <strong id="trendMax">—</strong>
-            <canvas class="trend-chart" id="cpuChart"></canvas>
+            <canvas class="trend-chart" id="cpuChart" role="img"
+                    aria-label="应用 CPU 近 3 分钟趋势图；具体数值见下方峰值、均值与样本数"></canvas>
             <div class="trend-facts">
               <small>峰值 <b id="trendPeak">—</b></small>
               <small>均值 <b id="trendAverage">—</b></small>
@@ -557,6 +561,6 @@
   </footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=33" defer></script>
+  <script src="/admin.js?v=34" defer></script>
 </body>
 </html>

@@ -166,7 +166,31 @@
     if (!elements.themeToggle) return;
     applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light", false);
     elements.themeToggle.addEventListener("click", function () {
-      applyTheme(document.documentElement.classList.contains("dark") ? "light" : "dark", true);
+      var target = document.documentElement.classList.contains("dark") ? "light" : "dark";
+      // E3 主题水波：View Transitions 从按钮位置圆形展开（不支持则静默降级）
+      var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!document.startViewTransition || reduceMotion) {
+        applyTheme(target, true);
+        return;
+      }
+      var rect = elements.themeToggle.getBoundingClientRect();
+      var x = rect.left + rect.width / 2;
+      var y = rect.top + rect.height / 2;
+      var radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+      var transition = document.startViewTransition(function () {
+        applyTheme(target, true);
+      });
+      transition.ready.then(function () {
+        document.documentElement.animate(
+          {
+            clipPath: [
+              "circle(0px at " + x + "px " + y + "px)",
+              "circle(" + radius + "px at " + x + "px " + y + "px)"
+            ]
+          },
+          { duration: 420, easing: "ease-out", pseudoElement: "::view-transition-new(root)" }
+        );
+      }).catch(function () { /* 转场被打断时静默 */ });
     });
   }
 
@@ -1973,6 +1997,31 @@
       });
       state.chartObserver.observe(elements.cpuChart);
     }
+    // P1 氛围微视差（后台同款）：栅格 0.06 / 前景 0.12，位移封顶 140px，
+    // will-change 滚动停止 300ms 后移除；prefers-reduced-motion 下完全跳过
+    var parallaxReduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+    var parallaxTicking = false;
+    var parallaxResetTimer = 0;
+    function applyParallax() {
+      parallaxTicking = false;
+      if (parallaxReduce.matches) return;
+      var y = window.scrollY;
+      var grid = document.querySelector(".tech-grid");
+      var fore = document.querySelector(".tech-ambience-fore");
+      if (grid) grid.style.transform = "translate3d(0," + Math.min(y * 0.06, 140).toFixed(1) + "px,0)";
+      if (fore) fore.style.transform = "translate3d(0," + Math.min(y * 0.12, 140).toFixed(1) + "px,0)";
+      document.body.classList.add("is-parallaxing");
+      clearTimeout(parallaxResetTimer);
+      parallaxResetTimer = window.setTimeout(function () {
+        document.body.classList.remove("is-parallaxing");
+      }, 300);
+    }
+    window.addEventListener("scroll", function () {
+      if (!parallaxTicking) {
+        parallaxTicking = true;
+        window.requestAnimationFrame(applyParallax);
+      }
+    }, { passive: true });
     var saved = getToken();
     if (saved) {
       activate(saved).catch(function () { setToken(""); });

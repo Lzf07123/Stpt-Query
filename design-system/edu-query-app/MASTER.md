@@ -59,8 +59,10 @@
 | 服务状态 | `.service-status` / `.status-seg` / `.status-bar` | 最近 100 次查询可用性 |
 | 页脚 | `.site-footer` / `.site-footer-inner` / `.filing-icon-placeholder` | 56px 单行、muted 链接、brand.js 驱动 |
 | 返回顶部 | `.back-to-top`（位于固定页脚内） | 44×44 锚点；后台保留视图哈希，自页脚上边缘再上移 12px，避免遮挡 |
-| 氛围层 | `.tech-ambience--soft` + `.tech-grid` | 工作台 soft；移动端停用/减量 |
-| 扫掠光束 | `.tech-beam` ×3（默认 / `--violet` / `--sage`） | 斜切 16° 透明渐变带 `translateX(-150%→560%)` 扫过并长停顿，10s、错峰 0.8/4.2/7.5s；soft 降浓度；<768px 隐藏 |
+| 氛围层 | `.tech-ambience--soft` + `.tech-grid` | 工作台 soft；移动端停用/减量；查询进行中整层降浓度 60%（`body.querying`，A1 让位编排） |
+| 微视差 | `.tech-grid`（0.06）/ `.tech-ambience-fore`（0.12） | 滚动缓移双层（inset ±140px overscan、位移封顶 140px）；`body.is-parallaxing` 挂 `will-change`，滚动停止 300ms 后移除；reduced-motion 跳过 |
+| 极光核 | `.tech-aurora-core` | E1 深色专属：锥形渐变 120s 线性缓旋（blur 64px、opacity .5），浅色隐藏；<768px 隐藏 |
+| 扫掠光束 | `.tech-beam` ×3（默认 / `--violet` / `--sage`） | 斜切 16° 透明渐变带扫过并长停顿，**12s 慢基准**、错峰 0.8/4.2/7.5s；**主束唯一**，副束令牌降为残影（A2 减量）；soft 降浓度；<768px 隐藏 |
 
 ## 4. 页面模式：单页查询工具
 
@@ -131,6 +133,27 @@
   发布、存草稿和行操作在执行期间禁用按钮并设置 `aria-busy`，成功提示在表单重置后保留。
 
 ## 5. 全量视觉规范验收（2026-10-31，Li-Design V1.6 + 后台响应式）
+
+**视觉效果编排验收（2026-11-14，第二批打磨）**：ui-ux-pro-max 二轮检索（hover-vs-tap /
+focus-states / toast 时序 / number-tabular / 图表 screen-reader-summary）确认 4 项差距并修复：
+① 触屏 hover 门控（`.query-choice:hover`、E2 玻璃 hover 包进
+`@media (hover: hover) and (pointer: fine)`，消除触屏粘滞高亮；模板残留的 post-card 门控块
+与本项目无关）；② 下拉菜单 150ms 淡入下落入场（hidden 切换自动重放）；③ 成绩表单元格
+`font-variant-numeric: tabular-nums`（B5 事实数字此前已具备）；④ 后台 CPU 趋势 canvas
+补 `role="img"` + aria-label（数值有 trend-facts 可见文本兜底）。审计确认无需改动：
+toast 3s 自适应准则带、run-id 已省略号截断、focus-visible 已覆盖主控件。
+全量 257 通过；下拉开合与焦点环浏览器实测通过。
+
+**视觉效果编排验收（2026-11-14，A+B+点睛全量）**：ui-ux-pro-max 三档拨盘 + GSAP 骨架定标
+（stagger ≤30ms/项、视差 ≤3 层且位移 5-15%、will-change 用后即清）落进现有令牌体系：
+① A3 入场级联（标题 0ms → 通知 30ms → 主区 60ms → 状态条 90ms）；② A4 氛围周期归一
+（光束 12s 慢基准、光点 4s 快基准、极光 24s=2×慢）；③ B1 提交让位（表单 240ms
+blur(2px)+scale(.985) 后切结果态）→ B2 结果生长（blur 8px+12px 上浮展开 350ms）；
+④ B3 激活段连接线主色流光；⑤ B4 成绩表行级联 20ms/行封顶 320ms（课表粘性首列不参与）；
+⑥ B5 事实数字 ease-spring 落定；⑦ E1 深色极光核 / E2 玻璃 hover blur 22px+165% /
+E3 View Transitions 主题水波（420ms，降级安全）；⑧ P1 双层微视差（实测 307px 滚动 →
+18.4/36.8px 精确 1:2）。reduced-motion 全部继承单帧收敛；浏览器实测深浅两态、
+让位瞬间、结果落地、视差数值。
 
 **上游对齐结论**：`Li-Design` 本地与 `origin/main` 均位于 `a5cfcd5`，子模块无漂移；
 本轮按 V1.6 精确契约复核后，修复返回顶部缺失与骨架屏参数漂移。固定页脚、无瀑布流、

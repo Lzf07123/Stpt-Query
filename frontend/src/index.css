@@ -148,8 +148,9 @@
   --eduquery-tech-grid-accent: rgba(127, 212, 198, 0.22);
   --eduquery-tech-grid-accent-2: rgba(74, 143, 191, 0.18);
   --eduquery-tech-beam: rgba(127, 212, 198, 0.26);
-  --eduquery-tech-beam-2: rgba(143, 199, 240, 0.22);
-  --eduquery-tech-beam-3: rgba(176, 199, 158, 0.2);
+  /* 副光束降为残影（单束主光编排）：token 级降 alpha，明暗成对 */
+  --eduquery-tech-beam-2: rgba(143, 199, 240, 0.06);
+  --eduquery-tech-beam-3: rgba(176, 199, 158, 0.05);
   --eduquery-tech-dot-glow: rgba(127, 212, 198, 0.6);
 
   /* 极光层（4 枚弥散光斑），浅色侧 */
@@ -238,8 +239,8 @@
   --eduquery-tech-grid-accent: rgba(127, 212, 198, 0.18);
   --eduquery-tech-grid-accent-2: rgba(168, 212, 240, 0.16);
   --eduquery-tech-beam: rgba(127, 212, 198, 0.2);
-  --eduquery-tech-beam-2: rgba(168, 212, 240, 0.19);
-  --eduquery-tech-beam-3: rgba(176, 199, 158, 0.15);
+  --eduquery-tech-beam-2: rgba(168, 212, 240, 0.06);
+  --eduquery-tech-beam-3: rgba(176, 199, 158, 0.05);
   --eduquery-tech-dot-glow: rgba(127, 212, 198, 0.55);
 
   --eduquery-aurora-1: rgba(127, 212, 198, 0.4);
@@ -657,8 +658,16 @@
     height: 1px;
     background: var(--eduquery-border);
   }
+  /* B3 进度流光：激活段连接线同 completed 一样流动，只是换成主色 */
   .query-step.active:not(:first-child)::before {
-    background: color-mix(in srgb, var(--eduquery-primary) 42%, transparent);
+    background-image: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--eduquery-primary) 16%, transparent),
+      color-mix(in srgb, var(--eduquery-primary) 58%, transparent),
+      color-mix(in srgb, var(--eduquery-primary) 16%, transparent)
+    );
+    background-size: 220% 100%;
+    animation: connector-flow 2.6s linear infinite;
   }
   .query-step.completed:not(:first-child)::before {
     background-image: linear-gradient(
@@ -1184,6 +1193,20 @@
     flex-direction: column;
     gap: 4px;
   }
+  /* 下拉菜单入场微动效：150ms 淡入下落（hidden 切换时重放；reduced-motion 全局收敛） */
+  .dropdown-menu {
+    animation: menu-in var(--motion-fast) var(--ease-out);
+  }
+  @keyframes menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
   .dropdown-menu[hidden] {
     display: none;
   }
@@ -1507,8 +1530,23 @@
     }
   }
 
+  /* A3 入场级联：整页淡入改为标题 → 通知 → 主区 → 状态条的 30ms 级联
+     （ui-ux-pro-max 检索定标：per-item ≤30ms，总预算 ≤400ms） */
   .page-enter {
-    animation: page-fade-up var(--motion-slow) var(--ease-out) both;
+    animation: none;
+  }
+  .page-enter > .head {
+    animation: page-fade-up var(--motion-base) var(--ease-out) both;
+  }
+  .page-enter > #offlineBar,
+  .page-enter > #noticeBar {
+    animation: page-fade-up var(--motion-base) var(--ease-out) 30ms both;
+  }
+  .page-enter > .layout {
+    animation: page-fade-up var(--motion-slow) var(--ease-out) 60ms both;
+  }
+  .page-enter > #serviceStatus {
+    animation: page-fade-up var(--motion-base) var(--ease-out) 90ms both;
   }
 
   /* 骨架扫光（background-position 动画，不触发重排） */
@@ -1818,6 +1856,65 @@
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
+  /* A1 氛围让位：查询进行中整层降浓度，注意力交给结果（B 编排） */
+  transition: opacity var(--motion-slow) var(--ease-out);
+}
+body.querying .tech-ambience {
+  opacity: 0.6;
+}
+
+/* 前景层（光束 + 光点）：微视差的“近层”，滚动时以 0.12 系数缓移。
+   inset 上下各扩 140px 做 overscan，视差位移不露边；栅格层以 0.06 同步缓移。 */
+.tech-ambience-fore {
+  position: absolute;
+  inset: -140px 0;
+  contain: layout style;
+}
+body.is-parallaxing .tech-grid,
+body.is-parallaxing .tech-ambience-fore {
+  will-change: transform;
+}
+
+/* E1 深色专属极光核：锥形渐变缓旋（120s 慢基准），浅色侧隐藏 */
+.tech-aurora-core {
+  position: absolute;
+  left: 50%;
+  top: -22%;
+  width: 150vmax;
+  height: 150vmax;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--eduquery-aurora-1) 55deg,
+    transparent 125deg,
+    var(--eduquery-aurora-3) 195deg,
+    transparent 270deg,
+    var(--eduquery-aurora-2) 325deg,
+    transparent 360deg
+  );
+  filter: blur(64px);
+  opacity: 0;
+  pointer-events: none;
+}
+.dark .tech-aurora-core {
+  opacity: 0.5;
+  animation: aurora-core-spin 120s linear infinite;
+  will-change: transform;
+}
+@media (max-width: 767px) {
+  .tech-aurora-core { display: none; }
+}
+@keyframes aurora-core-spin {
+  from { transform: translateX(-50%) rotate(0deg); }
+  to { transform: translateX(-50%) rotate(360deg); }
+}
+
+/* E3 主题水波：接管 View Transitions 默认交叉淡出，由 JS 的圆形 clip-path 驱动 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
 }
 
 .aurora-blob {
@@ -1904,7 +2001,8 @@
 /* 科技光效层：缓移网格（56px 基线 + 336px 亮线双层，径向渐隐） */
 .tech-grid {
   position: absolute;
-  inset: 0;
+  /* 微视差“远层”：上下 overscan 与前景层对称，位移不露边 */
+  inset: -140px 0;
   background-image:
     linear-gradient(to right, var(--eduquery-tech-grid-accent) 1px, transparent 1px),
     linear-gradient(to bottom, var(--eduquery-tech-grid-accent-2) 1px, transparent 1px),
@@ -1963,7 +2061,8 @@
   );
   transform: translateX(-150%) skewX(-16deg);
   opacity: 0;
-  animation: tech-beam-sweep 10s var(--ease-out) 0.8s infinite;
+  /* 慢基准周期 12s：氛围层循环统一到 4s/12s 双基准（A4 编排） */
+  animation: tech-beam-sweep 12s var(--ease-out) 0.8s infinite;
   will-change: transform, opacity;
   pointer-events: none;
 }
@@ -1971,9 +2070,8 @@
 .tech-dot-1 { left: 14%; top: 18%; --tech-dot-color: var(--eduquery-accent-aqua); animation-delay: -1.4s; }
 .tech-dot-2 { left: 78%; top: 12%; --tech-dot-color: var(--eduquery-accent-ice); animation-delay: -3.2s; }
 .tech-dot-3 { left: 62%; top: 30%; --tech-dot-color: var(--eduquery-accent-mint); animation-delay: -5.1s; }
-.tech-dot-4 { left: 22%; top: 64%; --tech-dot-color: var(--eduquery-accent-sage); animation-delay: -0.6s; }
-.tech-dot-5 { left: 86%; top: 72%; --tech-dot-color: var(--eduquery-accent-lilac); animation-delay: -2.7s; }
-.tech-dot-6 { left: 42%; top: 86%; --tech-dot-color: var(--eduquery-accent-sand); animation-delay: -4.4s; }
+/* 光点 6→3（A2 减量）：后三枚直接停用 */
+.tech-dot-4, .tech-dot-5, .tech-dot-6 { display: none; }
 
 .tech-beam--violet {
   background: linear-gradient(
@@ -2026,7 +2124,8 @@
   background: var(--tech-dot-color, var(--eduquery-secondary));
   box-shadow: 0 0 14px 3px var(--eduquery-tech-dot-glow);
   opacity: 0.55;
-  animation: tech-dot-pulse 6s ease-in-out infinite;
+  /* 快基准周期 4s（A4 编排） */
+  animation: tech-dot-pulse 4s ease-in-out infinite;
   will-change: transform, opacity;
   pointer-events: none;
 }
