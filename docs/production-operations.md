@@ -34,10 +34,9 @@ calibrate.
 | --- | --- | --- |
 | `frontend` | Only host-exposed container (`APP_PORT`) | Static pages, CSP headers, injects `API_TOKEN` for the app |
 | `app` | Monolith: orchestration + rendering + LLM analysis + PDF + embedded query proxy (in-process ASGI) | Single instance by default; no internal network or service token |
-| Redis | **Optional**, external only | Enables `/run/jobs` (async queue) and cross-replica state; not shipped in Compose |
+| Redis | **Optional**, external only | Enables `/api/v1/run/jobs` (async queue) and cross-replica state; not shipped in Compose |
 
-When Redis is absent, `/run/jobs` returns 503 and the page falls back to the
-synchronous `POST /run` path. Rate limiting, query history, and query sessions
+When Redis is absent, `/api/v1/run/jobs` returns 503 (code `capacity.jobs_disabled`) and the page falls back to the synchronous `POST /api/v1/run` path. Rate limiting, query history, and query sessions
 stay in process memory.
 
 ## Retention And Backup

@@ -94,7 +94,7 @@ def test_admin_metrics_exposes_dependency_degradations(tmp_path):
     app.state.redis = FailingRedis()
 
     with TestClient(app) as client:
-        body = client.get("/admin/api/metrics", headers=ADMIN).json()
+        body = client.get("/api/v1/admin/metrics", headers=ADMIN).json()["data"]
 
     states = {item["key"]: item for item in body["dependencies"]}
     assert states["redis"]["status"] == "degraded"
@@ -130,7 +130,7 @@ def test_admin_metrics_degrades_when_redis_history_hangs(tmp_path):
     app.state.redis_history = HangingRedis()
 
     with TestClient(app) as client:
-        body = client.get("/admin/api/metrics", headers=ADMIN).json()
+        body = client.get("/api/v1/admin/metrics", headers=ADMIN).json()["data"]
 
     assert body["services"]["redis"] == "degraded"
     assert any(item["key"] == "redis" for item in body["degradations"])

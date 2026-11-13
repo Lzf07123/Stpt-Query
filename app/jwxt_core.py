@@ -26,12 +26,26 @@ from urllib3.connection import HTTPSConnection
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.exceptions import ConnectTimeoutError, NameResolutionError
 
-BASE = "https://sec.stpt.edu.cn"
-SERVICE = BASE + "/rump_frontend/loginFromCas/"
-RUMP_HOST = "sec.stpt.edu.cn:443"
-# 教务系统管理端 SSO 的 service（与 sso() 中从跳转 Location 提取的结果一致；
-# 学校侧变更时可重新从 api/cas/login 跳转的 service 参数提取）
-MGMT_SSO_SERVICE = "http://10.1.200.4:9090/api/cas/login?pattern=manager-login"
+from app import school_endpoints as _ep
+from app.school_contract import (
+    CAS_BUNDLE_JS_RE, CAS_COOKIE_DOMAIN, CAS_LOGIN_PATH,
+    CAS_REDIRECT_URL_RE, CAS_RSA_EXPONENT_FALLBACK, CAS_RSA_EXPONENT_RE,
+    CAS_RSA_MODULUS_RE, CAS_SESSION_COOKIES, CAS_TICKET_FIELDS, CSRF_SALT,
+    DNS_FALLBACK_HOSTS, LOGIN_PARAM_EXPECTED_MASTER, LOGIN_TOKEN_SALT,
+    MGMT_APP_NAME, MGMT_HOST, MGMT_SSO_PATTERN, MGMT_SSO_SERVICE,
+    PORTAL_SERVICE, SESSION_COOKIE_HOSTS, SESSION_INVALID_CODES,
+    SESSION_INVALID_HINTS, SSO_SERVICE_LOCATION_RE, SYSSET_VALUE_FIELD,
+    VPN_BASE, VPN_HOST_WITH_PORT, VPN_PUBLIC_HOST, WEBVPN_COOKIE_PATH,
+    WEBVPN_URL_PREFIX,
+)
+# 学校侧事实单一来源：四层链路的域名/路径/端口/盐/正则全部定义在 school_contract。
+# 下面三个旧名（BASE/SERVICE/RUMP_HOST）是历史 API 的兼容别名，既有导入方
+# （jwxt_state / jwxt_http / tests）继续可用；学校侧升级时只改契约模块一处，
+# 见 docs/upstream-contract.md；tests/test_school_contract.py 的反重复扫描
+# 强制「其余模块不得复制字面量」。
+BASE = VPN_BASE
+SERVICE = PORTAL_SERVICE
+RUMP_HOST = VPN_HOST_WITH_PORT
 VERSION = "2026-08-07.02"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 TIMEOUT = 15
@@ -67,7 +81,7 @@ KNOWN_PATHS = {
 }
 # DNS 兜底仅对学校域名生效（经共享池适配器的 HTTPS 连接；见 _DnsFallbackHTTPSConnection），
 # 不再全局替换 socket.getaddrinfo，避免影响进程内其它库的解析行为
-DNS_FALLBACK_HOSTS = ("sec.stpt.edu.cn",)
+# （域名清单单一来源：school_contract.DNS_FALLBACK_HOSTS，本行仅保留注释）
 DNS_FALLBACK_IPS: list[str] = []
 UPSTREAM_PARALLEL = 4  # 查询时对学校上游的最大并发请求数（--upstream-parallel / JWXT_UPSTREAM_PARALLEL 可调）
 # 上游并发上限（内存模式进程级；Redis 模式下由 jwxt_redis.RedisSemaphore 替换为
@@ -76,7 +90,7 @@ UPSTREAM_PARALLEL = 4  # 查询时对学校上游的最大并发请求数（--up
 UPSTREAM_GLOBAL = 8
 UPSTREAM_SEM = threading.BoundedSemaphore(8)
 
-# 上游 TLS 证书校验：学校 *.stpt.edu.cn 证书链可被系统信任，默认开启；
+# 上游 TLS 证书校验：学校侧证书链可被系统信任，默认开启；
 # 如学校侧临时出现证书异常，可用 JWXT_VERIFY_TLS=0 关闭（不推荐）
 VERIFY_TLS = True
 
@@ -88,7 +102,7 @@ MAX_WEEKS_TOTAL = 60     # weeks 参数最多保留的周数
 # /login 同账号会话复用：内存中已存在同 用户名+密码摘要 的有效会话时直接复用
 LOGIN_REUSE = True
 LOGIN_REUSE_MAX_AGE = 1800   # 只复用最近 N 秒内签发的会话（降低学校侧会话已过期的概率）
-# 复用前是否用 getHomeParam 轻量探测学校侧会话仍有效（默认开启）：
+# 复用前是否用门户会话校验接口轻量探测学校侧会话仍有效（默认开启）：
 # 失效会话会被清除并自动重新登录，避免“缓存会话过期但 /login 仍复用”导致查询失败
 LOGIN_REUSE_PROBE = True
 MAX_SESSIONS = 5000          # 内存会话数量上限，超出淘汰最旧
@@ -138,17 +152,9 @@ JUMP_CODE_TTL = 60
 # 健康请求只读缓存，不再同步阻塞探测（--health-probe-interval 可调）
 HEALTH_PROBE_INTERVAL = 10
 
-# 学校端“会话已失效”的信号：明确的状态码 + 常见提示文案。
-# 命中后视为认证类失败（不进入负缓存、按 401 返回并清除内存会话），
-# 避免把“强制下线/未登录”误当成瞬时上游故障反复重试。
-SESSION_INVALID_CODES = {
-    "53000010", "53000011", "53000012",
-    "53010010", "53010011", "53010012",
-}
-SESSION_INVALID_HINTS = (
-    "未登录", "未登陆", "已在其他地方登录", "强制下线",
-    "会话已失效", "登录已过期", "请重新登录",
-)
+# 学校端“会话已失效”的信号（状态码 + 提示文案）：定义在 school_contract
+# （本模块经 import 沿用旧名），命中后视为认证类失败（不进入负缓存、
+# 按 401 返回并清除内存会话），避免把“强制下线/未登录”误当成瞬时上游故障反复重试。
 
 
 class SchoolError(RuntimeError):
@@ -561,7 +567,7 @@ def rsa_encrypt(t, mod):
     if len(b) % 2:
         b.append(0)
     m = sum((b[2 * j] + (b[2 * j + 1] << 8)) * 65536 ** j for j in range(len(b) // 2))
-    h = format(pow(m, 0x10001, int(mod, 16)), "x")
+    h = format(pow(m, CAS_RSA_EXPONENT_FALLBACK, int(mod, 16)), "x")
     return h if len(h) % 2 == 0 else "0" + h
 
 
@@ -580,7 +586,7 @@ def to_webvpn(url):
     query = ""
     if "?" in path:
         path, query = path.split("?", 1)
-    u = "https://sec.stpt.edu.cn/webvpn/%s/%s/%s" % (ent(scheme), ent(host), path)
+    u = VPN_BASE + WEBVPN_URL_PREFIX + "%s/%s/%s" % (ent(scheme), ent(host), path)
     if query:
         u += "?" + query
     if frag:
@@ -655,31 +661,31 @@ class J:
         html = self.req("GET", cas_url, timeout=TIMEOUT).text
         if cached:
             return cached[0], cached[1], True
-        m = re.search(r'src="([^"]*app\.[^"]+\.js[^"]*)"', html)
+        m = CAS_BUNDLE_JS_RE.search(html)
         src = m.group(1)
         if src.startswith("/"):
-            src = "https://sec.stpt.edu.cn" + src
+            src = VPN_BASE + src
         js = self.req("GET", src, timeout=TIMEOUT).text
-        e = re.search(r'public_exponent:"([0-9a-f]+)"', js).group(1)
-        mod = re.search(r'modulus:"([0-9a-f]+)"', js).group(1)
+        e = CAS_RSA_EXPONENT_RE.search(js).group(1)
+        mod = CAS_RSA_MODULUS_RE.search(js).group(1)
         _cache_put(_RSA_KEY_CACHE, _RSA_KEY_CACHE_LOCK, cache_key,
                    (time.time(), e, mod), _RSA_KEY_CACHE_MAX, _RSA_KEY_CACHE_TTL)
         return e, mod, False
 
     def _tickets(self, service, cas_url=None):
-        key_url = cas_url or self.cas + "/lyuapServer/login"
+        key_url = cas_url or self.cas + CAS_LOGIN_PATH
         for attempt in (0, 1):
             e, mod, from_cache = self._key(key_url)
             try:
-                r = self.req("POST", self.cas + "/lyuapServer/v1/tickets?vpn-12-cas.stpt.edu.cn",
+                r = self.req("POST", self.cas + _ep.render("cas.tickets"),
                              headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
                                       "X-Requested-With": "XMLHttpRequest",
                                       "Accept": "application/json, text/plain, */*",
-                                      "loginUserToken": rsa_encrypt("lyasp" + str(int(time.time() * 1000)), mod)},
+                                      "loginUserToken": rsa_encrypt(LOGIN_TOKEN_SALT + str(int(time.time() * 1000)), mod)},
                              data={"username": self.u, "password": rsa_encrypt(self.p, mod),
                                    "service": service, "loginType": "", "id": "", "code": "", "otpcode": ""},
                              timeout=TIMEOUT).json()
-                if not isinstance(r, dict) or "tgt" not in r or "ticket" not in r:
+                if not isinstance(r, dict) or any(f not in r for f in CAS_TICKET_FIELDS):
                     raise SchoolError("CAS 登录票据获取失败: %s" % json.dumps(r, ensure_ascii=False)[:200])
                 return r["tgt"], r["ticket"]
             except Exception:
@@ -692,21 +698,23 @@ class J:
 
     def login(self, verify=True):
         self.req("GET", BASE + "/", allow_redirects=True, timeout=TIMEOUT)
-        d = self.req("GET", BASE + "/rump_frontend/getLoginParam/", timeout=TIMEOUT).json()["data"]
-        if d["auth"].get("master") != "cas":
+        d = self.req("GET", BASE + _ep.render("portal.login_param"),
+                     timeout=TIMEOUT).json()["data"]
+        if d["auth"].get("master") != LOGIN_PARAM_EXPECTED_MASTER:
             raise SchoolError("auth master: %s" % d["auth"])
-        r = self.req("GET", BASE + "/rump_frontend/redirectToCas/", timeout=TIMEOUT)
-        cas_url = re.search(r'href="(https?://[^"]+?lyuapServer/login[^"]*)"', r.text).group(1).replace("&amp;", "&")
-        self.cas = cas_url.split("/lyuapServer/login")[0]
+        r = self.req("GET", BASE + _ep.render("portal.redirect_to_cas"), timeout=TIMEOUT)
+        cas_url = CAS_REDIRECT_URL_RE.search(r.text).group(1).replace("&amp;", "&")
+        self.cas = cas_url.split(CAS_LOGIN_PATH)[0]
         tgt, ticket = self._tickets(SERVICE, cas_url)
         self._tgt = tgt
         # 三个相互独立的 CAS Cookie 写入并行执行（克隆会话避免共享 Session 线程安全问题）；
         # 完成后读回校验，缺失项串行补齐——即使学校侧是“覆盖”而非“合并”语义也不会丢 Cookie，
         # 最终状态与旧串行流程等价：串行 3 个往返 → 并行 1 + 校验 1 ≈ 省 1 个往返
-        cas_cookies = (("CASTGC", tgt), ("session", "1"), ("locale", "zh_CN"))
+        # （Cookie 名称与固定值来自契约；TGT Cookie 取动态值）
+        cas_cookies = tuple((n, tgt if v is None else v) for n, v in CAS_SESSION_COOKIES)
         jobs = [("c%d" % i, lambda jj, n=n, v=v: jj.req(
-            "POST", BASE + "/webvpn/cookie/",
-            data={"domain": "cas.stpt.edu.cn", "name": n, "value": v, "path": "/", "expires": ""},
+            "POST", BASE + WEBVPN_COOKIE_PATH,
+            data={"domain": CAS_COOKIE_DOMAIN, "name": n, "value": v, "path": "/", "expires": ""},
             timeout=TIMEOUT))
             for i, (n, v) in enumerate(cas_cookies)]
         try:
@@ -716,35 +724,36 @@ class J:
         except Exception:
             LOG.debug("并行写入 CAS Cookie 失败，回退串行")
             for n, v in cas_cookies:
-                self.req("POST", BASE + "/webvpn/cookie/",
-                         data={"domain": "cas.stpt.edu.cn", "name": n, "value": v,
+                self.req("POST", BASE + WEBVPN_COOKIE_PATH,
+                         data={"domain": CAS_COOKIE_DOMAIN, "name": n, "value": v,
                                "path": "/", "expires": ""}, timeout=TIMEOUT)
         try:
-            rv = self.req("GET", BASE + "/webvpn/cookie/?domain=%s&path=/" % quote("cas.stpt.edu.cn"),
-                          timeout=TIMEOUT)
+            rv = self.req("GET", BASE + WEBVPN_COOKIE_PATH + "?domain=%s&path=/"
+                          % quote(CAS_COOKIE_DOMAIN), timeout=TIMEOUT)
             have = {seg.partition("=")[0].strip() for seg in rv.text.split(";") if "=" in seg}
             for n, v in cas_cookies:
                 if n not in have:
-                    self.req("POST", BASE + "/webvpn/cookie/",
-                             data={"domain": "cas.stpt.edu.cn", "name": n, "value": v,
+                    self.req("POST", BASE + WEBVPN_COOKIE_PATH,
+                             data={"domain": CAS_COOKIE_DOMAIN, "name": n, "value": v,
                                    "path": "/", "expires": ""}, timeout=TIMEOUT)
         except Exception:
-            LOG.debug("CAS Cookie 读回校验失败，按未校验继续（loginFromCas 会兜底）")
-        self.req("GET", BASE + "/rump_frontend/loginFromCas/?ticket=" + quote(ticket),
+            LOG.debug("CAS Cookie 读回校验失败，按未校验继续（票据换发会兜底）")
+        self.req("GET", BASE + _ep.render("portal.login_from_cas", ticket=quote(ticket)),
                  allow_redirects=True, timeout=TIMEOUT)
         if verify:
             self.verify()
 
     def verify(self):
         """校验当前会话确实是目标学号（登录成功的判据），可与其它独立请求并行。"""
-        r = self.req("GET", BASE + "/rump_frontend/getHomeParam/", timeout=TIMEOUT)
+        r = self.req("GET", BASE + _ep.render("portal.home_param"), timeout=TIMEOUT)
         self._raise_if_session_invalid(r)
         home = r.json()
         if home.get("code") != 0 or home.get("data", {}).get("username") != self.u:
             raise SessionInvalidError("login verify failed")
 
     def get_app_list(self):
-        return self.req("GET", BASE + "/rump_frontend/getAppList/", timeout=TIMEOUT).json()
+        return self.req("GET", BASE + _ep.render("portal.app_list"),
+                        timeout=TIMEOUT).json()
 
     def jwxt(self, app_list=None, force=False):
         """解析教务系统管理端地址。app_list 可由调用方并行预取；默认走学校级缓存，
@@ -753,12 +762,13 @@ class J:
         self.mgmt, self.mgmt_key = _resolve_mgmt(self, d, force=force)
 
     def vcookies(self, domain, path="/"):
-        r = self.req("GET", BASE + "/webvpn/cookie/?domain=%s&path=%s" % (quote(domain), quote(path)),
+        r = self.req("GET", BASE + WEBVPN_COOKIE_PATH
+                     + "?domain=%s&path=%s" % (quote(domain), quote(path)),
                      timeout=TIMEOUT)
         for part in r.text.split(";"):
             if "=" in part:
                 n, v = part.strip().split("=", 1)
-                self.s.cookies.set(n, v, domain="sec.stpt.edu.cn", path="/")
+                self.s.cookies.set(n, v, domain=VPN_PUBLIC_HOST, path="/")
 
     def sso(self, prefix, pattern, hint, full=False):
         """管理端 SSO：默认快速路径 = 缓存 service + 会话 TGT 免密换票（省 2~3 个往返）；
@@ -774,9 +784,10 @@ class J:
             except Exception:
                 LOG.debug("TGT 免密换票失败，回退完整 CAS 登录 pattern=%s", pattern)
                 _, st = self._tickets(service)
-        self.req("GET", prefix + "api/cas/login?pattern=%s&ticket=%s" % (pattern, quote(st)),
+        self.req("GET", prefix + _ep.render("mgmt.cas_login", pattern=pattern,
+                                            ticket=quote(st)),
                  allow_redirects=True, timeout=TIMEOUT)
-        self.vcookies("10.1.200.4", "/")
+        self.vcookies(MGMT_HOST, "/")
 
     def student(self):
         """进入学生端门户并取得学生访问地址。优先走缓存/TGT 快速路径；
@@ -792,24 +803,24 @@ class J:
     def _student_once(self, full=False):
         if full:
             self.jwxt(force=True)
-            self.sso(self.mgmt, "manager-login", MGMT_SSO_SERVICE, full=True)
+            self.sso(self.mgmt, MGMT_SSO_PATTERN, MGMT_SSO_SERVICE, full=True)
         else:
-            self.sso(self.mgmt, "manager-login", MGMT_SSO_SERVICE)
+            self.sso(self.mgmt, MGMT_SSO_PATTERN, MGMT_SSO_SERVICE)
         ts = int(time.time())
-        csrf = hashlib.md5((str(ts) + "lyedu").encode()).hexdigest()
+        csrf = hashlib.md5((str(ts) + CSRF_SALT).encode()).hexdigest()
         r = self.req("GET",
-                     self.mgmt + "api/system/sysSet/selectByParamCode?vpn-12-10.1.200.4:9090&paramCode=XSFWDZ&_t=%d" % ts,
+                     self.mgmt + _ep.render("mgmt.sysset_param") % ts,
                      headers=dict(AJAX, csrfToken=csrf, Referer=self.mgmt), timeout=TIMEOUT)
         self._raise_if_session_invalid(r)
         r = r.json()
         # 保存原始学生访问地址（短），令牌里存它即可，复用时经 to_webvpn 确定性还原
-        self.stu_src = self._data(r, "学生访问地址")["paraValue"]
+        self.stu_src = self._data(r, "学生访问地址")[SYSSET_VALUE_FIELD]
         self.stu = to_webvpn(self.stu_src).split("#")[0]
         self.req("GET", self.stu, timeout=TIMEOUT)
 
     def hdrs(self, ts):
         return dict(AJAX, **{"Content-Type": "application/json;charset=UTF-8",
-                             "csrfToken": hashlib.md5((str(ts) + "lyedu").encode()).hexdigest(),
+                             "csrfToken": hashlib.md5((str(ts) + CSRF_SALT).encode()).hexdigest(),
                              "Referer": self.stu})
 
     def _raise_if_session_invalid(self, r):
@@ -842,8 +853,39 @@ class J:
             raise SchoolError("%s: 接口响应缺少 data 字段: %s" % (what, json.dumps(r, ensure_ascii=False)[:200]))
         return r["data"]
 
+    def call(self, endpoint, ts=None, body=None, raw=False, **params):
+        """按注册表端点通用调用 JSON API（新教务模块的推荐入口）。
+
+        - 仅支持学生服务/管理端两类 JSON API（school_endpoints 的 base=student/mgmt）：
+          自动带 AJAX + csrfToken 头、做会话失效检测，默认解包 data 字段；
+          认证/票据/Cookie 桥类端点有专门编排，请继续使用 self.req。
+        - body 为 dict 时序列化为 JSON 请求体；raw=True 返回原始 Response
+          （导出/下载类端点用），默认返回 data 字段（业务错误按 SchoolError 抛出）。
+        - params 传入路径占位（如 xh="2023000001"）；with_ts 模板的时间戳自动替换。
+        """
+        spec = _ep.get(endpoint)
+        if spec.base not in (_ep.BASE_STUDENT, _ep.BASE_MGMT):
+            raise ValueError("J.call 仅支持学生服务/管理端 JSON API：%s（base=%s）"
+                             % (endpoint, spec.base))
+        ts = int(time.time()) if ts is None else int(ts)
+        path = _ep.render(endpoint, **params)
+        if path.endswith("_t=%d"):
+            path = path % ts
+        base = self.stu if spec.base == _ep.BASE_STUDENT else self.mgmt
+        headers = dict(AJAX, **{"Content-Type": "application/json;charset=UTF-8",
+                                "csrfToken": hashlib.md5(
+                                    (str(ts) + CSRF_SALT).encode()).hexdigest(),
+                                "Referer": base or ""})
+        r = self.req(spec.method, (base or "") + path, headers=headers,
+                     data=json.dumps(body) if body is not None else None,
+                     timeout=TIMEOUT)
+        self._raise_if_session_invalid(r)
+        if raw:
+            return r
+        return self._data(r.json(), spec.description or endpoint)
+
     def current(self):
-        return self._data(self.api("GET", "api/baseInfo/semester/selectCurrentXnXq?vpn-12-10.1.200.4:9995&_t=%d",
+        return self._data(self.api("GET", _ep.render("student.current_semester"),
                                    int(time.time())), "当前学期")["semester"]
 
     def finals(self, sem, size=100):
@@ -879,15 +921,14 @@ class J:
         body = json.dumps({"pageNo": page_no, "pageSize": size,
                            "total": 0, "param": {"semester": sem}})
         return self._data(self.api(
-            "POST", "api/score/scorequerymanage/studentFinalQuery?vpn-12-10.1.200.4:9995&_t=%d",
-            ts, body), "期末成绩")
+            "POST", _ep.render("student.finals"), ts, body), "期末成绩")
 
     def info(self):
-        return self._data(self.api("GET", "api/student/studentInfo/selectXsSyByid/%s?vpn-12-10.1.200.4:9995&_t=%%d" % self.u,
+        return self._data(self.api("GET", _ep.render("student.info", xh=self.u),
                                    int(time.time())), "学籍信息")
 
     def sems(self):
-        return self._data(self.api("GET", "api/baseInfo/semester/selectXnXqListTy?vpn-12-10.1.200.4:9995&_t=%d",
+        return self._data(self.api("GET", _ep.render("student.semester_list"),
                                    int(time.time())), "学期列表")
 
     def uni(self):
@@ -931,13 +972,13 @@ class J:
         return data
 
     def _uni_page(self, ts, page_no, typ):
-        url = "api/score/universityScore/queryUniversityScore?vpn-12-10.1.200.4:9995&_t=%d"
+        url = _ep.render("student.university_score")
         body = json.dumps({"pageNo": page_no, "pageSize": 200,
                            "param": {"type": typ} if typ else {}})
         return self._data(self.api("POST", url, ts, body), "个人首页全部成绩")
 
     def credit(self):
-        return self._data(self.api("POST", "api/score/universityScore/queryCreditSituation?vpn-12-10.1.200.4:9995&_t=%d",
+        return self._data(self.api("POST", _ep.render("student.credit_situation"),
                                    int(time.time()), "{}"), "学分概况")
 
     def schedule(self, semester, weeks=None, odd_or_double=1):
@@ -949,7 +990,7 @@ class J:
         wl = [x for x in (_to_int(w, None) for w in weeks) if x is not None] or list(range(1, 26))
         body = json.dumps({"studentId": self.u, "oddOrDouble": _to_int(odd_or_double, 1),
                            "semester": semester, "weeks": wl})
-        return self._data(self.api("POST", "api/arrange/CourseScheduleAllQuery/studentCourseSchedule?vpn-12-10.1.200.4:9995&_t=%d",
+        return self._data(self.api("POST", _ep.render("student.course_schedule"),
                                    ts, body), "我的课表")
 
     def export_schedule(self, semester, weeks=None, odd_or_double=1, course_type="studentSchedule"):
@@ -963,8 +1004,8 @@ class J:
                             "weeks": wl,
                             "oddOrDouble": "1" if _to_int(odd_or_double, 1) == 1 else "0",
                             "semester": semester}])
-        url = self.stu + ("api/arrange/courseSchedulePrint/export?courseType=%s&vpn-12-10.1.200.4:9995&_t=%d"
-                          % (quote(course_type), ts))
+        url = self.stu + (_ep.render("student.schedule_export",
+                                     course_type=quote(course_type)) % ts)
         r = self.req("POST", url, headers=self.hdrs(ts), data=body, timeout=40)
         self._raise_if_session_invalid(r)
         if r.status_code != 200:
@@ -983,9 +1024,9 @@ def _invalidate_key(url):
 
 
 def _mgmt_target(app_list):
-    """从应用列表提取“教务系统”入口 URL（与 jwxt 原逻辑一致）。"""
+    """从应用列表提取“教务系统”入口 URL（与 jwxt 原逻辑一致；应用名单一来源：契约）。"""
     target = next(x["url"] for g in app_list["sites"].values()
-                  for x in g if x.get("name") == "教务系统")
+                  for x in g if x.get("name") == MGMT_APP_NAME)
     return BASE + target if target.startswith("/") else target
 
 
@@ -1024,9 +1065,10 @@ def _sso_service(j, prefix, pattern, hint, force=False):
             hit = _SSO_SERVICE_CACHE.get(key)
             if hit is not None and time.time() - hit[0] < _SSO_SERVICE_CACHE_TTL:
                 return hit[1]
-    r = j.req("GET", prefix + "api/cas/login?pattern=%s&returnUrl=%s" % (pattern, quote(prefix, safe="")),
+    r = j.req("GET", prefix + _ep.render("mgmt.cas_login_probe", pattern=pattern,
+                                         return_url=quote(prefix, safe="")),
               allow_redirects=False, timeout=TIMEOUT)
-    m = re.search(r"service=([^&]+)", r.headers.get("location") or "")
+    m = SSO_SERVICE_LOCATION_RE.search(r.headers.get("location") or "")
     if m:
         service = unquote(m.group(1))
         if not force:
@@ -1048,12 +1090,12 @@ def dump_cookies(j):
             for c in j.s.cookies]
 
 
-_SESSION_HOSTS = ("sec.stpt.edu.cn", "cas.stpt.edu.cn")
+_SESSION_HOSTS = SESSION_COOKIE_HOSTS
 
 
 def _cookie_needed(dom):
-    """Cookie 是否会在查询请求中被发送：请求只走 sec/cas 两个主机，
-    故保留等于这两个主机、其子域或其父域（如 .stpt.edu.cn）的 Cookie。"""
+    """Cookie 是否会在查询请求中被发送：请求只走 VPN/CAS 两个主机，
+    故保留等于这两个主机、其子域或其父域的 Cookie（主机清单单一来源：契约）。"""
     d = (dom or "").lstrip(".")
     if not d:
         return False
@@ -1061,9 +1103,9 @@ def _cookie_needed(dom):
 
 
 def dump_session_cookies(j):
-    """仅保留复用会话实际需要的 Cookie：查询请求只走 sec.stpt.edu.cn（WebVPN），
-    cas.stpt.edu.cn 仅作兜底；父域（.stpt.edu.cn）Cookie 也会发给这两个主机，需保留。
-    其余域 Cookie 无用途。默认 path=/ 省略以缩小令牌。"""
+    """仅保留复用会话实际需要的 Cookie：查询请求只走 WebVPN 入口主机（契约
+    SESSION_COOKIE_HOSTS 第一项），CAS 主机仅作兜底；父域 Cookie 也会发给
+    这两个主机，需保留。其余域 Cookie 无用途。默认 path=/ 省略以缩小令牌。"""
     out = []
     for c in dump_cookies(j):
         dom = c.get("domain") or ""
@@ -1888,6 +1930,10 @@ class Config:
     jump_cache_ttl: int = 30
     jump_code_ttl: int = 60
     health_probe_interval: int = 10
+    # 无凭据分层探测间隔（秒）：>0 时后台探测线程按此间隔执行 probe_layers
+    # 并刷新 state.school_layers（/health 的 school.layers 才有 webvpn/cas/portal 值）。
+    # 默认 0 = 关闭，避免常态下对学校门户的多余请求；升级排查/验收时可开启。
+    layer_probe_interval: int = 0
     verify_tls: str = "1"
     login_reuse: str = "1"
     login_reuse_max_age: int = 1800
@@ -1944,6 +1990,7 @@ def load_config():
         jump_cache_ttl=int(_env("JWXT_JUMP_CACHE_TTL", "30")),
         jump_code_ttl=int(_env("JWXT_JUMP_CODE_TTL", "60")),
         health_probe_interval=int(_env("JWXT_HEALTH_PROBE_INTERVAL", "10")),
+        layer_probe_interval=int(_env("JWXT_LAYER_PROBE_INTERVAL", "0")),
         verify_tls=_env("JWXT_VERIFY_TLS", "1"),
         login_reuse=_env("JWXT_LOGIN_REUSE", "1"),
         login_reuse_max_age=int(_env("JWXT_LOGIN_REUSE_MAX_AGE", "1800")),

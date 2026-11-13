@@ -1,6 +1,8 @@
 # 教务查询编排 · Stpt-Query
 
-> 把固定的 Dify 工作流重写为**单体应用 + 边缘代理**：查询、渲染、分析、PDF 与内嵌查询代理同进程运行，不再依赖 Dify。
+> **单体应用 + 边缘代理**：查询、渲染、分析、PDF 与内嵌查询代理同进程运行。
+> 对外 JSON 接口统一 `/api/v1/*` 命名与统一语义（信封 + 稳定错误码，见
+> [docs/api-semantics.md](docs/api-semantics.md)），不再兼容 Dify 契约。
 
 ![Status](https://img.shields.io/badge/status-active-brightgreen)
 ![Role](https://img.shields.io/badge/role-backend-blue)
@@ -29,14 +31,14 @@
 
 ## 关于
 
-本仓库把固定的「汕职院教务信息查询」Dify 工作流重写为自包含项目，由两个容器组成：`app`（单体应用）与 `frontend`（前端）。查询代理已并入 `app/` 包，以**进程内 ASGI** 方式被调用，负责学校统一认证登录、免密跳转与成绩/课表原始查询；编排层负责固定工作流、成绩/课表渲染、成绩分析 LLM、异常分类与 PDF；前端托管原 dify-workflow-api 的完整页面，是默认唯一对外入口。
+本仓库是自包含项目，由两个容器组成：`app`（单体应用）与 `frontend`（前端）。查询代理已并入 `app/` 包，以**进程内 ASGI** 方式被调用，负责学校统一认证登录、免密跳转与成绩/课表原始查询；编排层负责固定工作流、成绩/课表渲染、成绩分析 LLM、异常分类与 PDF；前端托管查询页面与后台，是默认唯一对外入口。
 
 | 项目 | 内容 |
 | --- | --- |
-| 身份 | 教务查询编排服务（替代 Dify 工作流） |
-| 方向 | 教育信息化 · 教务数据服务 |
+| 身份 | 教务查询编排服务（统一 /api/v1/* 语义） |
+| 方向 | 教育信息化 · 教务数据服务（信封式 API + 稳定错误码） |
 | 方式 | 单体应用 + 边缘代理（2 容器）+ 统一身份认证（WebVPN/CAS）+ OpenAI 兼容 LLM |
-| 目标 | 不依赖 Dify 地为页面与自动化脚本提供稳定、可扩展的教务查询接口 |
+| 目标 | 不依赖 Dify 地为页面与自动化脚本提供稳定、可扩展的教务查询接口（统一语义见 docs/api-semantics.md） |
 
 ## 技能栈
 
@@ -53,14 +55,14 @@
 
 | 项目 | 简介 | 技术栈 | 状态 |
 | --- | --- | --- | --- |
-| [单体应用](app/) | 固定工作流编排 + 成绩/课表渲染 + 成绩分析 LLM + PDF + 内嵌查询代理（登录/免密跳转/原始查询） | Python · FastAPI · httpx · reportlab · LibreOffice | 活跃 |
-| [前端](frontend/) | Nginx 托管原 dify-workflow-api 页面并反向代理 /run 等接口 | Nginx | 活跃 |
+| [单体应用](app/) | 统一 /api/v1/* 语义的查询编排 + 成绩/课表渲染 + 成绩分析 LLM + PDF + 内嵌查询代理（登录/免密跳转/原始查询） | Python · FastAPI · httpx · reportlab · LibreOffice | 活跃 |
+| [前端](frontend/) | Nginx 托管查询页与后台，反向代理 /api/v1/* 并注入网关令牌 | Nginx | 活跃 |
 
 ## 架构
 
 ```mermaid
 flowchart LR
-    U[用户浏览器] -->|默认唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /run、/notices、/health*"]
+    U[用户浏览器] -->|默认唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /api/v1/*、/health*"]
     F -->|web 网络| S["app（单体应用）<br/>编排 + 渲染 + 分析 + PDF<br/>内嵌查询代理（进程内 ASGI）"]
     S -.可选外部 Redis.-> R["Redis（限流/日志聚合/异步任务，默认不启用）"]
     S -.成绩分析.-> L["DeepSeek（OpenAI 兼容）"]
@@ -73,8 +75,8 @@ flowchart LR
 
 | 容器 | 职责边界 | 默认网络 | 对外契约 |
 | --- | --- | --- | --- |
-| `frontend` | 静态页面、CSP/安全响应头、注入网关令牌并反代 API | `web` | `APP_PORT` 上的页面和受代理 API |
-| `app` | 固定工作流编排、成绩/课表渲染、LLM、PDF、日志、异步任务，以及内嵌查询代理（统一认证/会话/免密跳转/原始查询/课表导出） | `web` | Bearer `API_TOKEN` 保护 `/run`、`/notices*`；`/health*` 与 `/service-status` 有公开/受限契约 |
+| `frontend` | 静态页面、CSP/安全响应头、注入网关令牌并反代 /api/v1/* | `web` | `APP_PORT` 上的页面和受代理 API |
+| `app` | 固定工作流编排、成绩/课表渲染、LLM、PDF、日志、异步任务，以及内嵌查询代理（统一认证/会话/免密跳转/原始查询/课表导出） | `web` | Bearer `API_TOKEN` 保护 `/api/v1/run`、`/api/v1/notices*`、`/api/v1/service-status`、`/api/v1/status`；`/health*` 探针有公开/受限契约 |
 
 默认编排保持“只有 frontend 暴露宿主端口”。需要直连 `app` 做验收时，自行创建 override：
 
@@ -96,7 +98,31 @@ curl -s http://127.0.0.1:18080/health/ready
 若把直连地址从 `127.0.0.1` 改为 `0.0.0.0`，必须自行补上 TLS、防火墙、反向代理与最小来源访问控制；
 `/metrics` 等运维接口只适合回环或内网访问。
 
-## 与 Dify 工作流的映射
+## 学校侧契约与升级路径
+
+对接学校的全部「事实」（域名/路径/端口、RSA 提取正则、csrf/票据盐、
+`vpn-12-` 主机映射、会话失效文案与错误码）集中在 [app/school_contract.py](app/school_contract.py)
+单一模块；上游端点清单（登录链、SSO 链、管理端、学生服务 8 个业务 API）
+登记在 [app/school_endpoints.py](app/school_endpoints.py) 注册表，新教务模块
+经 `J.call()` 调用即可，无需触碰认证编排。测试反重复扫描保证事实不会被复制到
+契约之外——**学校侧升级时改契约一处 + 跑自检即可恢复**：
+
+```bash
+# 无凭据自检：WebVPN/门户/CAS 三层 + 契约事实逐条判定（不登录、只读 GET）
+python scripts/contract_selfcheck.py --json
+# 深度自检（真实登录链路验证教务层）
+JWXT_HEALTH_USERNAME=... JWXT_HEALTH_PASSWORD=... python scripts/contract_selfcheck.py --deep
+```
+
+运行时分层观测：`/health` 与 `/health/public` 的 `school.layers` 给出
+webvpn/cas/portal/jwxt 四层三态结论；`/health/deep` 的 stages 逐阶段标注
+失败层；`classify_error()` 的 `meta.layer` 提供异常粗归因。
+完整取证方法、升级应急流程与接口面扩展指引见
+[docs/upstream-contract.md](docs/upstream-contract.md)。
+
+## 与原 Dify 工作流的对照（历史）
+
+> 本节仅为迁移历史对照；当前对外契约已统一为 /api/v1/* 语义，不再兼容 Dify。
 
 | Dify 节点 | 实现 |
 | --- | --- |
@@ -112,17 +138,18 @@ curl -s http://127.0.0.1:18080/health/ready
 
 ## 异步查询任务
 
-`POST /run/jobs` 用于高峰排队。接口先同步完成学校登录，把密码换成短期
+`POST /api/v1/run/jobs` 用于高峰排队。接口先同步完成学校登录，把密码换成短期
 session/任务票据，然后立即返回 `job_id`；队列、去重键、任务状态和结果都保存在 Redis。
 **Redis 队列不保存密码**，任务负载不含明文凭据；日志和轮询响应也不返回 session 或 token。
 
 > 单体默认拓扑**不内置 Redis**（单实例、同步查询）。`/run/jobs` 会返回 503 并说明
-> 「异步查询未启用」，前端自动回退到 `POST /run`。需要异步排队或多副本时，自备外部
+> 「异步查询未启用」（code=`capacity.jobs_disabled`），前端按稳定错误码回退到
+> `POST /api/v1/run`。需要异步排队或多副本时，自备外部
 > Redis 并设置 `REDIS_URL`（查询代理侧可同时设置 `JWXT_REDIS_URL`）。
 
 ```text
-POST /run/jobs        请求体与 POST /run 相同，返回 {job_id, state, position, poll_url}
-GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
+POST /api/v1/run/jobs        请求体与 POST /api/v1/run 相同；受理信封 data={job_id, state, position, poll_url}
+GET  /api/v1/run/jobs/{id}   轮询信封 data.state=queued/running/success/failed；终态 data.result 为同形状嵌套信封
 ```
 
 - 轮询响应包含 `phase`、`phase_index`、`phase_label` 和 `phase_started_at`。阶段依次为
@@ -132,7 +159,7 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 - `JOB_WORKERS` 是消费协程数；总活跃任务继续受 `GLOBAL_CONCURRENCY`、`LLM_CONCURRENCY`、
   `PDF_CONCURRENCY` 与内嵌查询代理上游信号量保护。
 - 同一学号 + 查询参数在排队/执行中自动去重；终态结果按 `JOB_RESULT_TTL_SECONDS` 保留。
-- Redis 未配置或运行中不可用时，异步受理返回 503；前端识别后会回退 `POST /run`，
+- Redis 未配置或运行中不可用时，异步受理返回 503；前端按稳定错误码（`capacity.jobs_disabled`）识别后回退 `POST /api/v1/run`，
   默认单体部署（单实例、无 Redis）即为此模式。
 
 ## 网络日历订阅（只读 ICS）
@@ -232,11 +259,11 @@ GET  /run/jobs/{id}   state=queued/running/success/failed；终态携带 result
 | DELETE | `/api/v1/calendars` | 关闭订阅并彻底删除凭据与快照（幂等） |
 | POST | `/api/v1/calendars/qr` | 订阅二维码矩阵（本地生成 `webcal://` 二维码，仅返回模块矩阵，需 L1/L2 证明） |
 | GET | `/cal/{token}.ics` | 日历客户端订阅源（支持 ETag/304，`Last-Modified` 为 RFC 9110 HTTP-date，无网关鉴权） |
-| GET/DELETE | `/admin/api/calendars*` | 后台管理（需 `ADMIN_TOKEN`） |
-| GET | `/admin/api/calendar-config` | 当前生效的节次/学期配置（文件基线或后台校准快照） |
-| PUT | `/admin/api/calendar-config/periods` | 校准节次起止时间与来源（需 `ADMIN_TOKEN`） |
-| PUT | `/admin/api/calendar-config/terms` | 校准学期基准/第一周定义（需 `ADMIN_TOKEN`） |
-| POST | `/admin/api/calendar-config/reset` | 恢复仓库文件基线（需 `ADMIN_TOKEN`） |
+| GET/DELETE | `/api/v1/admin/calendars*` | 后台管理（需 `ADMIN_TOKEN`，信封响应） |
+| GET | `/api/v1/admin/calendar-config` | 当前生效的节次/学期配置（文件基线或后台校准快照，信封响应） |
+| PUT | `/api/v1/admin/calendar-config/periods` | 校准节次起止时间与来源（需 `ADMIN_TOKEN`） |
+| PUT | `/api/v1/admin/calendar-config/terms` | 校准学期基准/第一周定义（需 `ADMIN_TOKEN`） |
+| POST | `/api/v1/admin/calendar-config/reset` | 恢复仓库文件基线（需 `ADMIN_TOKEN`） |
 
 ## 查询日志与可观测性
 
@@ -269,17 +296,17 @@ Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生�
   `FILE_LOG_BACKUP_COUNT` 个备份。Compose 默认挂载具名持久卷，容器与 Docker daemon
   重启后日志保留；更长期的审计与检索建议接入集中日志平台。
 - 业务编排数据仍不落盘；文件卷只承载查询日志（服务状态从 `event=query` 记录派生）。
-  文件与（可选）Redis 互为冗余，任一失败不影响 `/run` 和另一条通道；最近一次文件错误可通过
+  文件与（可选）Redis 互为冗余，任一失败不影响 `/api/v1/run` 和另一条通道；最近一次文件错误可通过
   `/health` 观察。
-- Redis 短暂不可用时，`/run` 继续工作，日志降级写本实例 WAL，`/query-logs` 与
-  `/service-status` 降级到本实例历史，限流降级为本副本固定窗口。无 Redis 模式只有
+- Redis 短暂不可用时，`/api/v1/run` 继续工作，日志降级写本实例 WAL，`/query-logs` 与
+  `/api/v1/service-status` 降级到本实例历史，限流降级为本副本固定窗口。无 Redis 模式只有
   进程内有界历史；多副本之间不会共享状态，严禁让多个副本解析到同一个可轮转 JSONL 文件。
 - `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
-  `docker compose exec app curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/query-logs`；
+  `docker compose exec app curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/api/v1/query-logs`；
   生产建议经集中日志查询，不长期依赖进程内存。
-- 公开站通过 `GET /health/public` 获取本站、查询代理和学校服务的粗粒度状态；
+- 公开站通过 `GET /api/v1/status` 获取本站、查询代理和学校服务的粗粒度状态（信封）；
   接口只返回状态、延迟和检查时间，不暴露内部地址、错误详情或凭据，结果缓存 15 秒。
-- `GET /service-status` 返回最近 100 次公开状态和聚合计数中的「已受理次数」。
+- `GET /api/v1/service-status` 返回最近 100 次公开状态和聚合计数中的「已受理次数」（信封；统计在 `data.stats`，`success_count` 消除同名歧义）。
   Redis 可用时聚合值按多副本累加；启用文件通道时最多扫描
   `SERVICE_STATUS_SCAN_LIMIT` 行来恢复最近窗口，并在降级时返回受限扫描。
   文件扫描结果默认缓存 `SERVICE_STATUS_CACHE_SECONDS=3`；文件或 Redis 聚合
@@ -292,13 +319,13 @@ Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生�
 打开 `/admin` 后输入独立 `ADMIN_TOKEN`；`ADMIN_TOKEN` 留空时后台 API 完全禁用。
 Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共网关令牌；因此查询用户无法访问。
 
-- `GET /admin/api/query-logs` 支持关键字、成功状态、分类、项目、时间范围和分页；
+- `GET /api/v1/admin/query-logs` 支持关键字、成功状态、分类、项目、时间范围和分页；
   文件通道启用时优先读取共享卷全部实例目录并按 `run_id` 去重，默认全量扫描保证
   匹配总数和统计完整；显式传入 `scan_limit` 可用于受限诊断。基础分页为 20 条/页，
   可选择 50/100 条/页。未启用时降级 Redis/内存最近记录。
 - 响应返回匹配总数、成功率、失败分类和数据源。日志仍先经过白名单脱敏，页面只在当前
   标签页的 `sessionStorage` 中保留管理员凭据，退出即清除。
-- `GET /admin/api/metrics` 暴露容器 CPU、内存/RSS、日志磁盘、网络累计、运行时长、
+- `GET /api/v1/admin/metrics` 暴露容器 CPU、内存/RSS、日志磁盘、网络累计、运行时长、
   宿主机 CPU/内存/负载/磁盘 I/O/网络、日志文件存储增长和应用近 5 分钟负载；
   编排内存按单体应用、前端入口分桶聚合（仅配置 `REDIS_URL` 时才追加 Redis 分桶），自动适配宿主
   cgroup v1/v2 与 systemd/cgroupfs 驱动，宿主 cgroup 不可读时按进程 RSS 估算并在界面标注；
@@ -324,7 +351,7 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 
 - 公开契约：`GET /notices/active` 返回上线通知；`GET /notices/history?limit=50`
   返回最近下线通知。Nginx 注入公共网关令牌，浏览器不持有凭据。
-- 管理契约：`GET/POST /admin/api/notices`、`PATCH/DELETE /admin/api/notices/{id}`，
+- 管理契约：`GET/POST /api/v1/admin/notices`、`PATCH/DELETE /api/v1/admin/notices/{id}`，
   使用独立 `ADMIN_TOKEN`。已发布内容不可改，修订流程是下线旧通知并新建修订版；
   只有草稿可删除。
 - 存储与降级：共享 JSONL 文件是权威存储，路径由 `NOTICE_FALLBACK_PATH` 控制；
@@ -352,8 +379,8 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 
 ## 可靠性与过载保护
 
-- 单体应用对 `/run` 设置全局并发槽位（默认 4）和等待超时；满载返回 HTTP 503。
-- `/api/v1/calendars*`（含二维码）与 `/run` 共用同一按 IP 限流与全局并发保护：
+- 单体应用对 `/api/v1/run` 设置全局并发槽位（默认 4）和等待超时；满载返回 503 信封（code=`capacity.concurrency_full`）。
+- `/api/v1/calendars*`（含二维码）与 `/api/v1/run` 共用同一按 IP 限流与全局并发保护：
   这些接口能触发本地密码比对或学校登录，不允许绕过编排层保护。
 - 单次编排有总预算（默认 100 秒），避免学校上游或 LLM 故障长期占用连接。
 - `REDIS_URL` 配置后使用固定窗口共享限流；Redis 不可用时降级为本副本限流，优先保持查询可用。
@@ -367,22 +394,31 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 - 使用外部 Redis 时需自行配置内存上限与淘汰策略（建议 `maxmemory` + `volatile-lru`），
   避免临时状态挤占内存。
 - 前端 Nginx 使用固定 2 worker 与 4096 连接（与 `pids_limit: 32` 匹配），静态响应压缩/短缓存；
-  `/run` 与任务轮询响应不缓存。
+  `/api/v1/run` 与任务轮询响应不缓存。
 
 ## 当前目标
 
 | 目标 | 说明 | 期限 |
 | --- | --- | --- |
+| 教务系统接口面枚举（复刻阶段 0） | 用已登录会话拉学生服务 SPA 的 JS 包，枚举全部 `api/` 端点并登记进 `school_endpoints.py`（任务书：`docs/task-01-api-discovery.md`） | 未定 |
 | 真实账号端到端验收 | 用真实学号/密码跑通成绩、课表、成绩分析、PDF 四条链路 | 未定 |
 
 ## 路线图
 
-- 近期：真实账号端到端验收；异步任务多副本压测与学校上游安全并发标定；
-  单二进制分发形态（计划书已出待评审；前置项为 LibreOffice 移除——纯 Python 课表 PDF，
-  同时是容器内存上限 640m → 256m 的钥匙）
-- 已完成：**全仓 65 项审查修复**（四子系统并行：编排 HTTP 层拆分 `create_app` 为
-  `context.py` + `routes_*.py`；查询代理内存上限与安全掩码收敛；日历跨刷新 304/分页/预言机修复；
-  前端内联脚本外置 `app.js` 与 CSP 整类哈希风险消除；compose 日志滚动、优雅停机与边缘限流；
+- 近期：**复刻整个教务系统**（按 AGENTS.md 第六节标准流程逐模块接入：考试安排、
+  学籍卡、培养方案、评教等，全部走 /api/v1/* 信封语义）；真实账号端到端验收；
+  异步任务多副本压测与学校上游安全并发标定；单二进制分发形态（前置项为
+  LibreOffice 移除——纯 Python 课表 PDF）
+- 已完成：**统一接口语义**（全部对外 JSON 接口迁移 `/api/v1/*`，五键信封 +
+  21 个稳定错误码 + 真实 HTTP 状态码；前端以 `code` 编程化判断，消除错误文案
+  正则耦合；不再兼容 Dify，规范见 `docs/api-semantics.md`，标准流程见
+  `AGENTS.md` 第六节）
+- 已完成：**学校侧契约基础设施**（`school_contract.py` 单一来源 + 接口注册表
+  `school_endpoints.py` + 分层健康探测 `school.layers` + 契约自检脚本
+  `scripts/contract_selfcheck.py` + 重适配手册 `docs/upstream-contract.md`；
+  学校侧升级改契约一处即可恢复，反重复扫描测试强制）
+- 已完成：**全仓 65 项审查修复**（编排 HTTP 层拆分、查询代理内存上限与安全掩码、
+  日历 304/分页修复、前端脚本外置与 CSP 风险消除、compose 日志滚动与优雅停机、
   测试基线 238 → 255 通过）
 - 已完成：**网络日历订阅**（页脚入口 + 查询结果区自动展示；只读 ICS 订阅、托管凭据加密存储、后台可查可管；
   设备识别一键导入 + 本地二维码扫码订阅）
@@ -484,11 +520,11 @@ Stpt-Query/
 ├── app/                       # 单体应用（编排 + 渲染 + 分析 + PDF + 内嵌查询代理）
 │   ├── main.py                # 应用装配：Settings + create_app（路由按域拆分至 routes_*.py）
 │   ├── context.py             # AppContext 共享状态与请求期助手（限流/日志/服务状态/探针）
-│   ├── routes_run.py          # POST /run、/v1/workflows/run
-│   ├── routes_jobs.py         # 异步任务受理与轮询 /run/jobs*
-│   ├── routes_health.py       # /health*、/metrics、/query-logs、/service-status
-│   ├── routes_admin.py        # /admin/api/query-logs、/admin/api/metrics
-│   ├── routes_notices.py      # /notices/*、/admin/api/notices*
+│   ├── routes_run.py          # POST /api/v1/run
+│   ├── routes_jobs.py         # 异步任务受理与轮询 /api/v1/run/jobs*
+│   ├── routes_health.py       # /health*（探针豁免）、/metrics、/api/v1/status、/api/v1/query-logs、/api/v1/service-status
+│   ├── routes_admin.py        # /api/v1/admin/query-logs、/api/v1/admin/metrics
+│   ├── routes_notices.py      # /api/v1/notices/*、/api/v1/admin/notices*
 │   ├── jobs_worker.py         # 异步任务 worker 循环、空闲退避与僵尸任务回收
 │   ├── metrics.py             # 容器 CPU/内存/磁盘/网络资源监控
 │   ├── notices.py             # 全站通知文件权威存储与 Redis 恢复副本
@@ -498,13 +534,16 @@ Stpt-Query/
 │   ├── llm.py                 # OpenAI 兼容 LLM 客户端
 │   ├── pdf.py                 # Markdown→PDF
 │   ├── prompts.py             # 成绩分析提示词
-│   ├── schema.py              # 请求/响应模型
+│   ├── schema.py              # 请求/响应模型（内部载荷；出站经 api_semantics 信封）
+│   ├── api_semantics.py       # 统一接口语义单一来源（信封/错误码/分页，docs/api-semantics.md）
 │   ├── querylog.py            # 查询日志（结构化 JSON、脱敏、可选文件轮转）
 │   ├── trace.py               # run_id 与日志
 │   ├── jwxt_core.py           # 内嵌查询代理：常量/上游客户端/查询渲染/配置
 │   ├── jwxt_state.py          # 内嵌查询代理：会话/缓存/限流/短码/健康指标
 │   ├── jwxt_http.py           # 内嵌查询代理：FastAPI 应用工厂（进程内 ASGI）
 │   ├── jwxt_redis.py          # 内嵌查询代理：可选 Redis 后端
+│   ├── school_contract.py     # 学校侧契约单一来源（域名/路径/盐/正则，升级改这里）
+│   ├── school_endpoints.py    # 上游接口注册表（21 端点；新教务模块的挂载点）
 │   └── rtf_pdf.py             # 课表 RTF→PDF（LibreOffice profile 池）
 ├── Dockerfile                 # 单体镜像（python:3.11-slim + LibreOffice + CJK 字体）
 ├── requirements.txt
@@ -521,8 +560,13 @@ Stpt-Query/
 │   ├── src/admin.css          # 后台专属样式（import index.css 复用共享令牌）
 │   └── package.json           # npm run build 重新编译样式
 ├── design-system/edu-query-app/   # 项目内品牌方案（BRAND/MASTER，设计事实）
-├── tests/                     # pytest（渲染/分类/编排/HTTP/查询日志）
-├── docs/kubernetes-migration.md   # K8s 迁移指引
+├── tests/                     # pytest（渲染/分类/编排/HTTP/查询日志/契约）
+├── scripts/
+│   └── contract_selfcheck.py  # 学校侧契约自检（无凭据分层探测 + 可选深度登录链路）
+├── docs/
+│   ├── kubernetes-migration.md    # K8s 迁移指引
+│   ├── production-operations.md   # 生产容量与运维
+│   └── upstream-contract.md       # 学校侧契约取证/升级重适配手册
 ├── Li-Design/                 # Git 子模块：仅设计/README 规范参考，非运行时依赖
 ├── docker-compose.yml         # 两容器（app + frontend）单实例编排
 ├── compose.review.yml         # 评审/演练栈卷名隔离覆盖（须与主 compose 叠加使用）

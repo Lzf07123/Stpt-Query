@@ -65,11 +65,11 @@ def test_admin_calendar_tab_and_actions():
 
 
 def test_admin_error_detail_is_normalized():
-    """后台 request() 必须把 FastAPI 的对象数组 detail 转成可读文本（避免 [object Object]）。"""
+    """后台 request() 必须把统一信封的校验明细（data.errors 对象数组）转成可读文本。"""
     script = _read("frontend/static/admin.js")
     assert "function errorDetail(" in script
-    assert "Array.isArray(detail)" in script
-    assert "throw new Error(errorDetail(" in script
+    assert "Array.isArray(errors)" in script
+    assert "payload.message" in script
     assert "String(payload.detail)" not in script
 
 

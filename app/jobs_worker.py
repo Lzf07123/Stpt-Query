@@ -20,7 +20,7 @@ async def _run_one_job(app, ctx: AppContext) -> None:
         claimed = None
         try:
             if app.state.job_store is None:
-                # 无 Redis 部署下异步任务禁用（/run/jobs 返回 503），worker 休眠等重启
+                # 无 Redis 部署下异步任务禁用（/api/v1/run/jobs 返回 503），worker 休眠等重启
                 await asyncio.sleep(5)
                 continue
             claimed = await app.state.job_store.claim(cfg.job_result_ttl_seconds)

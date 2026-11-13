@@ -1,8 +1,11 @@
 """对外 API、订阅源与后台管理接口。
 
-- `/api/v1/calendars*`：浏览器调用，经 nginx 注入网关令牌（与 /run 同级信任模型）
-- `/cal/{token}.ics`：日历客户端直接抓取，**不注入网关令牌**，路径令牌即凭据
-- `/admin/api/calendars*`：复用现有 ADMIN_TOKEN 鉴权
+- `/api/v1/calendars*`：浏览器调用，经 nginx 注入网关令牌（与 /api/v1/run 同级信任模型）
+- `/cal/{token}.ics`：日历客户端直接抓取，**不注入网关令牌**，路径令牌即凭据（豁免信封）
+- `/api/v1/admin/calendars*`：复用现有 ADMIN_TOKEN 鉴权
+
+所有 JSON 响应统一走 api_semantics 信封；CalendarError 的自有业务码经
+code_for_calendar 归入统一错误码注册表。
 """
 from __future__ import annotations
 
@@ -14,6 +17,8 @@ from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from ..api_semantics import (ApiError, code_for_calendar, ok_envelope,
+                             pagination)
 from .service import CalendarAuthError, CalendarError, CalendarService
 
 USERNAME = Field(..., min_length=10, max_length=10, pattern=r"^\d{10}$")
@@ -75,17 +80,19 @@ def _http_date(value: Any) -> Optional[str]:
     return format_datetime(parsed.astimezone(timezone.utc), usegmt=True)
 
 
-def _error(exc: CalendarError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "code": exc.code})
+def _calendar_api_error(exc: CalendarError) -> ApiError:
+    """CalendarError → 统一语义异常（自有码归入统一注册表，详情透传）。"""
+    return ApiError(code_for_calendar(exc.code), message=exc.detail,
+                    status_code=exc.status_code)
 
 
 def build_router(service: CalendarService, require_auth: Callable[..., Any],
                  require_admin: Callable[..., Any],
                  rate_limit: Optional[Callable[..., Any]] = None) -> APIRouter:
-    """浏览器 API 与 /run 同级信任模型：既要网关令牌，也要过编排层限流。
+    """浏览器 API 与 /api/v1/run 同级信任模型：既要网关令牌，也要过编排层限流。
 
     日历接口能触发学校登录（L3）或本地密码比对（L2），不加上限等同于给
-    账号密码猜测留一条绕过 /run 限流与学校风控的旁路。
+    账号密码猜测留一条绕过查询限流与学校风控的旁路。
     """
     router = APIRouter()
     guarded: List[Any] = [Depends(require_auth)]
@@ -94,21 +101,29 @@ def build_router(service: CalendarService, require_auth: Callable[..., Any],
 
     async def _guard(coro) -> Response:
         try:
-            return JSONResponse(content=await coro)
+            return JSONResponse(content=ok_envelope(await coro))
         except CalendarError as exc:
-            return _error(exc)
+            raise _calendar_api_error(exc)
 
     async def _guard_sync(call) -> Response:
         """同步只读动作（本地编码，无上游 IO）统一走同一套错误映射。"""
         try:
-            return JSONResponse(content=call())
+            return JSONResponse(content=ok_envelope(call()))
         except CalendarError as exc:
-            return _error(exc)
+            raise _calendar_api_error(exc)
+
+    async def _guard_wrap(value: Any) -> Response:
+        try:
+            if hasattr(value, "__await__"):
+                value = await value
+            return JSONResponse(content=ok_envelope(value))
+        except CalendarError as exc:
+            raise _calendar_api_error(exc)
 
     # ---------------- 公开配置 ----------------
     @router.get("/api/v1/calendars/config", dependencies=[Depends(require_auth)])
-    async def calendar_config() -> dict:
-        return service.public_config()
+    async def calendar_config() -> Response:
+        return await _guard_sync(service.public_config)
 
     # ---------------- 浏览器 API ----------------
     @router.post("/api/v1/calendars", dependencies=guarded)
@@ -126,7 +141,7 @@ def build_router(service: CalendarService, require_auth: Callable[..., Any],
     async def qr(body: AuthBody) -> Response:
         """订阅二维码矩阵：本地生成（webcal:// 指向订阅源），不经过第三方服务。"""
         return await _guard_sync(lambda: service.qr(body.username, body.password,
-                                                   body.semester, body.verified_token))
+                                                    body.semester, body.verified_token))
 
     @router.post("/api/v1/calendars/refresh", dependencies=guarded)
     async def refresh(body: AuthBody) -> Response:
@@ -142,7 +157,7 @@ def build_router(service: CalendarService, require_auth: Callable[..., Any],
         return await _guard(service.close(body.username, body.password, body.semester,
                                           verified_token=body.verified_token))
 
-    # ---------------- 订阅源（日历客户端直连，无网关令牌） ----------------
+    # ---------------- 订阅源（日历客户端直连，无网关令牌，豁免信封） ----------------
     @router.get("/cal/{token}.ics", include_in_schema=False)
     async def feed(request: Request, token: str) -> Response:
         try:
@@ -166,69 +181,62 @@ def build_router(service: CalendarService, require_auth: Callable[..., Any],
                         headers=headers)
 
     # ---------------- 后台管理 ----------------
-    @router.get("/admin/api/calendars", dependencies=[Depends(require_admin)])
+    @router.get("/api/v1/admin/calendars", dependencies=[Depends(require_admin)])
     async def admin_list(username: Optional[str] = Query(default=None, min_length=10, max_length=10),
                          semester: Optional[str] = Query(default=None, max_length=16),
                          state: Optional[str] = Query(default=None, max_length=24),
                          page: int = Query(default=1, ge=1, le=1000),
-                         size: int = Query(default=20, ge=1, le=100)) -> dict:
-        return service.admin_list(username=username, semester=semester, state=state,
-                                  page=page, size=size)
+                         size: int = Query(default=20, ge=1, le=100)) -> Response:
+        return await _guard_sync(lambda: service.admin_list(
+            username=username, semester=semester, state=state,
+            page=page, size=size))
 
-    @router.get("/admin/api/calendars/stats", dependencies=[Depends(require_admin)])
-    async def admin_stats() -> dict:
-        return service.store.stats()
+    @router.get("/api/v1/admin/calendars/stats", dependencies=[Depends(require_admin)])
+    async def admin_stats() -> Response:
+        return await _guard_sync(service.store.stats)
 
-    @router.get("/admin/api/calendars/{calendar_id}", dependencies=[Depends(require_admin)])
+    @router.get("/api/v1/admin/calendars/{calendar_id}", dependencies=[Depends(require_admin)])
     async def admin_detail(calendar_id: str) -> Response:
         record = service.admin_find(calendar_id)
         if record is None:
-            return JSONResponse(status_code=404, content={"detail": "订阅不存在"})
-        return JSONResponse(content=service.admin_view(record))
+            raise ApiError("request.not_found", message="订阅不存在")
+        return await _guard_sync(lambda: service.admin_view(record))
 
-    @router.post("/admin/api/calendars/{calendar_id}/refresh", dependencies=[Depends(require_admin)])
+    @router.post("/api/v1/admin/calendars/{calendar_id}/refresh", dependencies=[Depends(require_admin)])
     async def admin_refresh(calendar_id: str) -> Response:
         return await _guard(service.admin_refresh(calendar_id))
 
-    @router.post("/admin/api/calendars/{calendar_id}/pause", dependencies=[Depends(require_admin)])
+    @router.post("/api/v1/admin/calendars/{calendar_id}/pause", dependencies=[Depends(require_admin)])
     async def admin_pause(calendar_id: str, hours: int = Query(default=24, ge=1, le=720)) -> Response:
         return await _guard_wrap(service.admin_pause(calendar_id, hours))
 
-    @router.post("/admin/api/calendars/{calendar_id}/resume", dependencies=[Depends(require_admin)])
+    @router.post("/api/v1/admin/calendars/{calendar_id}/resume", dependencies=[Depends(require_admin)])
     async def admin_resume(calendar_id: str) -> Response:
         return await _guard_wrap(service.admin_resume(calendar_id))
 
-    @router.post("/admin/api/calendars/{calendar_id}/rotate", dependencies=[Depends(require_admin)])
+    @router.post("/api/v1/admin/calendars/{calendar_id}/rotate", dependencies=[Depends(require_admin)])
     async def admin_rotate(calendar_id: str) -> Response:
         return await _guard_wrap(service.admin_rotate(calendar_id))
 
-    @router.delete("/admin/api/calendars/{calendar_id}", dependencies=[Depends(require_admin)])
+    @router.delete("/api/v1/admin/calendars/{calendar_id}", dependencies=[Depends(require_admin)])
     async def admin_delete(calendar_id: str) -> Response:
         return await _guard_wrap(service.admin_delete(calendar_id))
 
     # ---------------- 后台配置校准（节次时间 + 第一周定义） ----------------
-    @router.get("/admin/api/calendar-config", dependencies=[Depends(require_admin)])
-    async def admin_calendar_config() -> dict:
-        return service.admin_config()
+    @router.get("/api/v1/admin/calendar-config", dependencies=[Depends(require_admin)])
+    async def admin_calendar_config() -> Response:
+        return await _guard_sync(service.admin_config)
 
-    @router.put("/admin/api/calendar-config/periods", dependencies=[Depends(require_admin)])
+    @router.put("/api/v1/admin/calendar-config/periods", dependencies=[Depends(require_admin)])
     async def admin_calendar_periods(body: PeriodsBody) -> Response:
         return await _guard_wrap(service.admin_update_periods(body.periods, body.period_source))
 
-    @router.put("/admin/api/calendar-config/terms", dependencies=[Depends(require_admin)])
+    @router.put("/api/v1/admin/calendar-config/terms", dependencies=[Depends(require_admin)])
     async def admin_calendar_terms(body: TermsBody) -> Response:
         return await _guard_wrap(service.admin_update_terms(body.terms))
 
-    @router.post("/admin/api/calendar-config/reset", dependencies=[Depends(require_admin)])
+    @router.post("/api/v1/admin/calendar-config/reset", dependencies=[Depends(require_admin)])
     async def admin_calendar_config_reset() -> Response:
         return await _guard_wrap(service.admin_reset_config())
-
-    async def _guard_wrap(value: Any) -> Response:
-        try:
-            if hasattr(value, "__await__"):
-                value = await value
-            return JSONResponse(content=value)
-        except CalendarError as exc:
-            return _error(exc)
 
     return router

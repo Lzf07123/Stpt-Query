@@ -1,11 +1,14 @@
 """FastAPI 入口：编排服务 HTTP 层（组装与启动编排）。
 
-对齐原 dify-workflow-api 网关契约（/run、/health、/service-status），
-客户端只需把后端地址从 Dify 应用换成本服务即可无缝迁移。
+对外 JSON 接口统一遵循 /api/v1/* 命名与统一语义（api_semantics 信封：
+success/code/message/data/meta，业务失败使用真实 HTTP 状态码）；
+K8s 探针（/health/live、/health/ready）、容器 /health、/metrics、
+/cal/{token}.ics、/jump/go、/get_schedule/export 为豁免端点，
+保持各自的探针/抓取/下载语义。
 
 create_app 只负责装配：共享状态由 app.context.AppContext 承载，
 路由按域拆分在 app.routes_*（run/jobs/health/admin/notices），
-异步任务 worker 在 app.jobs_worker；行为契约与拆分前完全一致。
+异步任务 worker 在 app.jobs_worker。
 """
 from __future__ import annotations
 
@@ -16,9 +19,13 @@ from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .api_semantics import ApiError, code_from_http_status, error_envelope
 from .calendar.routes import build_router as build_calendar_router
 from .calendar.scheduler import CalendarScheduler
 from .context import (REDIS_OP_TIMEOUT_SECONDS,  # noqa: F401  兼容旧导入面
@@ -178,13 +185,42 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
     app = FastAPI(
         title="edu-query-app",
         version="0.1.0",
-        description="教务查询编排服务：替代 Dify 工作流，直接编排登录/查询/渲染/分析/PDF。",
+        description="教务查询编排服务：统一 /api/v1/* 语义（信封+稳定错误码），"
+                    "编排登录/查询/渲染/分析/PDF。",
         docs_url=None if ctx.is_production else "/docs",
         redoc_url=None if ctx.is_production else "/redoc",
         openapi_url=None if ctx.is_production else "/openapi.json",
         lifespan=lifespan,
     )
     ctx.app = app
+
+    # ---- 统一语义异常处理：/api/v1/* 的所有错误体都走同一信封 ----
+    @app.exception_handler(ApiError)
+    async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
+        payload, status_code = error_envelope(
+            exc.code, message=exc.message, data=exc.data,
+            meta=exc.meta, status_code=exc.status_code)
+        return JSONResponse(status_code=status_code, content=payload)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request,
+                                     exc: StarletteHTTPException) -> JSONResponse:
+        # 横切依赖（鉴权/限流/透传）仍抛 HTTPException，按状态码归一到注册表；
+        # 自定义 detail（如「admin area unavailable」）保留为 message
+        code = code_from_http_status(exc.status_code)
+        detail = str(getattr(exc, "detail", "") or "")
+        message = detail if detail and detail != "Not Found" else None
+        payload, status_code = error_envelope(code, message=message)
+        return JSONResponse(status_code=status_code, content=payload)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request,
+                                       exc: RequestValidationError) -> JSONResponse:
+        # 请求体校验错误沿用 FastAPI 约定的 422；code 仍归一为 request.invalid
+        payload, _ = error_envelope(
+            "request.invalid",
+            data={"errors": jsonable_encoder(exc.errors())})
+        return JSONResponse(status_code=422, content=payload)
 
     # ---- app.state 镜像：与拆分前逐项一致（测试与诊断依赖这些名字）----
     app.state.pipeline = ctx.pipeline
@@ -274,7 +310,7 @@ def create_app(cfg: Optional[Settings] = None) -> FastAPI:
         return ("<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
                 "<title>教务信息查询</title></head><body style='font-family:sans-serif;"
                 "padding:2rem'><h1>教务信息查询服务</h1>"
-                "<p>本服务已替代 Dify 工作流。请通过 POST /run 提交查询：</p>"
+                "<p>请通过 POST /api/v1/run 提交查询（响应为统一信封，见 docs/api-semantics.md）：</p>"
                 "<pre>{'username': '学号', 'password': '密码', 'option': '成绩|课表', "
                 "'md2pdf': false, 'check': false}</pre></body></html>")
 

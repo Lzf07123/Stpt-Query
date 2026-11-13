@@ -126,6 +126,25 @@ _LOCK_TIME = re.compile(
     re.IGNORECASE,
 )
 
+# 分层归因（meta.layer）：分类 → 最可能漂移的学校契约层。
+# 这是「粗归因」：会话失效可能源于门户或学生服务，凭据/风控必然在 CAS；
+# 精确定位用 /health 的 school.layers 或 scripts/contract_selfcheck.py。
+# 取值与 school_contract.PUBLIC_LAYERS 对齐（webvpn/cas/portal/jwxt），
+# 本地/编排侧问题为 None（不误导为学校侧故障）。
+_CATEGORY_LAYER = {
+    "HTTP 节点配置或执行异常": None,
+    "路径或地址配置错误": "jwxt",
+    "学校风控或账号临时锁定": "cas",
+    "账号或密码错误": "cas",
+    "服务访问令牌错误": None,
+    "会话失效或已过期": "portal",
+    "请求参数错误": None,
+    "节点超时": None,
+    "课表学期未开放": "jwxt",
+    "远端系统异常或服务内部错误": "portal",
+    "未分类异常": None,
+}
+
 
 def _redact_value(value: Any) -> Any:
     if isinstance(value, dict):
@@ -221,6 +240,7 @@ def classify_error(
         "output": _format_report(kind, category, evidence, user_actions, admin_actions),
         "meta": {
             "category": category,
+            "layer": _CATEGORY_LAYER.get(category),
             "status_code": status_code,
             "user_actions": user_actions,
             "admin_actions": admin_actions,

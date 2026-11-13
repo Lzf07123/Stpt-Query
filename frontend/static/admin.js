@@ -99,11 +99,11 @@
   }
 
   function errorDetail(payload, status) {
-    // FastAPI 校验错误（422）的 detail 是对象数组，直接 String() 会得到 [object Object]
-    var detail = payload && payload.detail;
-    if (typeof detail === "string" && detail) return detail;
-    if (Array.isArray(detail)) {
-      var parts = detail.map(function (item) {
+    // 统一信封：message 为人类可读摘要；422 校验错误明细在 data.errors
+    if (payload && payload.message) return payload.message;
+    var errors = payload && payload.data && payload.data.errors;
+    if (Array.isArray(errors)) {
+      var parts = errors.map(function (item) {
         if (typeof item === "string") return item;
         if (item && typeof item === "object") {
           var loc = Array.isArray(item.loc)
@@ -114,7 +114,6 @@
       }).filter(function (text) { return text; });
       if (parts.length) return parts.join("；");
     }
-    if (detail && typeof detail === "object") return JSON.stringify(detail);
     return "请求失败（HTTP " + status + "）";
   }
 
@@ -122,7 +121,7 @@
     options = options || {};
     var response;
     try {
-      response = await fetch("/admin/api/" + path, {
+      response = await fetch("/api/v1/admin/" + path, {
         method: options.method || "GET",
         headers: Object.assign(
           { Authorization: "Bearer " + getToken() },
@@ -138,11 +137,16 @@
     var payload = null;
     try { payload = await response.json(); } catch (e) {}
     if (!response.ok) {
-      if (response.status === 404 && !(payload && payload.detail)) throw new Error("凭据无效");
-      if (response.status === 401 || response.status === 403) throw new Error("凭据无效");
+      var code = payload && payload.code || "";
+      if (response.status === 404 && !(payload && payload.message)) throw new Error("凭据无效");
+      if (response.status === 401 || response.status === 403) {
+        // 学校侧 401/403（school.*）按信封 message 展示；网关鉴权失败视为凭据无效
+        if (code.indexOf("school.") === 0) throw new Error(payload.message || "请求失败");
+        throw new Error("凭据无效");
+      }
       throw new Error(errorDetail(payload, response.status));
     }
-    return payload;
+    return payload && payload.data ? payload.data : payload;
   }
 
   function applyTheme(theme, persist) {

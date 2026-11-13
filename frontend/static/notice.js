@@ -146,9 +146,10 @@
     historyList.textContent = "加载中";
     historyClose.focus();
     try {
-      const response = await fetch("/notices/history?limit=50", { cache: "no-store" });
+      const response = await fetch("/api/v1/notices/history?limit=50", { cache: "no-store" });
       if (!response.ok) throw new Error("HTTP " + response.status);
-      const payload = await response.json();
+      const envelope = await response.json();
+      const payload = envelope && envelope.data ? envelope.data : {};
       historyList.innerHTML = "";
       const items = Array.isArray(payload.notices) ? payload.notices : [];
       if (!items.length) {
@@ -171,9 +172,10 @@
   async function loadNotices() {
     if (!bar || !track || !text) return;
     try {
-      const response = await fetch("/notices/active", { cache: "no-store" });
+      const response = await fetch("/api/v1/notices/active", { cache: "no-store" });
       if (!response.ok) throw new Error("HTTP " + response.status);
-      const payload = await response.json();
+      const envelope = await response.json();
+      const payload = envelope && envelope.data ? envelope.data : {};
       notices = Array.isArray(payload.notices) ? payload.notices : [];
       if (!notices.length) return;
       bar.classList.remove("hidden");

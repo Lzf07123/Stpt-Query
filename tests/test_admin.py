@@ -39,12 +39,12 @@ def _settings(tmp_path, **kwargs):
 def test_admin_endpoints_require_independent_admin_token(tmp_path):
     app = create_app(_settings(tmp_path))
     with TestClient(app) as client:
-        assert client.get("/admin/api/query-logs").status_code == 404
-        wrong = client.get("/admin/api/metrics", headers={"Authorization": "Bearer gateway-token"})
+        assert client.get("/api/v1/admin/query-logs").status_code == 404
+        wrong = client.get("/api/v1/admin/metrics", headers={"Authorization": "Bearer gateway-token"})
         assert wrong.status_code == 404
-        assert client.get("/admin/api/metrics", headers=ADMIN).status_code == 200
+        assert client.get("/api/v1/admin/metrics", headers=ADMIN).status_code == 200
         # 管理员令牌不能反向访问网关 API，避免身份复用。
-        assert client.get("/query-logs", headers=ADMIN).status_code == 401
+        assert client.get("/api/v1/query-logs", headers=ADMIN).status_code == 401
 
 
 def test_admin_query_logs_filters_and_paginates_file_history(tmp_path):
@@ -65,7 +65,7 @@ def test_admin_query_logs_filters_and_paginates_file_history(tmp_path):
         writer.write_raw(record)
 
     with TestClient(create_app(_settings(tmp_path, file_log_path=str(path)))) as client:
-        payload = client.get("/admin/api/query-logs?limit=1", headers=ADMIN).json()
+        payload = client.get("/api/v1/admin/query-logs?limit=1", headers=ADMIN).json()["data"]
         assert [item["run_id"] for item in payload["logs"]] == ["run-c"]
         assert payload["total"] == 3
         assert payload["source"] == "file"
@@ -75,8 +75,8 @@ def test_admin_query_logs_filters_and_paginates_file_history(tmp_path):
             "kinds": {"grades": 1, "login_error": 1, "render_error": 1},
         }
 
-        failed = client.get("/admin/api/query-logs?success=false&keyword=3000002",
-                            headers=ADMIN).json()
+        failed = client.get("/api/v1/admin/query-logs?success=false&keyword=3000002",
+                            headers=ADMIN).json()["data"]
         assert failed["total"] == 1
         assert failed["logs"][0]["kind"] == "login_error"
         assert all(key not in failed["logs"][0] for key in ("password", "token", "session"))
@@ -93,14 +93,14 @@ def test_admin_query_logs_uses_configured_scan_limit_by_default(tmp_path):
         })
 
     with TestClient(create_app(_settings(tmp_path, file_log_path=str(path)))) as client:
-        payload = client.get("/admin/api/query-logs?limit=2", headers=ADMIN).json()
+        payload = client.get("/api/v1/admin/query-logs?limit=2", headers=ADMIN).json()["data"]
         assert payload["scanned"] == 6
         assert payload["total"] == 6
         assert payload["scan_limit"] == 10000
         assert payload["scan_truncated"] is False
 
-        bounded = client.get("/admin/api/query-logs?limit=2&scan_limit=4",
-                             headers=ADMIN).json()
+        bounded = client.get("/api/v1/admin/query-logs?limit=2&scan_limit=4",
+                             headers=ADMIN).json()["data"]
         assert bounded["scanned"] == 4
         assert bounded["total"] == 4
         assert bounded["scan_limit"] == 4
@@ -119,9 +119,9 @@ def test_admin_query_logs_reads_all_instance_directories_beyond_100(tmp_path):
         })
 
     with TestClient(create_app(_settings(tmp_path, file_log_path=str(path)))) as client:
-        first = client.get("/admin/api/query-logs", headers=ADMIN).json()
+        first = client.get("/api/v1/admin/query-logs", headers=ADMIN).json()["data"]
         last = client.get(
-            "/admin/api/query-logs?offset=100", headers=ADMIN).json()
+            "/api/v1/admin/query-logs?offset=100", headers=ADMIN).json()["data"]
 
     assert first["source"] == "file"
     assert first["total"] == 101
@@ -155,7 +155,7 @@ def test_admin_query_logs_prefers_file_history_over_redis(tmp_path):
     app.state.redis_history = RedisOnlyHistory()
     client = TestClient(app)
 
-    payload = client.get("/admin/api/query-logs", headers=ADMIN).json()
+    payload = client.get("/api/v1/admin/query-logs", headers=ADMIN).json()["data"]
 
     assert payload["source"] == "file"
     assert [item["run_id"] for item in payload["logs"]] == ["run-file"]
@@ -163,7 +163,7 @@ def test_admin_query_logs_prefers_file_history_over_redis(tmp_path):
 
 def test_admin_metrics_reports_snapshot_and_service_status(tmp_path):
     with TestClient(create_app(_settings(tmp_path))) as client:
-        body = client.get("/admin/api/metrics", headers=ADMIN).json()
+        body = client.get("/api/v1/admin/metrics", headers=ADMIN).json()["data"]
         assert body["services"]["redis"] == "not-configured"
         assert body["services"]["file_log"] == "ok"
         assert isinstance(body["history"], list)
@@ -336,7 +336,7 @@ def test_orchestration_expected_services_follow_redis_config(tmp_path):
     """资源监控的期望分桶必须跟随部署配置：无 Redis=2，配置外部 Redis=3。"""
     def stack_for(**overrides):
         with TestClient(create_app(_settings(tmp_path, **overrides))) as client:
-            payload = client.get("/admin/api/metrics", headers=ADMIN).json()
+            payload = client.get("/api/v1/admin/metrics", headers=ADMIN).json()["data"]
         assert payload.get("latest"), payload
         return payload["latest"]["orchestration"]["memory"]
 

@@ -189,42 +189,42 @@ async def test_notice_file_missing_rebuilds_from_redis(tmp_path):
 
 def test_notice_http_auth_filters_and_pagination(tmp_path):
     with TestClient(create_app(_settings(tmp_path))) as client:
-        assert client.get("/notices/active").status_code == 401
-        assert client.get("/notices/history").status_code == 401
-        assert client.get("/admin/api/notices").status_code == 404
+        assert client.get("/api/v1/notices/active").status_code == 401
+        assert client.get("/api/v1/notices/history").status_code == 401
+        assert client.get("/api/v1/admin/notices").status_code == 404
 
         created = client.post(
-            "/admin/api/notices",
+            "/api/v1/admin/notices",
             headers=ADMIN,
             json={"content": "首页维护通知", "level": "warning", "status": "active"},
         )
         assert created.status_code == 200
-        notice = created.json()["notice"]
+        notice = created.json()["data"]["notice"]
         draft = client.post(
-            "/admin/api/notices", headers=ADMIN,
+            "/api/v1/admin/notices", headers=ADMIN,
             json={"content": "内部草稿", "status": "draft"},
-        ).json()["notice"]
+        ).json()["data"]["notice"]
 
-        public = client.get("/notices/active", headers=GATEWAY).json()
+        public = client.get("/api/v1/notices/active", headers=GATEWAY).json()["data"]
         assert [item["id"] for item in public["notices"]] == [notice["id"]]
         assert all(item["content"] != "内部草稿" for item in public["notices"])
 
-        history = client.get("/notices/history", headers=GATEWAY).json()
+        history = client.get("/api/v1/notices/history", headers=GATEWAY).json()["data"]
         assert history["notices"] == []
 
         listed = client.get(
-            "/admin/api/notices?status=draft", headers=ADMIN).json()
+            "/api/v1/admin/notices?status=draft", headers=ADMIN).json()["data"]
         assert [item["id"] for item in listed["notices"]] == [draft["id"]]
         assert listed["total"] == 1
 
         client.patch(
-            f"/admin/api/notices/{notice['id']}", headers=ADMIN,
+            f"/api/v1/admin/notices/{notice['id']}", headers=ADMIN,
             json={"status": "archived"})
         history = client.get(
-            "/notices/history?limit=50", headers=GATEWAY).json()
+            "/api/v1/notices/history?limit=50", headers=GATEWAY).json()["data"]
         assert [item["id"] for item in history["notices"]] == [notice["id"]]
 
-        serialized = str(client.get("/admin/api/notices", headers=ADMIN).json())
+        serialized = str(client.get("/api/v1/admin/notices", headers=ADMIN).json()["data"])
         for forbidden in ("password", "session", "token"):
             assert forbidden not in serialized
 
@@ -233,10 +233,10 @@ def test_notice_http_validates_single_line_content(tmp_path):
     with TestClient(create_app(_settings(tmp_path))) as client:
         long = "长" * 121
         assert client.post(
-            "/admin/api/notices", headers=ADMIN, json={"content": long},
+            "/api/v1/admin/notices", headers=ADMIN, json={"content": long},
         ).status_code == 422
         normalized = client.post(
-            "/admin/api/notices", headers=ADMIN, json={"content": "a\nb"},
+            "/api/v1/admin/notices", headers=ADMIN, json={"content": "a\nb"},
         )
         assert normalized.status_code == 200
-        assert normalized.json()["notice"]["content"] == "a b"
+        assert normalized.json()["data"]["notice"]["content"] == "a b"

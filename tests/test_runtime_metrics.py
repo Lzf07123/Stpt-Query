@@ -20,21 +20,21 @@ def _cfg(**kwargs):
 
 def test_runtime_metrics_renders_counts_summaries_and_gauges():
     metrics = RuntimeMetrics()
-    metrics.observe_request("/run", 200, 0.25)
-    metrics.observe_request("/run", 503, 0.75)
+    metrics.observe_request("/api/v1/run", 200, 0.25)
+    metrics.observe_request("/api/v1/run", 503, 0.75)
     metrics.observe_llm(False)
     metrics.observe_pdf_cache(True)
     metrics.observe_concurrency_wait("query", 0.4)
     metrics.observe_redis(True)
 
     text = metrics.render()
-    assert 'edu_query_requests_total{route="/run",status="200"} 1' in text
+    assert 'edu_query_requests_total{route="/api/v1/run",status="200"} 1' in text
     assert 'edu_query_llm_requests_total{result="failure"} 1' in text
     assert 'edu_query_pdf_cache_total{result="hit"} 1' in text
     assert 'edu_query_concurrency_wait_seconds_sum{slot="query"} 0.400000' in text
     assert 'edu_query_concurrency_wait_seconds_count{slot="query"} 1' in text
-    assert 'edu_query_request_duration_seconds_sum{route="/run"} 1.000000' in text
-    assert 'edu_query_request_duration_seconds_count{route="/run"} 2' in text
+    assert 'edu_query_request_duration_seconds_sum{route="/api/v1/run"} 1.000000' in text
+    assert 'edu_query_request_duration_seconds_count{route="/api/v1/run"} 2' in text
     assert "edu_query_redis_degraded 1" in text
 
 
@@ -44,7 +44,10 @@ def test_metrics_endpoint_is_registered_without_auth():
     assert "/metrics" in paths
     nginx = open("frontend/templates/default.conf.template", encoding="utf-8").read()
     assert "location = /metrics {" in nginx
-    assert "return 404;" in nginx.split("location = /metrics {", 1)[1]
+    # /metrics 保持边缘封锁；封锁响应也遵循统一信封形状
+    metrics_block = nginx.split("location = /metrics {", 1)[1]
+    assert "return 404" in metrics_block
+    assert '"code":"request.not_found"' in metrics_block
 
 
 def test_trusted_proxy_cidr_parser_accepts_multiple_networks():

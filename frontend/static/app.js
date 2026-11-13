@@ -971,12 +971,14 @@
     let serviceStatusSeq = 0;
     function renderServiceStatus() {
       const requestSeq = ++serviceStatusSeq;
-      fetch("/service-status", { headers: authHeaders() })
+      fetch("/api/v1/service-status", { headers: authHeaders() })
         .then(function (resp) { return resp.json(); })
         .then(function (data) {
           if (requestSeq !== serviceStatusSeq) return;
-          const results = data.results || [];
-          const acceptedTotal = Number(data.accepted_total || 0);
+          const body = data && data.data ? data.data : {};
+          const stats = body.stats || {};
+          const results = body.results || [];
+          const acceptedTotal = Number(stats.accepted_total || 0);
           if (!results.length) {
             serviceStatusBox.classList.add("hidden");
             return;
@@ -992,9 +994,13 @@
             return '<span class="status-seg ' + cls + '"' + attrs + "></span>";
           });
           const total = results.length;
-          const okCount = data.success != null ? data.success : results.filter(function (item) { return item.success; }).length;
+          const okCount = stats.success_count != null
+            ? Number(stats.success_count)
+            : results.filter(function (item) { return item.success; }).length;
           const failCount = total - okCount;
-          const availability = data.availability != null ? data.availability : (total ? Math.round(okCount / total * 1000) / 10 : 0);
+          const availability = stats.availability != null
+            ? Number(stats.availability)
+            : (total ? Math.round(okCount / total * 1000) / 10 : 0);
           const isMobile = window.matchMedia && window.matchMedia("(max-width: 600px)").matches;
           let barHtml;
           if (isMobile) {
@@ -1452,7 +1458,7 @@
 
     function resultMeta(body) {
       if (!body || typeof body !== "object") return {};
-      return body.meta || body._meta || {};
+      return body.meta || {};
     }
 
     function parseResultTable(text) {
@@ -1644,7 +1650,8 @@
       clearLockTimer();
       clearTimeout(resultTimer);
       const markdown = extractMarkdownValue(body);
-      setRunId(body && typeof body === "object" ? body.run_id : "");
+      setRunId(body && typeof body === "object"
+        ? ((body.meta && body.meta.trace_id) || body.run_id || "") : "");
       skeleton.hidden = true;
       resultCard.classList.add("is-growing");
       skeleton.setAttribute("aria-hidden", "true");
@@ -1796,7 +1803,7 @@
       try {
         let resp;
         let data;
-        const jobSubmitResp = await fetch("/run/jobs", {
+        const jobSubmitResp = await fetch("/api/v1/run/jobs", {
           method: "POST",
           headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
           body: JSON.stringify(payload),
@@ -1805,18 +1812,22 @@
         let jobSubmitText = await jobSubmitResp.text();
         let jobSubmitData;
         try { jobSubmitData = JSON.parse(jobSubmitText); } catch (err) { jobSubmitData = jobSubmitText; }
+        const jobSubmitPayload = jobSubmitData && jobSubmitData.data ? jobSubmitData.data : null;
+        // 统一语义：以稳定错误码判断降级（异步未启用/排队服务不可用时回退同步查询）
         const jobFeatureUnavailable = jobSubmitResp.status === 404 ||
           (jobSubmitResp.status === 503 &&
-            /REDIS_URL|异步查询未启用|排队服务暂时不可用/.test(
-              String(jobSubmitData && jobSubmitData.detail || jobSubmitData)));
+            (jobSubmitData && jobSubmitData.code) in {
+              "capacity.jobs_disabled": true,
+              "capacity.queue_unavailable": true
+            });
 
-        if (jobSubmitResp.ok && jobSubmitData && jobSubmitData.job_id) {
-          renderJobProgress("queued", payload, "queued", jobSubmitData.position || 0);
+        if (jobSubmitResp.ok && jobSubmitPayload && jobSubmitPayload.job_id) {
+          renderJobProgress("queued", payload, "queued", jobSubmitPayload.position || 0);
           let terminalJob = null;
           while (seq === querySeq && !queryController.signal.aborted) {
             await new Promise(function (resolve) { setTimeout(resolve, 2000); });
             if (seq !== querySeq || queryController.signal.aborted) return;
-            const pollResp = await fetch("/run/jobs/" + encodeURIComponent(jobSubmitData.job_id), {
+            const pollResp = await fetch("/api/v1/run/jobs/" + encodeURIComponent(jobSubmitPayload.job_id), {
               headers: authHeaders(),
               cache: "no-store",
               signal: queryController.signal
@@ -1833,15 +1844,16 @@
               return;
             }
             if (!pollResp.ok) {
-              throw new Error(pollData && pollData.detail || ("HTTP " + pollResp.status));
+              throw new Error((pollData && pollData.message) || ("HTTP " + pollResp.status));
             }
-            if (pollData.state === "queued") {
+            const jobPayload = pollData && pollData.data ? pollData.data : null;
+            if (jobPayload && jobPayload.state === "queued") {
               renderJobProgress(
-                pollData.phase || "queued", payload, pollData.state, pollData.position);
-            } else if (pollData.state === "running") {
-              renderJobProgress(pollData.phase || "querying", payload, pollData.state, 0);
+                jobPayload.phase || "queued", payload, jobPayload.state, jobPayload.position);
+            } else if (jobPayload && jobPayload.state === "running") {
+              renderJobProgress(jobPayload.phase || "querying", payload, jobPayload.state, 0);
             } else {
-              terminalJob = pollData;
+              terminalJob = jobPayload;
               renderJobProgress(
                 terminalJob.phase || (terminalJob.result && terminalJob.result.success ? "done" : "querying"),
                 payload,
@@ -1852,14 +1864,15 @@
             }
           }
           if (!terminalJob) return;
-          data = terminalJob.result || { success: false, kind: "internal_error", output: "查询任务失败" };
+          data = terminalJob.result ||
+            { success: false, code: "internal.error", message: "查询任务失败", data: { kind: "internal" }, meta: {} };
           resp = new Response(JSON.stringify(data), {
             status: 200,
             headers: { "Content-Type": "application/json" }
           });
         } else if (jobSubmitResp.ok || jobFeatureUnavailable) {
           hideJobProgress();
-          resp = await fetch("/run", {
+          resp = await fetch("/api/v1/run", {
             method: "POST",
             headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
             body: JSON.stringify(payload),
@@ -1873,42 +1886,33 @@
         }
 
         let businessFail = false;
+        // 统一语义信封：{success, code, message, data:{kind, output?, pdf_base64?, diagnosis?}, meta}
+        const env = data && typeof data === "object" && "success" in data ? data : null;
+        const envPayload = env && env.data && typeof env.data === "object" ? env.data : null;
+        const envMeta = env && env.meta ? env.meta : null;
         if (!resp.ok) {
           markJobProgressFailed(payload);
-          const detail = data && typeof data.detail === "object" ? data.detail : null;
-          const detailMeta = detail && detail.meta ? detail.meta : null;
-          if (detailMeta && detailMeta.lock_until) {
-            showLockCard(detailMeta.lock_until);
+          const diagnosis = envPayload && envPayload.diagnosis ? envPayload.diagnosis : null;
+          const lockUntil = envMeta && envMeta.lock_until ? envMeta.lock_until : null;
+          if (lockUntil) {
+            showLockCard(lockUntil);
             showToast("error", "学校账号临时锁定");
           } else {
-            let message = "HTTP " + resp.status;
-            if (data && data.detail) {
-              if (typeof data.detail === "string") message = data.detail;
-              else if (detail && typeof detail.output === "string" && detail.output) {
-                message = detail.output;
-              } else if (Array.isArray(data.detail) && data.detail[0] && data.detail[0].msg) {
-                message = data.detail[0].msg;
-              }
+            const message = (env && env.message) || "HTTP " + resp.status;
+            if (diagnosis && diagnosis.report) {
+              // 展示后端确定性分类的友好报告（无密码/session/token）
+              showResult(resp.status, env || {});
+            } else {
+              showErrorCard(message);
+              showToast("error", "查询失败");
             }
-            showErrorCard(message);
-            showToast("error", "查询失败");
           }
         } else {
-          const meta = data && typeof data === "object"
-            ? (data._meta || data.meta || null) : null;
-          const markdown = extractMarkdownValue(data);
-          const kind = (meta && meta.kind) ||
-            (data && typeof data === "object" ? data.kind : "") || "";
-          const ERROR_KINDS = {
-            login_error: true, grades_error: true, schedule_error: true,
-            request_error: true, internal_error: true
-          };
-          businessFail = (data && typeof data === "object" && data.success === false) ||
-            (meta && (meta.kind === "business_error" || meta.kind === "upstream_error")) ||
-            ERROR_KINDS[kind] === true ||
-            (markdown !== null && /账号或密码错误|用户名或密码错误|服务异常|登录失败|会话失效|未登录|查询失败|数据获取失败|请求失败|获取失败|下载失败|解析失败|处理失败|操作失败|系统繁忙|请稍后重试|出错了/.test(markdown));
+          const meta = envMeta;
+          const markdown = extractMarkdownValue(envPayload || data);
+          const kind = envPayload ? (envPayload.kind || "") : "";
+          businessFail = Boolean(env && env.success === false);
           const noData = kind === "grades_empty" ||
-            (meta && meta.kind === "no_data") ||
             (markdown !== null && (/尚未发布|暂无|没有找到|未查询到|无课/.test(markdown) || looksEmptyMarkdown(markdown)));
           if (businessFail) {
             markJobProgressFailed(payload);
@@ -1916,13 +1920,12 @@
             if (meta && meta.lock_until) {
               showLockCard(meta.lock_until);
             } else if (markdown !== null) {
-              // 展示后端确定性分类的友好报告（无密码/session/token）
-              showResult(resp.status, data);
+              showResult(resp.status, env || {});
             } else {
-              showErrorCard("查询失败，请检查学号/密码或稍后重试");
+              showErrorCard((env && env.message) || "查询失败，请检查学号/密码或稍后重试");
             }
             if (markdown === null && !(meta && meta.lock_until)) {
-              showToast("error", "查询失败");
+              showToast("error", (env && env.message) || "查询失败");
             }
           } else if (noData) {
             hidePdfAction();
@@ -1932,11 +1935,11 @@
               showEmptyState();
             }
           } else {
-            showResult(resp.status, data);
+            showResult(resp.status, env || data);
             rowCount = markdown !== null ? countMarkdownTableRows(markdown) : 0;
-            if (payload.md2pdf && data && typeof data === "object" && data.pdf_base64) {
-              renderPdfAction(data.pdf_base64, payload.username);
-              autoDownloadPdf(data.pdf_base64, payload.username);
+            if (payload.md2pdf && envPayload && envPayload.pdf_base64) {
+              renderPdfAction(envPayload.pdf_base64, payload.username);
+              autoDownloadPdf(envPayload.pdf_base64, payload.username);
             }
             saveResultRecord({
               username: payload.username,
@@ -1945,7 +1948,7 @@
               weeks: payload.weeks,
               md2pdf: payload.md2pdf,
               check: payload.check,
-              runId: data && typeof data === "object" ? data.run_id || "" : "",
+              runId: (meta && meta.trace_id) || "",
               isMarkdown: markdown !== null,
               resultText: markdown !== null
                 ? stripLoginNote(markdown)
@@ -2183,7 +2186,8 @@
         var resp = await fetch("/api/v1/calendars/config", { headers: authHeaders() });
         if (resp.status === 404) { calendarDisableEntry(); return null; }
         if (resp.ok) {
-          calendarConfig = await resp.json();
+          var body = await resp.json();
+          calendarConfig = body && body.data ? body.data : null;
           calendarFilterSemesterOptions();
         }
       } catch (e) { /* 网络异常时保持入口可用，仅缺少默认学期 */ }
@@ -2233,10 +2237,13 @@
       var data = null;
       try { data = await resp.json(); } catch (e) { data = null; }
       if (!resp.ok) {
-        var detail = (data && (data.detail || data.code)) || ("HTTP " + resp.status);
-        throw new Error(detail);
+        // 统一信封：message 为人类可读摘要，code 为稳定错误码
+        var message = (data && data.message) || ("HTTP " + resp.status);
+        var err = new Error(message);
+        err.code = data && data.code ? data.code : "";
+        throw err;
       }
-      return data || {};
+      return (data && data.data) || {};
     }
 
     function calendarPayload() {

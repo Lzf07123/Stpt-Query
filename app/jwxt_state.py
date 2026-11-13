@@ -11,14 +11,22 @@ from urllib.parse import quote
 
 import requests
 
+from app import school_endpoints as _ep
 from app.jwxt_core import (
     J, BASE, UA, TIMEOUT, VERIFY_TLS, LOG, JUMP_PAGES,
-    LOGIN_REUSE, WARM_WAIT, VERSION, MAX_SESSIONS, JUMP_CODE_TTL, SessionInvalidError,
-    TokenError, UpstreamBusyError, LockTimeoutError, LATENCY_BUCKETS_MS, to_webvpn,
-    WarmPendingError,
+    LOGIN_REUSE, WARM_WAIT, VERSION, MAX_SESSIONS, JUMP_CODE_TTL, SchoolError,
+    SessionInvalidError, TokenError, UpstreamBusyError, LockTimeoutError,
+    LATENCY_BUCKETS_MS, to_webvpn, WarmPendingError,
     dump_session_cookies, dump_portal, load_cookies,
     set_trace_id, _shared_adapter, _upstream_slot, _sanitize_url, _has_session_hint,
     _is_auth_failure, _is_transient_error, _METRICS, _METRICS_LOCK,
+)
+from app.school_contract import (
+    CAS_BUNDLE_JS_RE, CAS_COOKIE_DOMAIN, CAS_REDIRECT_URL_RE,
+    CAS_RSA_EXPONENT_RE, CAS_RSA_MODULUS_RE, CAS_TGT_COOKIE_NAME, LAYER_CAS,
+    LAYER_MGMT, LAYER_PORTAL, LAYER_STUDENT, LAYER_WEBVPN,
+    LOGIN_PARAM_EXPECTED_MASTER, PORTAL_LOGIN_PARAM, PORTAL_REDIRECT_TO_CAS,
+    SCHOOL_CONTRACT_VERSION, VPN_BASE, WEBVPN_COOKIE_PATH, is_webvpn_url,
 )
 
 class ServerState:
@@ -28,6 +36,7 @@ class ServerState:
         self.net = None            # 学校可达性探测缓存 {at, ok, latency_ms, ...}
         self.redis = None          # Redis 连通性探测缓存 {at, ok}（Redis 模式）
         self.deep = None           # 最近一次真实登录+接口探测结果
+        self.school_layers = None  # 最近一次无凭据分层探测缓存 {at, layers}（可选周期）
         self.last_real = None      # 最近一次业务查询结果
         self.last_deep_start = 0   # 真实探测节流时间戳
         self.metrics_lock = threading.Lock()
@@ -479,7 +488,7 @@ def _restore_portal(j, claims, require_stu=True):
         j.stu = None
         j.stu_frag = None
     else:
-        if not stu.startswith("https://sec.stpt.edu.cn/webvpn/"):
+        if not is_webvpn_url(stu):
             stu = to_webvpn(stu)
         j.stu = stu.split("#")[0]
         j.stu_frag = portal.get("frag") or stu.partition("#")[2] or None
@@ -561,7 +570,7 @@ def with_session_j(sessions, sid, fn):
 
 
 def _probe_session(sessions, sid):
-    """/login 复用前轻量探测：用会话 Cookie 调 getHomeParam，确认学校侧会话仍有效。
+    """/login 复用前轻量探测：用会话 Cookie 调门户会话校验接口，确认学校侧会话仍有效。
 
     认证类失败（未登录/强制下线/登录校验失败）即清除内存会话并返回 False；
     瞬时网络错误保留会话，避免上游抖动把有效会话误杀。"""
@@ -620,12 +629,12 @@ def _jump_target(stu, page, frag=None):
 
 
 def _fetch_tgt(j):
-    """从 WebVPN 虚拟 Cookie 中取回 CASTGC（TGT）：会话里没存 TGT 时的兜底。"""
-    r = j.req("GET", BASE + "/webvpn/cookie/?domain=%s&path=/" % quote("cas.stpt.edu.cn"),
-              timeout=TIMEOUT)
+    """从 WebVPN 虚拟 Cookie 中取回 CAS TGT：会话里没存 TGT 时的兜底。"""
+    r = j.req("GET", BASE + WEBVPN_COOKIE_PATH + "?domain=%s&path=/"
+              % quote(CAS_COOKIE_DOMAIN), timeout=TIMEOUT)
     for part in r.text.split(";"):
         name, _, val = part.strip().partition("=")
-        if name == "CASTGC" and val:
+        if name == CAS_TGT_COOKIE_NAME and val:
             return val
     return None
 
@@ -643,7 +652,7 @@ def mint_st(j, service):
         raise SessionInvalidError("会话缺少 CAS TGT，无法签发免密跳转票据（请重新 POST /login）")
     if not getattr(j, "cas", None):
         raise SessionInvalidError("会话缺少 CAS 地址，无法签发免密跳转票据（请重新 POST /login）")
-    url = j.cas + "/lyuapServer/v1/tickets/" + quote(tgt, safe="") + "?vpn-12-cas.stpt.edu.cn"
+    url = j.cas + _ep.render("cas.tickets_redeem", tgt=quote(tgt, safe=""))
     r = j.req("POST", url, timeout=TIMEOUT,
               headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
                        "X-Requested-With": "XMLHttpRequest",
@@ -710,29 +719,216 @@ def probe_school(timeout=4):
     return {"ok": True, "latency_ms": int((time.time() - t0) * 1000)}
 
 
+def probe_layers(timeout=6):
+    """无凭据分层探测 WebVPN/CAS/门户三层连通性与契约事实（不登录、只读 GET）。
+
+    用于学校侧升级后的漂移定位：即使登录链路失败，三层也能独立给出结论；
+    不触碰学生服务（需要会话），教务层结论由 deep_check 补充。任一步失败不
+    中断后续探测，一次扫描给出全部层的漂移证据（checks 逐条判定契约事实）。
+
+    返回 {"at", "layers": {layer: {ok, latency_ms, status?, busy?, error?}},
+          "checks": [{name, layer, ok, detail?, error?}], "error"?}。
+    """
+    out = {"at": int(time.time()), "layers": {}, "checks": [], "error": ""}
+
+    def _err(e):
+        return "%s: %s" % (type(e).__name__, e)
+
+    def _mark(layer, ms, ok=None, status=None, error=None, busy=False):
+        item = {"ok": ok, "latency_ms": int(ms)}
+        if status is not None:
+            item["status"] = status
+        if busy:
+            item["busy"] = True
+        if error:
+            item["error"] = str(error)[:200]
+        out["layers"][layer] = item
+
+    def _check(name, layer, ok, detail=None, error=None):
+        item = {"name": name, "layer": layer, "ok": bool(ok) if ok is not None else None}
+        if detail:
+            item["detail"] = str(detail)[:160]
+        if error:
+            item["error"] = str(error)[:200]
+        out["checks"].append(item)
+
+    s = requests.Session()
+    s.verify = VERIFY_TLS
+    s.headers["User-Agent"] = UA
+    ad = _shared_adapter()
+    s.mount("https://", ad)
+    s.mount("http://", ad)
+
+    # 1) WebVPN 边缘可达（与 probe_school 同判据：不抛异常即可达）
+    t = time.time()
+    try:
+        with _upstream_slot():
+            r = s.get(VPN_BASE + "/", timeout=timeout, allow_redirects=True)
+        ms = (time.time() - t) * 1000
+        _mark(LAYER_WEBVPN, ms, ok=True, status=r.status_code)
+        _check("webvpn.edge_reachable", LAYER_WEBVPN, True, detail="HTTP %s" % r.status_code)
+    except UpstreamBusyError as e:
+        ms = (time.time() - t) * 1000
+        _mark(LAYER_WEBVPN, ms, error=_err(e), busy=True)
+        _check("webvpn.edge_reachable", LAYER_WEBVPN, None, error=_err(e))
+    except Exception as e:
+        ms = (time.time() - t) * 1000
+        _mark(LAYER_WEBVPN, ms, ok=False, error=_err(e))
+        _check("webvpn.edge_reachable", LAYER_WEBVPN, False, error=_err(e))
+
+    # 2) 门户登录参数（公开接口）：可达且响应结构符合契约
+    t = time.time()
+    master = None
+    try:
+        with _upstream_slot():
+            r = s.get(VPN_BASE + PORTAL_LOGIN_PARAM, timeout=timeout,
+                      headers={"Accept": "application/json, text/plain, */*"})
+        ms = (time.time() - t) * 1000
+        try:
+            d = (r.json() or {}).get("data") or {}
+            master = (d.get("auth") or {}).get("master")
+        except Exception:
+            master = None
+        portal_ok = master == LOGIN_PARAM_EXPECTED_MASTER
+        _mark(LAYER_PORTAL, ms, ok=portal_ok, status=r.status_code,
+              error=None if portal_ok else "门户登录参数结构漂移（auth.master=%s）" % master)
+        _check("portal.auth_master", LAYER_PORTAL, portal_ok, detail="auth.master=%s" % master)
+    except Exception as e:
+        ms = (time.time() - t) * 1000
+        _mark(LAYER_PORTAL, ms, ok=False, error=_err(e))
+        _check("portal.auth_master", LAYER_PORTAL, False, error=_err(e))
+
+    # 3) 门户 → CAS 链接（门户跳转页提取）
+    t = time.time()
+    cas_url = None
+    try:
+        with _upstream_slot():
+            r = s.get(VPN_BASE + PORTAL_REDIRECT_TO_CAS, timeout=timeout)
+        ms = (time.time() - t) * 1000
+        m = CAS_REDIRECT_URL_RE.search(r.text or "")
+        cas_url = m.group(1).replace("&amp;", "&") if m else None
+        _check("portal.cas_link", LAYER_PORTAL, bool(cas_url),
+               detail=cas_url or "未提取到 CAS 登录链接（门户改版信号）")
+    except Exception as e:
+        ms = (time.time() - t) * 1000
+        _check("portal.cas_link", LAYER_PORTAL, False, error=_err(e))
+
+    # 4) CAS 登录页 + bundle JS + RSA 公钥提取（模数必须实测，无兜底）
+    if cas_url:
+        t = time.time()
+        try:
+            with _upstream_slot():
+                r = s.get(cas_url, timeout=timeout, allow_redirects=False)
+            ms = (time.time() - t) * 1000
+            _mark(LAYER_CAS, ms, ok=r.status_code < 500, status=r.status_code)
+            _check("cas.login_page", LAYER_CAS, r.status_code < 500,
+                   detail="HTTP %s" % r.status_code)
+        except Exception as e:
+            ms = (time.time() - t) * 1000
+            _mark(LAYER_CAS, ms, ok=False, error=_err(e))
+            _check("cas.login_page", LAYER_CAS, False, error=_err(e))
+            r = None
+        m_js = CAS_BUNDLE_JS_RE.search((getattr(r, "text", "") or "")) if r is not None else None
+        _check("cas.bundle_js", LAYER_CAS, bool(m_js),
+               detail=(m_js.group(1)[:120] if m_js else None),
+               error=None if m_js else "登录页未定位到 bundle JS（认证产品升级信号）")
+        if m_js is not None:
+            src = m_js.group(1)
+            if src.startswith("/"):
+                src = VPN_BASE + src
+            try:
+                with _upstream_slot():
+                    js = s.get(src, timeout=timeout)
+                m_e = CAS_RSA_EXPONENT_RE.search(js.text or "")
+                m_m = CAS_RSA_MODULUS_RE.search(js.text or "")
+                _check("cas.rsa_exponent", LAYER_CAS, bool(m_e),
+                       detail=(m_e.group(1) if m_e else None),
+                       error=None if m_e else "bundle JS 中未提取到公钥指数")
+                _check("cas.rsa_modulus", LAYER_CAS, bool(m_m),
+                       detail=(str(m_m.group(1))[:16] + "…" if m_m else None),
+                       error=None if m_m else "bundle JS 中未提取到公钥模数")
+            except Exception as e:
+                _check("cas.rsa_exponent", LAYER_CAS, False, error=_err(e))
+                _check("cas.rsa_modulus", LAYER_CAS, False, error=_err(e))
+    else:
+        _mark(LAYER_CAS, 0, ok=None, error="缺少 CAS 地址（门户层未提供跳转链接）")
+        _check("cas.login_page", LAYER_CAS, None, error="缺少 CAS 地址（门户层未提供跳转链接）")
+    try:
+        s.close()  # 共享连接池由 _SharedPoolAdapter 保护，会话关闭不销毁连接
+    except Exception:
+        pass
+    return out
+
+
 def deep_check(username, password, state=None, timeout=40):
+    """真实账号全链路探测：先行无凭据分层探测（webvpn/cas/portal，约 5 个只读
+    GET），再逐阶段 登录→教务发现→SSO→学生接口；每阶段记录 ok/layer/error，
+    用于定位学校侧升级后的漂移层。
+
+    兼容字段语义不变（checked_at/ok/latency_ms/stages/semester/error/username）；
+    additive 新增：stages 条目的 ok/layer（与失败时的 error）、layers
+    （webvpn/cas/portal/jwxt 三态 ok：True/False/None=未测）、contract_version。
+    """
     t0 = time.time()
-    stages = [{"stage": "start", "at_ms": 0}]
-    def rec(name):
-        stages.append({"stage": name, "at_ms": int((time.time() - t0) * 1000)})
+    stages = [{"stage": "start", "at_ms": 0, "ok": True}]
     result = {"checked_at": int(time.time()), "ok": False, "latency_ms": 0,
               "stages": stages, "semester": "", "error": ""}
+    # 分层探测先行：登录失败时 webvpn/cas/portal 三层仍能独立给出结论
+    try:
+        probe = probe_layers(timeout=8)
+    except Exception as e:
+        probe = {"layers": {}, "checks": [],
+                 "error": "%s: %s" % (type(e).__name__, e)}
+    layers = {}
+    for name in ("webvpn", "cas", "portal"):
+        info = dict((probe.get("layers") or {}).get(name) or {})
+        layers[name] = {"ok": info.get("ok"), "latency_ms": info.get("latency_ms")}
+        if info.get("error"):
+            layers[name]["error"] = str(info["error"])[:200]
+
+    def step(fn, stage, layer):
+        out = None
+        try:
+            out = fn()
+        except Exception as e:
+            stages.append({"stage": stage, "at_ms": int((time.time() - t0) * 1000),
+                           "ok": False, "layer": layer,
+                           "error": "%s: %s" % (type(e).__name__, e)})
+            raise
+        stages.append({"stage": stage, "at_ms": int((time.time() - t0) * 1000),
+                       "ok": True, "layer": layer})
+        return out
+
     j = None
+    failed_layer = None
     try:
         j = J(username, password)
-        j.login(); rec("login")
-        j.jwxt(); rec("jwxt")
-        j.student(); rec("sso_student")
-        sem = j.current(); rec("api_current_semester")
+        # login 覆盖 WebVPN/CAS/门户三段握手：单标签归 portal，失败层由先行分层探测区分
+        step(j.login, "login", LAYER_PORTAL)
+        step(j.jwxt, "jwxt", LAYER_MGMT)
+        step(j.student, "sso_student", LAYER_MGMT)
+        sem = step(j.current, "api_current_semester", LAYER_STUDENT)
         result.update({"ok": True, "semester": sem,
                        "latency_ms": int((time.time() - t0) * 1000)})
     except Exception as e:
-        rec("failed")
+        failed = next((s for s in reversed(stages)
+                       if s.get("ok") is False and s.get("layer")), None)
+        failed_layer = failed.get("layer") if failed else None
+        stages.append({"stage": "failed", "at_ms": int((time.time() - t0) * 1000),
+                       "ok": False})
         result.update({"ok": False, "latency_ms": int((time.time() - t0) * 1000),
                        "error": "%s: %s" % (type(e).__name__, e)})
     finally:
         if j is not None:
             j.close()
+    # 教务层结论：全链路成功=True；失败落在教务阶段=False；登录即败（教务未测）=None
+    layers["jwxt"] = {
+        "ok": (True if result["ok"]
+               else False if failed_layer in (LAYER_MGMT, LAYER_STUDENT)
+               else None),
+    }
+    result["layers"] = layers
+    result["contract_version"] = SCHOOL_CONTRACT_VERSION
     result["stages"] = stages
     result["username"] = username
     if state is not None:
@@ -741,17 +937,32 @@ def deep_check(username, password, state=None, timeout=40):
     return result
 
 
-def _health_probe_loop(state, interval, stop_event=None, redis_backend=None):
+def _health_probe_loop(state, interval, stop_event=None, redis_backend=None,
+                       layer_interval=0):
     """后台周期探测学校可达性并刷新 state.net，/health 只读缓存立即返回。
 
     stop_event 用于 FastAPI lifespan 优雅停机：置位后线程在下一轮退出。
     Redis 模式下同时探测 Redis 连通性，避免 /health 在 Redis 故障时误报 ok。
+    layer_interval > 0 时按该间隔（秒）额外执行无凭据分层探测并写入
+    state.school_layers（默认 0 = 关闭，保护学校侧；/health 的 school.layers
+    仅在此开启或 health/deep 实测后才有值）。
     """
+    last_layers = 0.0
     while True:
         if stop_event is not None and stop_event.is_set():
             return
         net = probe_school()
         net["at"] = int(time.time())
+        if layer_interval and layer_interval > 0 \
+                and time.time() - last_layers >= max(60, int(layer_interval)):
+            last_layers = time.time()
+            try:
+                probe = probe_layers(timeout=8)
+            except Exception as e:
+                probe = {"layers": {}, "error": "%s: %s" % (type(e).__name__, e)}
+            with state.lock:
+                state.school_layers = {"at": int(time.time()),
+                                       "layers": dict(probe.get("layers") or {})}
         if redis_backend is not None:
             redis_ok = redis_backend.probe()
             with state.lock:
@@ -782,6 +993,8 @@ def health_payload(state, server, now=None):
         deep = dict(state.deep) if state.deep else None
         last = dict(state.last_real) if state.last_real else None
         cached_redis = dict(state.redis) if getattr(state, "redis", None) else None
+        layer_cache = dict(state.school_layers) \
+            if getattr(state, "school_layers", None) else None
     if deep is not None:
         deep.pop("username", None)
     backend = getattr(server, "_redis_backend", None)
@@ -805,13 +1018,35 @@ def health_payload(state, server, now=None):
         status = "degraded"
     if redis_info.get("ok") is False:
         status = "degraded"
+    # 分层结论（additive）：webvpn/cas/portal 来自无凭据分层探测缓存，
+    # jwxt 来自最近一次 deep_check；无任何来源时省略 layers 字段。
+    # 只暴露三态 ok 与错误摘要，不包含内部地址/凭据。
+    school = net
+    layers = {}
+    if layer_cache:
+        for name, info in (layer_cache.get("layers") or {}).items():
+            ok = info.get("ok")
+            if ok is None:
+                continue
+            item = {"ok": bool(ok)}
+            if info.get("error"):
+                item["error"] = str(info["error"])[:160]
+            layers[name] = item
+    if deep is not None:
+        jw = ((deep.get("layers") or {}).get("jwxt") or {})
+        if jw.get("ok") is not None:
+            layers["jwxt"] = {"ok": bool(jw["ok"])}
+    if layers:
+        school = dict(net)
+        school["layers"] = layers
     return {
         "status": status,
         "service": "jwxt-service",
         "version": VERSION,
+        "contract_version": SCHOOL_CONTRACT_VERSION,
         "time": int(now),
         "uptime_s": int(now - state.started),
-        "school": net,
+        "school": school,
         "redis": redis_info,
         "deep": deep,
         "last_real": last,

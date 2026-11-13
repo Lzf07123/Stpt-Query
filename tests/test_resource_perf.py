@@ -87,14 +87,14 @@ def test_service_status_scan_is_cached_until_ttl_expires(tmp_path, monkeypatch):
     monkeypatch.setattr(context, "_read_service_status_summary", counted_scan)
     with TestClient(app) as client:
         headers = {"Authorization": "Bearer test-token"}
-        first = client.get("/service-status", headers=headers)
-        second = client.get("/service-status", headers=headers)
+        first = client.get("/api/v1/service-status", headers=headers)
+        second = client.get("/api/v1/service-status", headers=headers)
         assert calls == 1
-        assert first.json()["accepted_total"] == 1
+        assert first.json()["data"]["stats"]["accepted_total"] == 1
         assert second.json() == first.json()
 
         app.state.service_status_cache["at"] = 0
-        third = client.get("/service-status", headers=headers)
+        third = client.get("/api/v1/service-status", headers=headers)
         assert calls == 2
         assert third.json() == first.json()
 
@@ -114,11 +114,12 @@ async def test_redis_history_failure_marks_backfill_dirty(tmp_path):
     with TestClient(app) as client:
         assert app.state.history_dirty is False
         response = client.post(
-            "/run",
+            "/api/v1/run",
             headers={"Authorization": "Bearer test-token"},
             json={"username": "2023000001", "password": "pw", "option": "成绩"},
         )
-        assert response.status_code == 200
+        # 上游不可达 → 502（信封语义）；查询日志仍应写入并标记回填脏位
+        assert response.status_code == 502
         assert app.state.history_dirty is True
 
 
@@ -154,12 +155,12 @@ def test_service_status_count_uses_one_redis_pipeline(tmp_path):
     app.state.redis = FakeRedis()
     with TestClient(app) as client:
         response = client.post(
-            "/run",
+            "/api/v1/run",
             headers={"Authorization": "Bearer test-token"},
             json={"username": "2023000001", "password": "pw", "option": "成绩"},
         )
 
-    assert response.status_code == 200
+    assert response.status_code == 502
     assert app.state.redis.pipeline_runs == [[
         ("hincrby", "gw:v2:service-status:accepted", "total", 1),
     ]]
@@ -203,11 +204,11 @@ async def test_service_status_concurrent_misses_single_flight(tmp_path, monkeypa
     headers = {"Authorization": "Bearer test-token"}
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         responses = await asyncio.gather(*[
-            client.get("/service-status", headers=headers) for _ in range(3)
+            client.get("/api/v1/service-status", headers=headers) for _ in range(3)
         ])
 
     assert all(response.status_code == 200 for response in responses)
     assert calls == 1, "并发 miss 应合并为一次文件扫描（single-flight）"
-    payloads = [response.json() for response in responses]
+    payloads = [response.json()["data"] for response in responses]
     assert payloads[0] == payloads[1] == payloads[2]
-    assert payloads[0]["accepted_total"] == 1
+    assert payloads[0]["stats"]["accepted_total"] == 1

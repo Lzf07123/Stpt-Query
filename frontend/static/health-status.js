@@ -24,10 +24,11 @@
     render(0, "up");
     render(1, "unknown");
     render(2, "unknown");
-    fetch("/health/public", { cache: "no-store" }).then(function (response) {
+    fetch("/api/v1/status", { cache: "no-store" }).then(function (response) {
       if (!response.ok) throw new Error("HTTP " + response.status);
       return response.json();
-    }).then(function (data) {
+    }).then(function (envelope) {
+      const data = envelope && envelope.data ? envelope.data : {};
       render(1, data.proxy && data.proxy.status || "unknown");
       render(2, data.school && data.school.status || "unknown");
     }).catch(function () {

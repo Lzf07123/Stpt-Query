@@ -52,13 +52,13 @@ def test_service_status_restores_persistent_query_events_without_log_fields(tmp_
                        run_id="run-2")
 
     with TestClient(create_app(cfg)) as client:
-        response = client.get("/service-status", headers=HEADERS)
+        response = client.get("/api/v1/service-status", headers=HEADERS)
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["data"]
     assert body["total"] == 2
-    assert body["success"] == 1
-    assert body["availability"] == 50.0
+    assert body["stats"]["success_count"] == 1
+    assert body["stats"]["availability"] == 50.0
     assert body["results"][0]["kind"] == "grades"
     assert body["results"][1]["kind"] == "login_error"
     assert all(set(item) == {"success", "kind", "time"} for item in body["results"])
@@ -73,9 +73,9 @@ def test_service_status_restores_local_file_after_restart(tmp_path):
     _write_query_event(writer, success=True, kind="grades")
 
     with TestClient(create_app(cfg)) as first:
-        assert first.get("/service-status", headers=HEADERS).json()["total"] == 1
+        assert first.get("/api/v1/service-status", headers=HEADERS).json()["data"]["total"] == 1
     with TestClient(create_app(cfg)) as second:
-        body = second.get("/service-status", headers=HEADERS).json()
+        body = second.get("/api/v1/service-status", headers=HEADERS).json()["data"]
 
     assert body["total"] == 1
     assert body["results"][0]["success"] is True
@@ -97,13 +97,13 @@ def test_service_status_returns_recent_100_and_accepted_total(tmp_path):
         })
 
     with TestClient(create_app(_cfg(tmp_path, file_log_path=str(path)))) as client:
-        first_response = client.get("/service-status", headers=HEADERS)
-        first = first_response.json()
+        first_response = client.get("/api/v1/service-status", headers=HEADERS)
+        first = first_response.json()["data"]
 
     assert first["total"] == 100
-    assert first["accepted_total"] == 105
-    assert first["accepted_success"] == 78
-    assert "pagination" not in first
+    assert first["stats"]["accepted_total"] == 105
+    assert first["stats"]["accepted_success"] == 78
+    assert "pagination" not in first["results"][0]
     assert [item["time"] for item in first["results"]] == [
         f"2026-08-28T10:{(104 - index) // 60:02d}:{(104 - index) % 60:02d}+08:00"
         for index in range(100)
@@ -129,10 +129,10 @@ def test_service_status_scans_all_instance_directories(tmp_path):
     with TestClient(create_app(
         _cfg(tmp_path, file_log_path=str(tmp_path / "{instance_id}" / "queries.jsonl")),
     )) as client:
-        body = client.get("/service-status", headers=HEADERS).json()
+        body = client.get("/api/v1/service-status", headers=HEADERS).json()["data"]
 
-    assert body["accepted_total"] == 2
-    assert body["accepted_success"] == 1
+    assert body["stats"]["accepted_total"] == 2
+    assert body["stats"]["accepted_success"] == 1
     assert [item["kind"] for item in body["results"]] == ["grades", "login_error"]
 
 
@@ -162,16 +162,16 @@ def test_service_status_reconciles_aggregate_with_file_history(tmp_path):
 
     with TestClient(app) as client:
         redis.data["gw:v2:service-status:accepted"] = {"total": "1", "success": "1"}
-        stale_aggregate = client.get("/service-status", headers=HEADERS).json()
+        stale_aggregate = client.get("/api/v1/service-status", headers=HEADERS).json()["data"]
         redis.data["gw:v2:service-status:accepted"] = {
             "total": "105", "success": "80",
         }
-        larger_aggregate = client.get("/service-status", headers=HEADERS).json()
+        larger_aggregate = client.get("/api/v1/service-status", headers=HEADERS).json()["data"]
 
-    assert stale_aggregate["accepted_total"] == 3
-    assert stale_aggregate["accepted_success"] == 2
-    assert larger_aggregate["accepted_total"] == 105
-    assert larger_aggregate["accepted_success"] == 80
+    assert stale_aggregate["stats"]["accepted_total"] == 3
+    assert stale_aggregate["stats"]["accepted_success"] == 2
+    assert larger_aggregate["stats"]["accepted_total"] == 105
+    assert larger_aggregate["stats"]["accepted_success"] == 80
 
 
 class FakePipeline:
@@ -267,11 +267,12 @@ async def test_redis_records_status_and_query_logs_with_run_ids(tmp_path):
     app.state.redis_history = RedisEventHistory(redis)
     client = TestClient(app)
 
+    # 上游不可达 → 502（信封语义）；状态与查询日志仍应落 Redis
     assert client.post(
-        "/run", headers=HEADERS,
+        "/api/v1/run", headers=HEADERS,
         json={"username": "2023000001", "password": "pw", "option": "成绩"},
-    ).status_code == 200
-    body = client.get("/service-status", headers=HEADERS).json()
+    ).status_code == 502
+    body = client.get("/api/v1/service-status", headers=HEADERS).json()["data"]
 
     assert body["total"] == 1
     assert body["results"][0]["success"] is False

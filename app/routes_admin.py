@@ -1,4 +1,4 @@
-"""管理后台路由：/admin/api/query-logs 与 /admin/api/metrics（需独立 ADMIN_TOKEN）。"""
+"""管理后台路由：/api/v1/admin/query-logs 与 /api/v1/admin/metrics（需独立 ADMIN_TOKEN）。"""
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +9,9 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import Depends, Query
+from fastapi.responses import JSONResponse
 
+from .api_semantics import ok_envelope, pagination
 from .context import (MAX_LOG_SCAN_LIMIT, REDIS_OP_TIMEOUT_SECONDS,
                       AppContext, _dependency_public_state, _log_timestamp)
 from .querylog import sanitize_entry
@@ -17,7 +19,7 @@ from .trace import LOG
 
 
 def register_admin_routes(app, ctx: AppContext) -> None:
-    @app.get("/admin/api/query-logs")
+    @app.get("/api/v1/admin/query-logs")
     async def admin_query_logs(
         _: None = Depends(ctx.require_admin),
         keyword: str = Query(default="", max_length=100),
@@ -121,7 +123,7 @@ def register_admin_routes(app, ctx: AppContext) -> None:
             key = str(item.get("kind") or "unknown")
             kinds[key] = kinds.get(key, 0) + 1
         page = entries[offset:offset + limit]
-        return {
+        return JSONResponse(content=ok_envelope({
             "logs": page,
             "total": len(entries),
             "scanned": scanned,
@@ -134,14 +136,10 @@ def register_admin_routes(app, ctx: AppContext) -> None:
                 "failure": len(entries) - success_count,
                 "kinds": dict(sorted(kinds.items(), key=lambda pair: (-pair[1], pair[0]))),
             },
-            "pagination": {
-                "offset": offset,
-                "limit": limit,
-                "has_more": offset + limit < len(entries),
-            },
-        }
+            "pagination": pagination(len(entries), offset, limit),
+        }))
 
-    @app.get("/admin/api/metrics")
+    @app.get("/api/v1/admin/metrics")
     async def admin_metrics(_: None = Depends(ctx.require_admin)) -> dict:
         """容器/宿主机资源、日志存储、应用负载与服务组件状态。"""
         from .dependencies import REDIS_DEGRADED_MESSAGE
@@ -195,7 +193,7 @@ def register_admin_routes(app, ctx: AppContext) -> None:
             file_log_state=file_status)
         degradations = [item for item in dependencies
                         if item["level"] in ("warning", "danger")]
-        return {
+        return JSONResponse(content=ok_envelope({
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "latest": history[-1] if history else None,
             "history": history,
@@ -222,4 +220,4 @@ def register_admin_routes(app, ctx: AppContext) -> None:
             },
             "dependencies": dependencies,
             "degradations": degradations,
-        }
+        }))

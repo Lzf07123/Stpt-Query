@@ -61,7 +61,7 @@ if count == 1 or redis.call('TTL', KEYS[1]) < 0 then
 end
 return count
 """
-# /run/jobs/{job_id} 的任务 ID 形态：32 位十六进制（每请求 fullmatch 复用）
+# /api/v1/run/jobs/{job_id} 的任务 ID 形态：32 位十六进制（每请求 fullmatch 复用）
 _JOB_ID_RE = re.compile(r"[0-9a-f]{32}")
 # 异步任务 worker 空轮询退避：从 0.2s 指数增长，1s 封顶；领到任务即重置
 WORKER_IDLE_DELAY_FLOOR = 0.2
@@ -578,6 +578,7 @@ class AppContext:
         upstream_redis: dict | None = None
         proxy_latency: int | None = None
         school_latency: int | None = None
+        school_layers_raw: dict | None = None
         try:
             response = await self.upstream_client.get(
                 self.service_base_url + "/health",
@@ -608,6 +609,11 @@ class AppContext:
                     school_status = "down"
                 else:
                     school_status = "unknown"
+                # 分层结论（additive）：查询代理侧的 webvpn/cas/portal/jwxt 三态
+                # 原样投影为 up/down/unknown；无分层来源时不给字段
+                raw_layers = school.get("layers")
+                if isinstance(raw_layers, dict):
+                    school_layers_raw = raw_layers
             else:
                 proxy_status = "degraded"
         except httpx.TimeoutException:
@@ -628,6 +634,15 @@ class AppContext:
         }.get(school_status, "unknown")
         self.app.state.dependency_health.record("school_service", school_state)
 
+        school_payload = _public_dependency(school_status, school_latency)
+        if school_layers_raw:
+            school_payload["layers"] = {
+                name: ("up" if info.get("ok") is True
+                       else "down" if info.get("ok") is False
+                       else "unknown")
+                for name, info in school_layers_raw.items()
+                if isinstance(info, dict)
+            }
         payload = {
             "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "site": _public_dependency("up"),
@@ -643,7 +658,7 @@ class AppContext:
                     if isinstance(upstream_redis, dict) else None,
                 },
             },
-            "school": _public_dependency(school_status, school_latency),
+            "school": school_payload,
         }
         self.public_health_cache["at"] = now
         self.public_health_cache["payload"] = payload

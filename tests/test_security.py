@@ -41,15 +41,16 @@ async def test_global_concurrency_rejects_when_no_slot_is_free():
                 await asyncio.sleep(0.15)
             finally:
                 self.active -= 1
+            return {"success": True, "kind": "grades", "output": "ok", "meta": {}}
 
     pipeline = BusyPipeline()
     app = create_app(_cfg(global_concurrency=1, concurrency_wait_timeout=0))
     app.state.pipeline = pipeline
     await app.state.query_slots.acquire()
     with TestClient(app) as client:
-        assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 503
+        assert client.post("/api/v1/run", headers=HEADERS, json=PAYLOAD).status_code == 503
         app.state.query_slots.release()
-        assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
+        assert client.post("/api/v1/run", headers=HEADERS, json=PAYLOAD).status_code == 200
 
 
 def test_redis_rate_limiter_degrades_to_local_memory():
@@ -65,12 +66,13 @@ def test_redis_rate_limiter_degrades_to_local_memory():
     app.state.redis = fake_redis
     client = TestClient(app)
 
-    assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
-    assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
+    # 上游不可达 → 查询失败 502（信封语义），但限流计数照常累加
+    assert client.post("/api/v1/run", headers=HEADERS, json=PAYLOAD).status_code == 502
+    assert client.post("/api/v1/run", headers=HEADERS, json=PAYLOAD).status_code == 502
     states = {item["key"]: item["status"]
               for item in app.state.dependency_health.snapshot()}
     assert states["redis"] == "degraded"
-    assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 429
+    assert client.post("/api/v1/run", headers=HEADERS, json=PAYLOAD).status_code == 429
 
 
 def test_redis_rate_limiter_sets_ttl_atomically():
@@ -100,8 +102,9 @@ def test_redis_rate_limiter_sets_ttl_atomically():
     app = create_app(_cfg(rate_limit=2))
     app.state.redis = fake_redis
     with TestClient(app) as client:
-        assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
-        assert client.post("/run", headers=HEADERS, json=PAYLOAD).status_code == 200
+        # 上游不可达 → 502，但每次请求都应经过限流器计数
+        assert client.post("/api/v1/run", headers=HEADERS, json=PAYLOAD).status_code == 502
+        assert client.post("/api/v1/run", headers=HEADERS, json=PAYLOAD).status_code == 502
         assert fake_redis.eval_count == 2
         assert list(fake_redis.ttls.values()) == [60]
 

@@ -1,4 +1,8 @@
-"""请求/响应模型：对齐原 Dify 开始节点与 dify-workflow-api 网关契约。"""
+"""请求/响应模型：查询请求与异步任务的内部数据结构。
+
+对外响应统一由 api_semantics 信封承载（/api/v1/*）；本模块的 QueryResult
+是 pipeline 与任务队列的内部载荷，出站前经 envelope_from_pipeline 转换。
+"""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
@@ -13,7 +17,7 @@ JobPhase = Literal[
 
 
 class WorkflowRequest(BaseModel):
-    """原 Dify 开始节点的 7 个输入 + Dify 风格 inputs 兼容。"""
+    """查询请求：7 个输入字段。"""
 
     username: str = Field(
         ...,
@@ -40,7 +44,7 @@ class WorkflowRequest(BaseModel):
                                 description="终端用户标识，默认取 username")
     inputs: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Dify 风格 inputs（兼容），字段自动合并到顶层，平铺字段优先",
+        description="历史遗留的嵌套 inputs（兼容读取），字段自动合并到顶层，平铺字段优先",
     )
 
     @field_validator("username", mode="before")
@@ -64,7 +68,7 @@ class WorkflowRequest(BaseModel):
 
 
 class QueryResult(BaseModel):
-    """统一响应：三个原 END 节点合并为单一确定性结构。"""
+    """pipeline 与任务队列的内部载荷（出站前经 envelope_from_pipeline 转换）。"""
 
     success: bool
     kind: str

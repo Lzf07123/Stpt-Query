@@ -61,32 +61,40 @@ def test_file_log_path_is_isolated_per_instance(tmp_path):
 
 
 def test_public_health_reports_coarse_dependencies():
-    resp = _client().get("/health/public")
+    resp = _client().get("/api/v1/status")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["site"]["status"] == "up"
-    assert body["proxy"]["status"] == "down"
-    assert body["school"]["status"] == "unknown"
+    assert body["success"] is True
+    assert body["code"] == "OK"
+    data = body["data"]
+    assert data["site"]["status"] == "up"
+    assert data["proxy"]["status"] == "down"
+    assert data["school"]["status"] == "unknown"
     assert "127.0.0.1:9" not in str(body)
 
 
 def test_run_requires_bearer_token():
-    resp = _client().post("/run", json={
+    resp = _client().post("/api/v1/run", json={
         "username": "2023000001", "password": "pw", "option": "成绩"})
     assert resp.status_code == 401
+    body = resp.json()
+    assert body["success"] is False
+    assert body["code"] == "request.unauthorized"
 
 
 def test_run_with_token_reaches_pipeline():
     resp = _client().post(
-        "/run",
+        "/api/v1/run",
         headers={"Authorization": "Bearer test-token"},
         json={"username": "2023000001", "password": "pw", "option": "成绩"})
-    # 上游 127.0.0.1:9 不可达 → 应返回分类后的友好错误而非 500
-    assert resp.status_code == 200
+    # 上游 127.0.0.1:9 不可达 → 真实状态码 + 分类错误信封，而非 500
+    assert resp.status_code == 502
     body = resp.json()
     assert body["success"] is False
-    assert body["kind"] == "login_error"
-    assert body["run_id"]
+    assert body["code"] == "school.upstream.unavailable"
+    assert body["data"]["kind"] == "login"
+    assert body["data"]["diagnosis"]["report"]
+    assert body["meta"]["trace_id"]
 
 
 def test_run_records_structured_query_log_without_password(caplog):
@@ -95,10 +103,10 @@ def test_run_records_structured_query_log_without_password(caplog):
 
     with caplog.at_level(logging.INFO, logger="edu-query-app.query"):
         resp = _client().post(
-            "/run",
+            "/api/v1/run",
             headers={"Authorization": "Bearer test-token"},
             json={"username": "2023000001", "password": "pw", "option": "成绩"})
-    assert resp.status_code == 200
+    assert resp.status_code == 502
     query_records = [
         r for r in caplog.records
         if getattr(r, "name", "") == "edu-query-app.query"
@@ -133,35 +141,39 @@ def test_run_internal_error_hides_exception_class():
     app.state.pipeline = FailingPipeline()
     with TestClient(app) as client:
         resp = client.post(
-            "/run",
+            "/api/v1/run",
             headers={"Authorization": "Bearer test-token"},
             json={"username": "2023000001", "password": "pw", "option": "成绩"})
-    assert resp.status_code == 200
+    assert resp.status_code == 500
     body = resp.json()
-    assert body["kind"] == "internal_error"
-    assert body["output"] == "服务内部异常，请稍后重试"
+    assert body["code"] == "internal.error"
+    assert body["message"] == "服务内部异常，请稍后重试"
+    assert body["data"]["kind"] == "internal"
     assert "SecretDiagnosis" not in resp.text
 
 
 def test_query_logs_requires_bearer_token():
-    resp = _client().get("/query-logs")
+    resp = _client().get("/api/v1/query-logs")
     assert resp.status_code == 401
 
 
 def test_query_logs_returns_entries_after_run():
     client = _client()
     resp = client.post(
-        "/run",
+        "/api/v1/run",
         headers={"Authorization": "Bearer test-token"},
         json={"username": "2023000001", "password": "pw", "option": "成绩"})
-    assert resp.status_code == 200
-    resp = client.get("/query-logs", headers={"Authorization": "Bearer test-token"})
+    assert resp.status_code == 502
+    resp = client.get("/api/v1/query-logs",
+                      headers={"Authorization": "Bearer test-token"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["total"] >= 1
-    assert body["logs"][0]["username"] == "2023000001"
-    assert body["logs"][0]["kind"] == "login_error"
-    assert body["logs"][0]["response_summary"].startswith("HTTP 0；响应：")
+    assert body["success"] is True
+    data = body["data"]
+    assert data["total"] >= 1
+    assert data["logs"][0]["username"] == "2023000001"
+    assert data["logs"][0]["kind"] == "login_error"
+    assert data["logs"][0]["response_summary"].startswith("HTTP 0；响应：")
     serialized = str(body)
     for forbidden in ("password", "session", "token"):
         assert forbidden not in serialized
@@ -257,18 +269,22 @@ def test_rate_limit_returns_429_by_client_ip():
     client = TestClient(create_app(cfg))
     headers = {"Authorization": "Bearer test-token"}
     payload = {"username": "2023000001", "password": "pw", "option": "成绩"}
-    assert client.post("/run", headers=headers, json=payload).status_code == 200
-    assert client.post("/run", headers=headers, json=payload).status_code == 200
-    assert client.post("/run", headers=headers, json=payload).status_code == 429
+    assert client.post("/api/v1/run", headers=headers, json=payload).status_code == 502
+    assert client.post("/api/v1/run", headers=headers, json=payload).status_code == 502
+    resp = client.post("/api/v1/run", headers=headers, json=payload)
+    assert resp.status_code == 429
+    assert resp.json()["code"] == "request.rate_limited"
 
 
 def test_async_jobs_require_redis():
     resp = _client().post(
-        "/run/jobs",
+        "/api/v1/run/jobs",
         headers={"Authorization": "Bearer test-token"},
         json={"username": "2023000001", "password": "pw", "option": "成绩"})
     assert resp.status_code == 503
-    assert "REDIS_URL" in resp.json()["detail"]
+    body = resp.json()
+    assert body["code"] == "capacity.jobs_disabled"
+    assert "REDIS_URL" in body["message"]
 
 
 class _FakeAsyncRedis:
@@ -324,16 +340,18 @@ def test_async_login_failure_preserves_school_lock_time():
     )
     client = _async_jobs_client_with_login_failure(exc)
     resp = client.post(
-        "/run/jobs",
+        "/api/v1/run/jobs",
         headers={"Authorization": "Bearer test-token"},
         json={"username": "2023000001", "password": "pw", "option": "成绩"})
 
-    assert resp.status_code == 401
-    detail = resp.json()["detail"]
-    assert detail["kind"] == "login_error"
-    assert detail["run_id"]
-    assert detail["meta"]["lock_until"] == "2026-08-29 13:22:35"
-    assert "学校风控或账号临时锁定" in detail["output"]
+    # 统一语义：学校风控/锁定 → 403（注册表 school.cas.locked）
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["code"] == "school.cas.locked"
+    assert body["data"]["kind"] == "login"
+    assert body["meta"]["trace_id"]
+    assert body["meta"]["lock_until"] == "2026-08-29 13:22:35"
+    assert "学校风控或账号临时锁定" in body["data"]["diagnosis"]["report"]
 
 
 def test_async_login_success_without_session_stays_structured():
@@ -364,14 +382,15 @@ def test_async_login_success_without_session_stays_structured():
 
     with TestClient(app) as client:
         resp = client.post(
-            "/run/jobs",
+            "/api/v1/run/jobs",
             headers={"Authorization": "Bearer test-token"},
             json={"username": "2023000001", "password": "pw", "option": "成绩"})
 
-    assert resp.status_code == 401
-    detail = resp.json()["detail"]
-    assert detail["kind"] == "login_error"
-    assert detail["meta"]["lock_until"] == "2026-08-29 13:22:35"
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["code"] == "school.cas.locked"
+    assert body["data"]["kind"] == "login"
+    assert body["meta"]["lock_until"] == "2026-08-29 13:22:35"
 
 
 async def test_async_worker_links_pipeline_phases_to_job_status():
@@ -547,7 +566,7 @@ async def test_run_releases_query_slot_before_logging(monkeypatch):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
-            "/run",
+            "/api/v1/run",
             headers={"Authorization": "Bearer test-token"},
             json={"username": "2023000001", "password": "pw", "option": "成绩"})
 

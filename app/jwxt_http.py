@@ -24,11 +24,12 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import jwxt_core as _core_mod
+from app import school_endpoints as _ep
 from app.jwxt_core import (
     ALLOW_GET_CREDENTIALS, BASE, CORS_ORIGIN, DNS_FALLBACK_IPS, IDLE_TIMEOUT,
     JUMP_CODE_TTL, KNOWN_PATHS, LIMIT_CONCURRENCY, LOG, LOGIN_REUSE,
     LOGIN_LOCK_TIMEOUT, LOGIN_REUSE_MAX_AGE, LOGIN_REUSE_PROBE, MAX_BODY, MAX_SEMESTERS,
-    MAX_SESSIONS, MGMT_SSO_SERVICE, NEG_CACHE_TTL, PROTECT_LOGIN_STATUS,
+    MAX_SESSIONS, MGMT_SSO_PATTERN, MGMT_SSO_SERVICE, NEG_CACHE_TTL, PROTECT_LOGIN_STATUS,
     PUBLIC_URL, SCHEDULE_CLASS_SHARE, SESSION_TTL, SERVICE, TIMEOUT, TRUST_PROXY,
     UPSTREAM_PARALLEL, UPSTREAM_SEM_TIMEOUT, VERSION, WARM_WAIT, Config, J,
     SchoolError, SessionInvalidError, TokenError, UpstreamError,
@@ -140,8 +141,8 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                             }
         j = J(u, pw)
         try:
-            # 完成 WebVPN/CAS 登录；登录校验（getHomeParam）推迟到下一步，
-            # 与 getAppList 并行执行（省 1 个往返）
+            # 完成 WebVPN/CAS 登录；登录校验（门户会话校验接口）推迟到下一步，
+            # 与应用列表接口并行执行（省 1 个往返）
             j.login(verify=False)
             res = _run_upstream(j, [
                 ("verify", lambda jj: jj.verify()),
@@ -581,7 +582,7 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
         out = {"url": url, "warm_url": BASE + "/"}
         try:
             st = mint_st(j, SERVICE)
-            out["login_url"] = BASE + "/rump_frontend/loginFromCas/?ticket=" + quote(st)
+            out["login_url"] = BASE + _ep.render("portal.login_from_cas", ticket=quote(st))
             out["ticket_ok"] = True
         except Exception as e:
             LOG.warning("免密跳转票据签发失败: %s", e)
@@ -591,7 +592,8 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
         if out.get("ticket_ok") and getattr(j, "mgmt", None):
             try:
                 st2 = mint_st(j, MGMT_SSO_SERVICE)
-                out["app_url"] = (j.mgmt + "api/cas/login?pattern=manager-login&ticket=" + quote(st2))
+                out["app_url"] = (j.mgmt + _ep.render(
+                    "mgmt.cas_login", pattern=MGMT_SSO_PATTERN, ticket=quote(st2)))
             except Exception as e:
                 LOG.warning("教务系统免密票据签发失败: %s", e)
                 out["app_error"] = "%s: %s" % (type(e).__name__, e)
@@ -831,8 +833,9 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                         raise out["app_err"]
                     st1 = out["login"]
                     st2 = out["app"]
-                    login = BASE + "/rump_frontend/loginFromCas/?ticket=" + quote(st1)
-                    app_url = j.mgmt + "api/cas/login?pattern=manager-login&ticket=" + quote(st2)
+                    login = BASE + _ep.render("portal.login_from_cas", ticket=quote(st1))
+                    app_url = j.mgmt + _ep.render(
+                        "mgmt.cas_login", pattern=MGMT_SSO_PATTERN, ticket=quote(st2))
                     stu = _jump_target(j.stu, "home", getattr(j, "stu_frag", None))
                     return {"login_url": login, "app_url": app_url, "stu_url": stu}
                 pair = with_session_j(self.server.sessions, sid, mint_pair)
@@ -845,9 +848,10 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                     if not getattr(j, "mgmt", None):
                         raise RuntimeError("会话缺少教务系统地址（请重新 POST /login）")
                     st = mint_st(j, MGMT_SSO_SERVICE)
-                    return j.mgmt + "api/cas/login?pattern=manager-login&ticket=" + quote(st)
+                    return j.mgmt + _ep.render(
+                        "mgmt.cas_login", pattern=MGMT_SSO_PATTERN, ticket=quote(st))
                 st = mint_st(j, SERVICE)
-                return BASE + "/rump_frontend/loginFromCas/?ticket=" + quote(st)
+                return BASE + _ep.render("portal.login_from_cas", ticket=quote(st))
             res = with_session_j(self.server.sessions, sid, run)
         except TokenError as e:
             LOG.warning("跳转会话无效: %s", e)
@@ -1068,7 +1072,7 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                     .replace("@@RETRY@@", e(retry))
                     .replace("@@LOGIN_PLAIN@@", e(login_plain))
                     .replace("@@APP_PLAIN@@", e(app_plain))
-                    .replace("@@WARM_DIRECT@@", e(BASE + "/rump_frontend/login/")))
+                    .replace("@@WARM_DIRECT@@", e(BASE + _ep.render("portal.login_page"))))
 
     def _handle_get(self):
         p = urlparse(self.path).path
@@ -1595,7 +1599,8 @@ def _start_background(runtime, cfg, stop_event=None):
 
     def probe_loop():
         _health_probe_loop(runtime.state, max(2, cfg.health_probe_interval), stop,
-                           runtime._redis_backend)
+                           runtime._redis_backend,
+                           layer_interval=getattr(cfg, "layer_probe_interval", 0))
     t = threading.Thread(target=probe_loop, daemon=True)
     t.start()
     threads.append(t)

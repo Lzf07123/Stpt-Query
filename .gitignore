@@ -41,3 +41,6 @@ playwright-report/
 
 # 系统临时文件
 Thumbs.db
+
+# ZCode 工作区噪声（本仓库的 AI 协作工作树/缓存）
+.zcode/

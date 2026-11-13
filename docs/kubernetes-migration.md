@@ -13,13 +13,13 @@
 | PDF 内联返回 | `pdf_base64` 直接放在响应里，无文件存储 | **无需 PV/PVC** |
 | 环境变量配置 | 全部配置来自 `.env`/环境变量（`Settings`） | ConfigMap + Secret 直接映射 |
 | 固定 API Token | 生产强制 `AUTO_ROTATE_TOKEN=false` + 固定 `API_TOKEN` | Secret 注入 |
-| 管理员后台查询 | `ADMIN_TOKEN` 独立鉴权 `/admin/api/*` | Secret 注入 |
+| 管理员后台查询 | `ADMIN_TOKEN` 独立鉴权 `/api/v1/admin/*` | Secret 注入 |
 | 存活/就绪探针 | `GET /health/live`、`GET /health/ready`（ready 会探测内嵌查询代理） | `livenessProbe` / `readinessProbe` |
 | 优雅退出 | 采样任务与内嵌查询代理后台线程由应用 shutdown 取消 | 配合 `terminationGracePeriodSeconds` |
-| 异步任务队列 | `POST /run/jobs` 需要 `REDIS_URL`；未配置时返回 503，前端回退同步查询 | 需要排队时接托管 Redis |
+| 异步任务队列 | `POST /api/v1/run/jobs` 需要 `REDIS_URL`；未配置时返回 503，前端回退同步查询 | 需要排队时接托管 Redis |
 | 客户端 IP | `TRUST_PROXY=true` 后按 `X-Forwarded-For` 限流 | Ingress/Service 传递真实 IP |
 | 外部依赖降级 | 无 Redis 时使用进程内限流/历史/会话；LLM 故障返回纯表；学校不可达返回分类错误 | 单个外部依赖故障不拖垮入口 |
-| 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 本地 JSONL + 进程内历史；`GET /query-logs`、`GET /service-status` | 采集 stdout；需要本地留存时给 Pod 挂独立 PVC |
+| 查询日志与服务状态 | 结构化 JSON 单行输出 stdout + 本地 JSONL + 进程内历史；`GET /api/v1/query-logs`、`GET /api/v1/service-status` | 采集 stdout；需要本地留存时给 Pod 挂独立 PVC |
 | 全站通知 | JSONL 文件为权威存储（可选 Redis 恢复副本） | 单实例用独立 PVC；多副本需 `ReadWriteMany` |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 

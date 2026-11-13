@@ -4,10 +4,12 @@
 
 ## 一、项目是什么
 
-edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写为**单体应用 + 边缘代理**，不再依赖 Dify：
+edu-query-app 是**单体应用 + 边缘代理**的教务查询服务，目标是在其上复刻整个教务系统：
 
 - **app（单体应用）**：`app/` 包内的单一 Python 应用，包含学校统一认证登录、免密跳转、成绩/课表原始查询（内嵌查询代理，以 ASGI 方式同进程调用）、固定工作流编排、Markdown 渲染、成绩分析 LLM、异常分类与 PDF。
-- **frontend（前端）**：Nginx 托管原 dify-workflow-api 页面，是默认唯一对外入口，反向代理 `/run`、`/service-status`、`/health*`、`/notices*` 并注入网关令牌。
+- **frontend（前端）**：Nginx 托管查询页与后台，是默认唯一对外入口，反向代理 `/api/v1/*`（注入网关令牌；`/api/v1/admin/*` 原样透传管理员凭据）与 `/health*`、`/jump/go`、`/get_schedule/export`、`/cal/`。
+- **对外契约**：全部 JSON 接口统一 `/api/v1/*` 命名与统一语义（信封 + 稳定错误码，见 `docs/api-semantics.md`）；**不再兼容 Dify**，旧路径（/run、/v1/workflows/run 等）已删除。
+- **上游契约**：学校侧四层链路（WebVPN → CAS → 门户 → 教务系统）的全部事实集中在契约模块，学校升级时改一处即可恢复（见第六节标准流程）。
 
 ## 二、事实来源
 
@@ -18,7 +20,11 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 - `app/`：单体应用代码事实（编排、渲染、内嵌查询代理 `app/jwxt_*.py`）。
 - `frontend/`：页面与 nginx 模板事实。
 - `design-system/edu-query-app/`：项目内品牌方案（BRAND/MASTER），前端视觉决策的唯一事实来源。
-- `tests/`：行为契约（渲染、分类、编排、HTTP、查询日志、安全与过载保护）。
+- `tests/`：行为契约（渲染、分类、编排、HTTP、查询日志、安全与过载保护、**接口语义**、学校侧契约）。
+- `app/api_semantics.py`：**统一接口语义单一来源**（/api/v1/* 信封、稳定错误码、分页）；规范全文见 `docs/api-semantics.md`。
+- `app/school_contract.py`：**学校侧事实单一来源**（域名/路径/端口/盐/正则）；`app/school_endpoints.py`：**上游接口注册表**（已探明端点；新教务模块的唯一挂载点）。
+- `docs/api-semantics.md`：接口语义规范（信封/错误码表/迁移映射/豁免清单/前端契约要点）。
+- `docs/upstream-contract.md`：学校侧契约取证方法与升级重适配手册（含 `scripts/contract_selfcheck.py` 自检工具用法）。
 - `docs/kubernetes-migration.md`：未来 K8s 迁移映射。
 - `Li-Design/`：Git 子模块，**仅作设计/README 规范参考，非运行时依赖**。
 
@@ -28,11 +34,23 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 2. **默认唯一对外入口**：默认编排只有 `frontend` 映射宿主端口，`app` 只在 `web` 网络内暴露 8000；内嵌查询代理无独立端口、无内部网络。需要直连应用容器时，自行编写 override 文件并把端口绑定到宿主回环地址，公网直连必须先补 TLS、防火墙、访问控制与安全验收。
 3. **应用持久状态仅两项**：①全站通知运营配置（JSONL 权威存储 + 可选 Redis 恢复副本）；②日历订阅（数据落本地库，学校凭据仅以 AES-GCM 密文存储）。其余查询业务状态不落盘，PDF 以 Base64 内联返回。两项持久状态均要求单实例部署并纳入备份。
 4. **令牌安全**：固定 `API_TOKEN`（前端与后端共用）；nginx 反代时注入 `Authorization`；页面不得持有令牌；日志与响应不得输出密码/session/token。
-5. **单一事实来源**：提示词只在 `prompts.py`、异常规则只在 `classifier.py`、渲染逻辑只在 `render.py`、环境变量文档只在 `.env.example`，禁止重复实现。
+5. **单一事实来源**：提示词只在 `prompts.py`、异常规则只在 `classifier.py`、渲染逻辑只在 `render.py`、接口语义（信封/错误码/分页）只在 `api_semantics.py`、学校侧事实只在 `school_contract.py`、上游端点只在 `school_endpoints.py`、环境变量文档只在 `.env.example`，禁止重复实现。
 6. **命名连字符**：服务与镜像一律连字符（`app`、`frontend`、`edu-query-app`）；Python 内部模块沿用 `app/jwxt_*.py` 既有命名。
-7. **完成 = 验证 + 文档**：声称完成前跑第五节验证命令并保留输出；涉及结构/契约变更时同步 README 与 `.env.example`。
+7. **完成 = 验证 + 文档**：声称完成前跑第五节验证命令并保留输出；涉及结构/契约变更时同步 README、`.env.example` 与 `docs/api-semantics.md`。
 8. **不做破坏性操作**：不执行 `rm -rf`、force push、删除他人提交；不动未提交的改动。
 9. **日历订阅 URL 属长期密钥**：禁止出现在日志、记忆库、提交信息与通知中；服务端只存 token 哈希 + 加密副本，必须支持轮换、撤销与到期，`/cal/` 关闭访问日志。
+10. **统一接口语义（/api/v1/\*）**：
+    - 所有新增对外 JSON 接口必须挂在 `/api/v1/*` 命名空间（管理端 `/api/v1/admin/*`，凭据原样透传不注入网关令牌）；
+    - 响应一律走 `api_semantics` 信封 `{success, code, message, data, meta}`——成功用 `ok_envelope`，失败抛 `ApiError` 或返回 `error_envelope`；**禁止 200 + success:false 的旧形态**；
+    - 错误码必须已在 `api_semantics.CODES` 注册；新场景先登记码再使用，码取值 `<域>.<原因>`；
+    - 业务失败使用真实 HTTP 状态码（凭据 401、锁定 403、参数 400/422、上游 502/503、超时 504）；
+    - 前端与测试判断错误**一律用 `code` 字段**，禁止匹配错误文案/正则；`detail` 字段属历史遗留，禁止在新代码中读写；
+    - 豁免清单（`/health/live`、`/health/ready`、`/health`、`/metrics`、`/cal/{token}.ics`、`/jump/go`、`/get_schedule/export`、页面 HTML、内嵌代理内部契约）保持各自协议语义，不套信封、不新增豁免除非用户明确要求。
+11. **学校侧契约（复刻教务系统的地基）**：
+    - 学校侧事实只允许出现在 `school_contract.py`（主机/端口/盐/正则）与 `school_endpoints.py`（路径模板）；`tests/test_school_contract.py` 的反重复扫描会强制拒绝其他文件中的字面量；
+    - 调用上游一律用注册表 + `J.call(endpoint, ...)`，禁止手写 URL 字符串；
+    - 学校侧升级时按第六节流程走：自检定位 → 改契约一处 → 全量验证，不做局部打补丁；
+    - 新增写操作接口（选课/评教等）必须先与学校确认授权，并单独限流与审计。
 
 ## 四、多 Agents 协作规范
 
@@ -58,10 +76,13 @@ edu-query-app 把固定的「汕职院教务信息查询」Dify 工作流重写�
 # 1. 编排配置合法
 docker compose config --quiet
 
-# 2. 单元测试（当前基线 255 通过 + 3 跳过，跳过为容器内无 node 的前端片段用例）
+# 2. 单元测试（当前基线 295 通过 + 3 跳过，跳过为容器内无 node 的前端片段用例）
 docker build -q -t edu-query-app:test .
 docker run --rm -v "$PWD":/app -w /app edu-query-app:test \
   sh -c "pip install -q pytest pytest-asyncio && python -m pytest -q"
+
+# 2c. 学校侧契约自检（无凭据只读探测；发现漂移证据时退出码 1）
+python scripts/contract_selfcheck.py --json   # 或：docker compose exec app python scripts/contract_selfcheck.py --json
 
 # 2b. 前端令牌构建（改动 frontend/src/ 或 brand.js 后必须重编译）
 cd frontend && npm install && npm run build && cd ..
@@ -71,12 +92,52 @@ cd frontend && npm install && npm run build && cd ..
 # frontend/templates/default.conf.template 中 script-src 对应内联脚本的
 # SHA-256 哈希（否则 CSP 拦截脚本，后台无法使用）。
 
-# 3. 两容器端到端冒烟（需 Docker daemon）
+# 3. 两容器端到端冒烟（需 Docker daemon；含统一语义验收）
 API_TOKEN=smoke-token AUTO_ROTATE_TOKEN=false docker compose up -d --build
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/
 curl -s http://127.0.0.1:8000/health/ready
-curl -s -X POST http://127.0.0.1:8000/run \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"2023000001","password":"pw","option":"成绩"}'
+# 信封验收：状态/通知端点必须返回五键信封
+curl -s http://127.0.0.1:8000/api/v1/status | grep -o '"code":"OK"'
+curl -s http://127.0.0.1:8000/api/v1/notices/active | grep -o '"code":"OK"'
+# 错误码验收：参数校验 422、异步未启用 503、旧路径 404（不再兼容 Dify）
+curl -s -X POST http://127.0.0.1:8000/api/v1/run -H 'Content-Type: application/json' \
+  -d '{"username":"abc","password":"pw","option":"成绩"}' | grep -o '"code":"request.invalid"'
+curl -s -X POST http://127.0.0.1:8000/api/v1/run/jobs -H 'Authorization: Bearer smoke-token' \
+  -H 'Content-Type: application/json' -d '{"username":"2023000001","password":"pw","option":"成绩"}' \
+  | grep -o '"code":"capacity.jobs_disabled"'
+curl -s -X POST http://127.0.0.1:8000/run -d '{}' | grep -o '"code":"request.not_found"'
 docker compose down
 ```
+
+## 六、开发标准流程（新接口 / 新教务模块 / 学校升级）
+
+### A. 新增对外接口（checklist）
+
+1. 路径挂在 `/api/v1/*`（管理端 `/api/v1/admin/*`）；nginx 模板按信任模型放对
+   location（注入网关令牌 vs 管理端透传），并同步 `tests/test_frontend_csp.py` 的断言；
+2. 成功响应用 `ok_envelope(data, trace_id=..., extra_meta=...)`；可预期失败抛
+   `ApiError`（码先在 `CODES` 登记）；未知异常交给全局处理器；
+3. 列表接口分页用 `pagination(total, offset, limit)`；统计进 `data.stats`；
+4. 横切依赖（鉴权/限流）继续抛 HTTPException，由全局处理器归一，不要自行格式化错误体；
+5. 测试进 `tests/test_api_semantics.py` 或领域测试文件：断言信封五键、`code`、
+   真实状态码；禁止对 `message` 文案做断言（文案可自由改进，码不可变）；
+6. 契约变更同步 `docs/api-semantics.md`（错误码表/迁移映射）。
+
+### B. 新增教务查询模块（考试/选课/评教等）
+
+1. 接口面发现：用已登录会话拉学生服务 SPA 的 JS 包枚举 `api/` 端点——侦察规格与
+   交付物见任务书 `docs/task-01-api-discovery.md`（工具 `scripts/discover_student_api.py`），
+   发现方法见 `docs/upstream-contract.md` 第 4 节；
+2. `school_endpoints.py` 登记 `EndpointSpec`（layer/base/method/path 模板）；
+3. 业务代码调 `J.call(name, body=..., **params)`（导出类 `raw=True`）；
+4. 渲染进 `render.py`、异常文案进 `classifier.py`（并在 `_CATEGORY_LAYER` 标注层）；
+5. 路由挂 `/api/v1/<域>/*`，信封返回；写操作按硬性规则 11 走授权与审计；
+6. 黄金字符串测试补该端点渲染结果与抓包 URL 的逐字节对照。
+
+### C. 学校侧升级应急（按 docs/upstream-contract.md 全文执行，此处为速查）
+
+1. `/health/public` 的 `school.layers` 定位漂移层 →
+   `python scripts/contract_selfcheck.py --json` 逐条判定契约事实；
+2. 只改 `school_contract.py`（或路径类改 `school_endpoints.py`），递增
+   `SCHOOL_CONTRACT_VERSION`，更新 `docs/upstream-contract.md` 第 2 节事实表；
+3. 跑第五节全部验证命令（含反重复扫描与自检退出码 0）后部署。

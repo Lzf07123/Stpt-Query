@@ -359,7 +359,9 @@ def test_admin_mobile_header_and_dashboard_keep_first_use_context():
 
 def test_public_notice_routes_are_proxied_by_frontend():
     policy = _read("frontend/templates/default.conf.template")
-    assert "notices(?:/active|/history)" in policy
+    # /api/v1/* 统一前缀 location 覆盖通知轮询等服务端点（注入网关令牌）
+    assert "location ^~ /api/v1/ {" in policy
+    assert 'proxy_set_header Authorization "Bearer ${API_TOKEN}"' in policy
 
 
 def test_edge_rate_limit_configuration():
@@ -377,21 +379,20 @@ def test_edge_rate_limit_configuration():
     ):
         assert "limit_req zone=perip burst=20 nodelay;" in _location_body(config, head), head
 
-    run_head_start = config.index("location ~ ^/(run(?:/jobs")
-    run_open = config.index("{", run_head_start)
-    run_body = config[run_open:config.index("}", run_open)]
+    # 查询/异步任务入口（/api/v1/run 前缀 location）必须挂边缘限流挡板
+    run_head_start = config.index("location ^~ /api/v1/run {")
+    run_body = _location_body(config, "location ^~ /api/v1/run {")
     assert "limit_req zone=perip burst=20 nodelay;" in run_body
 
     # 公开只读与静态路径不得限流
     for head in ("location ^~ /cal/", "location = / {", "location / {"):
         assert "limit_req" not in _location_body(config, head), head
 
-    public_regex = config[config.index("location ~ ^/(service-status"):]
-    public_regex = public_regex[:public_regex.index("}")]
-    assert "limit_req" not in public_regex
-
-    # 公开路径所在的正则 location 必须存在（业务与公开路径拆成两个 regex location）
-    assert "location ~ ^/(service-status|notices(?:/active|/history)|health(/.*)?|jump(/.*)?|get_schedule/export)$ {" in config
+    # 其余 /api/v1/* 与健康探针的 location 必须存在且不限流
+    assert "limit_req" not in _location_body(config, "location ^~ /api/v1/ {")
+    health_regex = config[config.index("location ~ ^/(health(/.*)?|jump(/.*)?)$"):]
+    health_regex = health_regex[:health_regex.index("}")]
+    assert "limit_req" not in health_regex
 
 
 def test_direct_html_paths_disable_caching():
