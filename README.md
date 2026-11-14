@@ -103,7 +103,7 @@ curl -s http://127.0.0.1:18080/health/ready
 对接学校的全部「事实」（域名/路径/端口、RSA 提取正则、csrf/票据盐、
 `vpn-12-` 主机映射、会话失效文案与错误码）集中在 [app/school_contract.py](app/school_contract.py)
 单一模块；上游端点清单（登录链、SSO 链、管理端、学生服务 8 个业务 API）
-登记在 [app/school_endpoints.py](app/school_endpoints.py) 注册表，新教务模块
+登记在 [app/school_endpoints.py](app/school_endpoints.py) 注册表，新增查询端点
 经 `J.call()` 调用即可，无需触碰认证编排。测试反重复扫描保证事实不会被复制到
 契约之外——**学校侧升级时改契约一处 + 跑自检即可恢复**：
 
@@ -400,15 +400,12 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 
 | 目标 | 说明 | 期限 |
 | --- | --- | --- |
-| 教务系统接口面枚举（复刻阶段 0） | 用已登录会话拉学生服务 SPA 的 JS 包，枚举全部 `api/` 端点并登记进 `school_endpoints.py`（任务书：`docs/task-01-api-discovery.md`） | 未定 |
 | 真实账号端到端验收 | 用真实学号/密码跑通成绩、课表、成绩分析、PDF 四条链路 | 未定 |
 
 ## 路线图
 
-- 近期：**复刻整个教务系统**（按 AGENTS.md 第六节标准流程逐模块接入：考试安排、
-  学籍卡、培养方案、评教等，全部走 /api/v1/* 信封语义）；真实账号端到端验收；
-  异步任务多副本压测与学校上游安全并发标定；单二进制分发形态（前置项为
-  LibreOffice 移除——纯 Python 课表 PDF）
+- 近期：真实账号端到端验收；异步任务多副本压测与学校上游安全并发标定；
+  单二进制分发形态（前置项为 LibreOffice 移除——纯 Python 课表 PDF）
 - 已完成：**统一接口语义**（全部对外 JSON 接口迁移 `/api/v1/*`，五键信封 +
   21 个稳定错误码 + 真实 HTTP 状态码；前端以 `code` 编程化判断，消除错误文案
   正则耦合；不再兼容 Dify，规范见 `docs/api-semantics.md`，标准流程见
@@ -543,7 +540,7 @@ Stpt-Query/
 │   ├── jwxt_http.py           # 内嵌查询代理：FastAPI 应用工厂（进程内 ASGI）
 │   ├── jwxt_redis.py          # 内嵌查询代理：可选 Redis 后端
 │   ├── school_contract.py     # 学校侧契约单一来源（域名/路径/盐/正则，升级改这里）
-│   ├── school_endpoints.py    # 上游接口注册表（21 端点；新教务模块的挂载点）
+│   ├── school_endpoints.py    # 上游接口注册表（21 端点；新增查询端点的挂载点）
 │   └── rtf_pdf.py             # 课表 RTF→PDF（LibreOffice profile 池）
 ├── Dockerfile                 # 单体镜像（python:3.11-slim + LibreOffice + CJK 字体）
 ├── requirements.txt

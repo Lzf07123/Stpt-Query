@@ -4,7 +4,7 @@
 
 ## 一、项目是什么
 
-edu-query-app 是**单体应用 + 边缘代理**的教务查询服务，目标是在其上复刻整个教务系统：
+edu-query-app 是**单体应用 + 边缘代理**的教务查询服务：
 
 - **app（单体应用）**：`app/` 包内的单一 Python 应用，包含学校统一认证登录、免密跳转、成绩/课表原始查询（内嵌查询代理，以 ASGI 方式同进程调用）、固定工作流编排、Markdown 渲染、成绩分析 LLM、异常分类与 PDF。
 - **frontend（前端）**：Nginx 托管查询页与后台，是默认唯一对外入口，反向代理 `/api/v1/*`（注入网关令牌；`/api/v1/admin/*` 原样透传管理员凭据）与 `/health*`、`/jump/go`、`/get_schedule/export`、`/cal/`。
@@ -22,7 +22,7 @@ edu-query-app 是**单体应用 + 边缘代理**的教务查询服务，目标�
 - `design-system/edu-query-app/`：项目内品牌方案（BRAND/MASTER），前端视觉决策的唯一事实来源。
 - `tests/`：行为契约（渲染、分类、编排、HTTP、查询日志、安全与过载保护、**接口语义**、学校侧契约）。
 - `app/api_semantics.py`：**统一接口语义单一来源**（/api/v1/* 信封、稳定错误码、分页）；规范全文见 `docs/api-semantics.md`。
-- `app/school_contract.py`：**学校侧事实单一来源**（域名/路径/端口/盐/正则）；`app/school_endpoints.py`：**上游接口注册表**（已探明端点；新教务模块的唯一挂载点）。
+- `app/school_contract.py`：**学校侧事实单一来源**（域名/路径/端口/盐/正则）；`app/school_endpoints.py`：**上游接口注册表**（已探明端点；新增查询端点的唯一挂载点）。
 - `docs/api-semantics.md`：接口语义规范（信封/错误码表/迁移映射/豁免清单/前端契约要点）。
 - `docs/upstream-contract.md`：学校侧契约取证方法与升级重适配手册（含 `scripts/contract_selfcheck.py` 自检工具用法）。
 - `docs/kubernetes-migration.md`：未来 K8s 迁移映射。
@@ -46,7 +46,7 @@ edu-query-app 是**单体应用 + 边缘代理**的教务查询服务，目标�
     - 业务失败使用真实 HTTP 状态码（凭据 401、锁定 403、参数 400/422、上游 502/503、超时 504）；
     - 前端与测试判断错误**一律用 `code` 字段**，禁止匹配错误文案/正则；`detail` 字段属历史遗留，禁止在新代码中读写；
     - 豁免清单（`/health/live`、`/health/ready`、`/health`、`/metrics`、`/cal/{token}.ics`、`/jump/go`、`/get_schedule/export`、页面 HTML、内嵌代理内部契约）保持各自协议语义，不套信封、不新增豁免除非用户明确要求。
-11. **学校侧契约（复刻教务系统的地基）**：
+11. **学校侧契约（上游对接的单一事实来源）**：
     - 学校侧事实只允许出现在 `school_contract.py`（主机/端口/盐/正则）与 `school_endpoints.py`（路径模板）；`tests/test_school_contract.py` 的反重复扫描会强制拒绝其他文件中的字面量；
     - 调用上游一律用注册表 + `J.call(endpoint, ...)`，禁止手写 URL 字符串；
     - 学校侧升级时按第六节流程走：自检定位 → 改契约一处 → 全量验证，不做局部打补丁；
@@ -109,7 +109,7 @@ curl -s -X POST http://127.0.0.1:8000/run -d '{}' | grep -o '"code":"request.not
 docker compose down
 ```
 
-## 六、开发标准流程（新接口 / 新教务模块 / 学校升级）
+## 六、开发标准流程（新接口 / 学校升级）
 
 ### A. 新增对外接口（checklist）
 
@@ -122,17 +122,6 @@ docker compose down
 5. 测试进 `tests/test_api_semantics.py` 或领域测试文件：断言信封五键、`code`、
    真实状态码；禁止对 `message` 文案做断言（文案可自由改进，码不可变）；
 6. 契约变更同步 `docs/api-semantics.md`（错误码表/迁移映射）。
-
-### B. 新增教务查询模块（考试/选课/评教等）
-
-1. 接口面发现：用已登录会话拉学生服务 SPA 的 JS 包枚举 `api/` 端点——侦察规格与
-   交付物见任务书 `docs/task-01-api-discovery.md`（工具 `scripts/discover_student_api.py`），
-   发现方法见 `docs/upstream-contract.md` 第 4 节；
-2. `school_endpoints.py` 登记 `EndpointSpec`（layer/base/method/path 模板）；
-3. 业务代码调 `J.call(name, body=..., **params)`（导出类 `raw=True`）；
-4. 渲染进 `render.py`、异常文案进 `classifier.py`（并在 `_CATEGORY_LAYER` 标注层）；
-5. 路由挂 `/api/v1/<域>/*`，信封返回；写操作按硬性规则 11 走授权与审计；
-6. 黄金字符串测试补该端点渲染结果与抓包 URL 的逐字节对照。
 
 ### C. 学校侧升级应急（按 docs/upstream-contract.md 全文执行，此处为速查）
 
