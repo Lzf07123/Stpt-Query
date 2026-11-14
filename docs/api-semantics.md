@@ -67,6 +67,12 @@ service-status 的统计统一收进 `data.stats`（原顶层歧义的 `success`
 
 ## 4. 查询主链路（POST /api/v1/run）
 
+- 请求体（WorkflowRequest）：`username` / `password` / `option`（`成绩`|`课表`）/
+  `semesters` / `weeks` / `md2pdf` / `check` / `include_all` / `odd_or_double` / `user`。
+  `semesters` 支持空（当前学期）、单学期、`all`（全部学期）、`recent:N`（最近 N 学期）
+  与逗号分隔多学期（多学期形态仅成绩适用，上限由查询代理约束）；
+  `include_all`（仅成绩）附带全部成绩与学分概况；`odd_or_double`（仅课表，`1`/`2`）
+  透传学校单双周原始语义，留空沿用代理默认 `1`；
 - 成功：`data = {kind, output, pdf_base64?}`；`meta = {trace_id, elapsed_ms, count,
   response_summary, analysis_used, analysis_usage, calendar?, ...}`
 - 失败：`data = {kind, diagnosis: {report, user_actions, admin_actions,

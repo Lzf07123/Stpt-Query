@@ -19,14 +19,16 @@
     overflow-x: clip;
   }
   .head {
-    @apply relative mb-8 px-12 text-center;
+    @apply relative mb-4 px-12 text-center;
   }
+  /* 一屏化：查询页要求全部功能在一屏内呈现（多端实测反馈），头部不再占
+     视口 1/5 —— 高度档从 120-180px 收到 56-96px，标题下方间距同步收紧 */
   .wrap:has(> .layout:not(.has-result)) > .head {
     @apply flex flex-col items-center justify-center;
     flex: 0 1 auto;
-    padding-top: 20px;
-    min-height: clamp(120px, 12vh, 160px);
-    max-height: 180px;
+    padding-top: 8px;
+    min-height: clamp(56px, 6vh, 76px);
+    max-height: 96px;
   }
   .page-title {
     @apply text-3xl font-semibold;
@@ -45,9 +47,13 @@
   }
 
   /* 表单卡整体提升一层：card-halo 的 isolation 会把下拉菜单的 z-index
-     困在卡内，页脚（DOM 靠后）会盖住菜单，须让卡片成为更高层级的叠放上下文 */
+     困在卡内 —— 卡片必须高于 fixed 页脚（z-30），菜单向下展开到卡片底部
+     之外（服务状态条/页脚玻璃区域）时选项不被遮挡 */
   .card-halo {
-    z-index: 10;
+    /* z-40：下拉菜单（卡内 z-30）必须盖过 fixed 页脚（z-30）与服务状态区域 ——
+       菜单向下展开到卡片底部之外时，不能被页脚玻璃/状态条盖住选项。
+       层级仍低于弹窗(70)/提示(80)/跳转链接(100) */
+    z-index: 40;
   }
 
   .layout {
@@ -64,7 +70,9 @@
     margin-bottom: auto;
   }
   .wrap:has(> .layout > #queryForm) > .layout:not(.has-result) {
-    margin-block: auto 160px;
+    /* 一屏化：原来 auto 160px 的垂直居中 + 底部死区合计 ~200px，与头部一起
+       把表单挤出首屏；改为顶对齐，底部交还给页脚补偿（84px） */
+    margin-block: 8px auto;
   }
   .layout.has-result {
     max-width: none;
@@ -142,8 +150,8 @@
     display: flex;
     gap: 12px;
     justify-content: space-between;
-    margin: -2px 0 18px;
-    padding-bottom: 16px;
+    margin: -2px 0 12px;
+    padding-bottom: 10px;
   }
   .form-intro-copy {
     align-items: center;
@@ -157,8 +165,7 @@
     min-width: 0;
     text-align: left;
   }
-  .form-eyebrow,
-  .privacy-pill {
+  .form-eyebrow {
     align-items: center;
     border: 1px solid color-mix(in srgb, var(--eduquery-primary) 22%, var(--eduquery-border));
     border-radius: 999px;
@@ -169,8 +176,6 @@
     min-height: 26px;
     padding: 5px 9px;
     white-space: nowrap;
-  }
-  .form-eyebrow {
     background: var(--eduquery-primary-soft);
     color: var(--eduquery-primary);
     font-size: 0.75rem;
@@ -179,12 +184,6 @@
   .form-eyebrow svg {
     height: 14px;
     width: 14px;
-  }
-  .privacy-pill {
-    background: var(--eduquery-surface-2);
-    color: var(--eduquery-muted);
-    font-size: 0.75rem;
-    font-weight: 600;
   }
   .dark .form-eyebrow {
     background: var(--eduquery-primary-soft-solid);
@@ -200,7 +199,7 @@
     gap: 12px;
     justify-content: space-between;
     letter-spacing: 0.015em;
-    margin: 18px 0 9px;
+    margin: 14px 0 7px;
   }
   .form-section-heading span:last-child {
     color: var(--eduquery-muted);
@@ -229,8 +228,8 @@
     cursor: pointer;
     display: flex;
     gap: 11px;
-    min-height: 72px;
-    padding: 12px 13px;
+    min-height: 60px;
+    padding: 9px 12px;
     text-align: left;
     transition:
       background-color var(--motion-fast) var(--ease-out),
@@ -343,6 +342,21 @@
   .field-help {
     color: var(--eduquery-muted);
   }
+  /* 密码信任行：承诺紧贴它所安抚的字段（用户输入密码的时刻即读到），
+     替代原表单顶部的独立 privacy-pill（悬浮徽章与语境脱节，观感突兀）。
+     锁形图标与 form-eyebrow 同族，muted 文案保持安静、不与输入争夺注意 */
+  .field-trust {
+    align-items: center;
+    display: inline-flex;
+    gap: 5px;
+    justify-content: center;
+  }
+  .field-trust svg {
+    color: var(--eduquery-primary);
+    flex: none;
+    height: 12px;
+    width: 12px;
+  }
   .field-error {
     color: var(--eduquery-destructive);
     font-weight: 600;
@@ -408,7 +422,7 @@
     display: grid;
     grid-template-columns: 7fr 3fr;
     gap: 12px;
-    margin-top: 1.5rem;
+    margin-top: 14px;
   }
   .actions .btn {
     width: 100%;
@@ -419,9 +433,6 @@
       align-items: flex-start;
       flex-direction: column;
       gap: 10px;
-    }
-    .privacy-pill {
-      align-self: flex-start;
     }
     .form-section-heading {
       margin-top: 16px;
@@ -488,6 +499,17 @@
   .dropdown-menu::-webkit-scrollbar-thumb {
     background: var(--eduquery-border);
     border-radius: 999px;
+  }
+  /* 深色模式菜单：base 已提层到 surface-2，深色下阴影需换黑基（浅色调校的
+     深青阴影在深底不可见），描边沿用 base 的主色混色 */
+  .dark .dropdown-menu {
+    box-shadow:
+      0 2px 8px rgba(0, 0, 0, 0.35),
+      0 12px 36px rgba(0, 0, 0, 0.45);
+  }
+  /* 面板提层到 surface-2 后，条目 hover 的 surface-2 与面板同色 → 全端换用更亮一档 */
+  .dropdown-menu .dropdown-item:hover {
+    background: color-mix(in srgb, var(--eduquery-surface-2) 50%, var(--eduquery-border));
   }
   .dropdown-item {
     @apply flex w-full min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border-0 bg-transparent px-3 py-2 text-center text-sm text-foreground transition-colors duration-150 hover:bg-surface-2;
@@ -1085,6 +1107,71 @@
     overflow-wrap: anywhere;
   }
 
+  /* 成功态紧凑状态条：单行 = 结论 + 数值芯片。信息密度优先——不再让
+     kicker/描述与结果标题三重堆叠把查询结果挤出首屏（用户实测反馈）。
+     错误/警告/信息态仍走上方完整卡片（诊断文案需要版面）。 */
+  .result-overview--compact {
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding: 10px 14px;
+  }
+
+  .result-overview--compact .result-overview-icon {
+    border-radius: 9px;
+    height: 30px;
+    width: 30px;
+  }
+
+  .result-overview--compact .result-overview-icon svg {
+    height: 15px;
+    width: 15px;
+  }
+
+  .result-overview--compact .result-overview-copy {
+    align-items: baseline;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    min-width: 0;
+  }
+
+  .result-overview--compact .result-overview-title {
+    font-size: 0.92rem;
+    margin-top: 0;
+  }
+
+  .result-facts-inline {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    min-width: 0;
+  }
+
+  .result-fact-chip {
+    align-items: baseline;
+    background: color-mix(in srgb, var(--eduquery-surface) 72%, transparent);
+    border: 1px solid color-mix(in srgb, var(--eduquery-border) 82%, transparent);
+    border-radius: 999px;
+    display: inline-flex;
+    gap: 4px;
+    max-width: 100%;
+    padding: 2px 9px;
+  }
+
+  .result-fact-chip span {
+    color: var(--eduquery-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .result-fact-chip strong {
+    color: var(--eduquery-foreground);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+  }
+
   .result-overview--warning {
     background: color-mix(in srgb, var(--eduquery-warning-soft) 72%, var(--eduquery-surface));
     border-color: color-mix(in srgb, var(--eduquery-warning) 34%, var(--eduquery-border));
@@ -1384,6 +1471,71 @@
   .markdown-body blockquote {
     @apply my-3 border-l-4 border-primary/40 bg-primary-soft/60 px-4 py-2 text-muted;
   }
+  /* 免密登录提示：单行紧凑条（链接 CTA + 短提示），长说明收进「使用须知」折叠；
+     内容与原三行引用块一致（app.js enhanceLoginNote 做 DOM 变换） */
+  .markdown-body blockquote.login-note {
+    background: color-mix(in srgb, var(--eduquery-primary-soft) 46%, var(--eduquery-surface));
+    display: grid;
+    gap: 6px;
+    margin: 10px 0;
+    padding: 10px 14px;
+  }
+  .login-note-main {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    min-width: 0;
+  }
+  .login-note-title {
+    color: var(--eduquery-foreground);
+    font-size: 0.88rem;
+    font-weight: 700;
+  }
+  /* 免密跳转与课表下载共用同一 CTA 胶囊语言：结果区的主要后续动作
+     必须看起来像动作（首用直觉），而非埋在正文里的普通链接 */
+  .login-note-link,
+  .markdown-body a.md-cta {
+    background: var(--eduquery-btn-primary-bg);
+    border: 1px solid var(--eduquery-btn-primary-border);
+    border-radius: 999px;
+    color: var(--eduquery-brand-fg);
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 4px 14px;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .login-note-link:hover,
+    .markdown-body a.md-cta:hover {
+      background: var(--eduquery-btn-primary-bg-hover);
+    }
+  }
+  .login-note-link:focus-visible,
+  .markdown-body a.md-cta:focus-visible {
+    outline: 2px solid var(--eduquery-ring);
+    outline-offset: 2px;
+  }
+  .login-note-hint {
+    color: var(--eduquery-muted);
+    font-size: 0.75rem;
+  }
+  .login-note-more summary {
+    color: var(--eduquery-muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+  }
+  .login-note-more summary:hover {
+    color: var(--eduquery-foreground);
+  }
+  .login-note-body p {
+    color: var(--eduquery-muted);
+    font-size: 0.78rem;
+    line-height: 1.55;
+    margin: 4px 0 0;
+  }
   .markdown-body code {
     @apply rounded bg-surface-2 px-1.5 py-0.5 text-xs;
   }
@@ -1595,6 +1747,111 @@
       width: 100%;
     }
   }
+
+  /* 课表按天视图：与成绩卡片同一断点（<760px）；桌面端显示原表、隐藏 dayview */
+  .schedule-dayview {
+    display: none;
+  }
+
+  @media (max-width: 759px) {
+    .markdown-body .table-shell--schedule {
+      display: none;
+    }
+
+    .schedule-dayview {
+      background: var(--eduquery-surface);
+      border: 1px solid var(--eduquery-border);
+      border-radius: 14px;
+      box-shadow: inset 0 1px 0 var(--eduquery-glass-highlight);
+      display: block;
+      padding: 12px;
+    }
+
+    .schedule-dayview-tabs {
+      display: grid;
+      gap: 4px;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      margin-bottom: 12px;
+    }
+
+    .schedule-dayview-tab {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      color: var(--eduquery-muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 650;
+      min-height: 44px;
+      padding: 0 2px;
+    }
+
+    .schedule-dayview-tab.active {
+      background: color-mix(in srgb, var(--eduquery-primary) 14%, transparent);
+      border-color: color-mix(in srgb, var(--eduquery-primary) 45%, transparent);
+      color: var(--eduquery-primary);
+    }
+
+    .schedule-dayview-panel {
+      display: grid;
+      gap: 10px;
+    }
+
+    .schedule-dayview-empty {
+      color: var(--eduquery-muted);
+      margin: 6px 0;
+      text-align: center;
+    }
+
+    .schedule-day-card {
+      background: var(--eduquery-surface-2);
+      border: 1px solid var(--eduquery-border);
+      border-radius: 12px;
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+    }
+
+    .schedule-day-head {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .schedule-day-period {
+      background: color-mix(in srgb, var(--eduquery-primary) 12%, transparent);
+      border-radius: 999px;
+      color: var(--eduquery-primary);
+      flex: none;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 3px 9px;
+      white-space: nowrap;
+    }
+
+    .schedule-day-name {
+      font-size: 0.92rem;
+      font-weight: 700;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .schedule-day-meta {
+      color: var(--eduquery-muted);
+      display: flex;
+      flex-wrap: wrap;
+      font-size: 0.78rem;
+      gap: 2px 0;
+      line-height: 1.5;
+    }
+
+    .schedule-day-meta span + span::before {
+      content: "·";
+      margin: 0 7px;
+    }
+  }
   .badge.required {
     @apply bg-primary-soft text-primary;
   }
@@ -1627,9 +1884,10 @@
     color: var(--eduquery-primary-soft-fg);
   }
 
-  /* ---------- 查询卡片链路健康条 ---------- */
+  /* ---------- 查询卡片链路健康条（后置于提交按钮下方） ---------- */
   .health-strip {
-    @apply mb-5 flex flex-wrap items-center justify-center gap-2;
+    @apply flex flex-wrap items-center justify-center gap-2;
+    margin: 12px 0 0;
   }
   .health-pill {
     @apply inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border px-2.5 text-xs font-medium text-muted;
@@ -1806,3 +2064,119 @@ body > .page-shell {
      否则内容较短时会把「服务状态」推到最底部，形成大片空白 */
   flex: 0 0 auto;
 }
+
+  /* ---------- 矮视口一屏化（≤780px 高） ----------
+     查询页要求全部功能在一屏内呈现（多端实测反馈）。此层只降密度、不删功能：
+     隐藏装饰性副标题与 intro 提示行（「页面不保存密码」承诺仍由密码下方
+     field-help 保留），标题降档；44px 触控目标与全部表单字段保持不变。 */
+  @media (max-height: 780px) {
+    .head .sub {
+      display: none;
+    }
+    .page-title {
+      font-size: 1.35rem;
+    }
+    .form-intro {
+      display: none;
+    }
+    .health-strip {
+      margin: 10px 0 0;
+    }
+    .row {
+      gap: 10px;
+    }
+    .field-help:not(.field-trust) {
+      display: none;   /* 学号格式提示可由 pattern/校验兜底，短屏让位给主字段；信任行豁免 */
+    }
+  }
+  @media (max-height: 640px) {
+    .page-title {
+      font-size: 1.15rem;
+    }
+    .form-section-heading {
+      margin: 10px 0 5px;
+    }
+    .query-kind-grid {
+      gap: 8px;
+    }
+  }
+
+  /* ---------- 移动端一屏化（≤640px 宽） ----------
+     重排版原则（替换首版「全字段两列挤压」——居中窄列观感差）：
+     1. 输入类字段恢复单列全宽（移动端自然形态）；只把天然成对的
+        学期/周次两个下拉并排（值短，两列不局促）
+     2. 查询内容双卡收为紧凑高度并隐藏副标题，避免窄卡文案换行错位
+     3. 留白统一收紧但保持节奏（12/6 标题、44px 触控底线、字段全保留）
+     4. 隐私承诺（BRAND TRUST 内核）保留单行紧凑形态 */
+  @media (max-width: 640px) {
+    /* 学号/密码：单列全宽；标签恢复常规字号与间距 */
+    .row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+    }
+    .row label:not(.field-check) {
+      margin-bottom: 5px;
+      font-size: 0.82rem;
+    }
+    /* 学期/周次：天然成对，两列并排 */
+    .row.query-scope-row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    #queryForm.card {
+      padding: 16px;
+    }
+    .head {
+      margin-bottom: 8px;
+    }
+    .wrap:has(> .layout:not(.has-result)) > .head {
+      padding-top: 4px;
+      min-height: 48px;
+      max-height: 72px;
+    }
+    .head .sub {
+      display: none;
+    }
+    .page-title {
+      font-size: 1.25rem;
+    }
+    /* intro 只剩说明文案（pill 已下沉为密码信任行）：移动端整体隐藏；
+       隐私承诺经 .field-trust 常驻密码框下方，全端可见 */
+    .form-intro {
+      display: none;
+    }
+    .field-help:not(.field-trust) {
+      display: none;
+    }
+    .form-section-heading {
+      margin: 12px 0 6px;
+    }
+    .health-strip {
+      margin: 8px 0 0;
+    }
+    /* 查询内容：紧凑卡 + 隐藏副标题（窄卡换行是首版排版怪异的来源之一） */
+    .query-choice {
+      min-height: 56px;
+      padding: 8px 12px;
+      justify-content: center;
+    }
+    .query-choice-copy {
+      align-items: center;
+      text-align: center;
+    }
+    .query-choice-copy small {
+      display: none;
+    }
+    .checks {
+      padding: 10px 12px;
+      gap: 6px;
+    }
+    .actions {
+      margin-top: 12px;
+    }
+    .actions .btn {
+      min-height: 44px;
+    }
+    .wrap:has(> .layout > #queryForm) > .layout:not(.has-result) {
+      margin-block: 4px auto;
+    }
+  }

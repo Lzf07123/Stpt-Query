@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -449,3 +450,25 @@ def test_locations_with_custom_headers_keep_security_headers():
     admin_block = next(b for b in blocks if b.split("{", 1)[0].strip() == "location = /admin")
     # 必须保持继承整站安全头（含 CSP）：块内不得出现真正的 add_header 指令
     assert not re.search(r"(?m)^\s*add_header\s", admin_block)
+
+
+def test_pwa_assets_are_external_and_uncached():
+    """PWA：sw.js 必须外置且页面仅引用不内联；nginx 对 sw.js/manifest 禁缓存
+    且不得自建 add_header（保住 server 级 CSP 继承）。"""
+    index_html = _read("frontend/static/index.html")
+    assert '<link rel="manifest" href="/manifest.json">' in index_html
+    assert 'apple-touch-icon' in index_html
+    assert "serviceWorker" in _read("frontend/static/app.js")  # 注册逻辑外置在 app.js
+
+    config = _read("frontend/templates/default.conf.template")
+    for head in ("location = /sw.js", "location = /manifest.json"):
+        body = _location_body(config, head)
+        assert "expires -1;" in body, head
+        assert "add_header" not in body, head
+    # manifest 图标必须真实存在于镜像产物中
+    for icon in ("icon-192.png", "icon-512.png", "icon-maskable-192.png",
+                 "icon-maskable-512.png", "apple-touch-icon.png"):
+        assert (ROOT / "frontend/static/image" / icon).exists(), icon
+    manifest = json.loads(_read("frontend/static/manifest.json"))
+    assert manifest["start_url"] == "/?source=pwa"
+    assert {icon["purpose"] for icon in manifest["icons"]} >= {"any", "maskable"}

@@ -217,7 +217,7 @@ class Pipeline:
             "session": session_info["session"],
             "semesters": req.semesters or "",
             "include_rows": "false",
-            "include_all": "false",
+            "include_all": bool(req.include_all),
         }
         try:
             data, retried = await self._post_with_session_recovery(
@@ -299,6 +299,8 @@ class Pipeline:
             "semester": req.semesters or "",
             "include_rows": "false",
         }
+        if req.odd_or_double is not None:
+            payload["odd_or_double"] = int(req.odd_or_double)
         try:
             data, retried = await self._post_with_session_recovery(
                 req, session_info, path="/get_schedule", payload=payload)

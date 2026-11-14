@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -27,6 +28,26 @@ from .rules import ScheduleDataError
 from .store import CalendarStore, now_iso
 
 FEED_PATH = "/cal/%s.ics"
+
+# owner 级口令猜测退避：本地比对失败后按 owner_hash 记失败次数，
+# 2^（n-1）秒指数退避（上限 10 分钟）。仅进程内保存（单实例部署语义），
+# 有界防内存滥用：超过上限先清已过期项，仍超则整体重置。
+AUTH_BACKOFF_BASE_SECONDS = 2.0
+AUTH_BACKOFF_CAP_SECONDS = 600.0
+AUTH_BACKOFF_MAX_ENTRIES = 10000
+
+
+def _is_expired(record: Optional[Dict[str, Any]], at: Optional[str] = None) -> bool:
+    """订阅是否已过 TTL（expires_at 到期）。无 expires_at 视为未过期。"""
+    if not record:
+        return False
+    expires = record.get("expires_at")
+    if not expires:
+        return False
+    try:
+        return datetime.fromisoformat(expires) < datetime.fromisoformat(at or now_iso())
+    except ValueError:
+        return False
 
 
 class CalendarError(Exception):
@@ -117,6 +138,8 @@ class CalendarService:
         self._locks: Dict[str, List[Any]] = {}
         self._locks_guard = asyncio.Lock()
         self._attempt_lock = asyncio.Lock()
+        # owner 级口令退避状态：owner_hash -> (连续失败次数, 退避截止时间戳)
+        self._auth_failures: Dict[str, Tuple[int, float]] = {}
 
     # ---------------- 工具 ----------------
     def feed_url(self, token: str) -> str:
@@ -208,20 +231,59 @@ class CalendarService:
             return False
         return self.crypto.compare(stored, password)
 
+    # ---- owner 级口令退避（防按学号撞库 / 反复撞学校风控） ----
+    def _owner_backoff_remaining(self, owner_hash: str) -> float:
+        state = self._auth_failures.get(owner_hash)
+        if not state:
+            return 0.0
+        _, until = state
+        remaining = until - time.time()
+        return remaining if remaining > 0 else 0.0
+
+    def _register_auth_failure(self, owner_hash: str) -> float:
+        """记一次本地比对失败并计算下一次退避窗口；返回本次登记的退避秒数。"""
+        count, _ = self._auth_failures.get(owner_hash, (0, 0.0))
+        count += 1
+        delay = min(AUTH_BACKOFF_BASE_SECONDS ** (count - 1), AUTH_BACKOFF_CAP_SECONDS)
+        if len(self._auth_failures) >= AUTH_BACKOFF_MAX_ENTRIES:
+            stamp = time.time()
+            expired = [k for k, v in self._auth_failures.items() if v[1] <= stamp]
+            for key in expired:
+                self._auth_failures.pop(key, None)
+            if len(self._auth_failures) >= AUTH_BACKOFF_MAX_ENTRIES:
+                self._auth_failures.clear()   # 极端滥用下的有界性兜底
+        self._auth_failures[owner_hash] = (count, time.time() + delay)
+        return delay
+
+    def _clear_auth_failures(self, owner_hash: str) -> None:
+        self._auth_failures.pop(owner_hash, None)
+
+    def _ensure_owner_not_backoff(self, owner_hash: str) -> None:
+        """退避窗口内拒绝一切需要凭据校验的入口（不回退 L3，不打学校）。"""
+        remaining = self._owner_backoff_remaining(owner_hash)
+        if remaining > 0:
+            raise CalendarAuthError(
+                "尝试过于频繁，请 %d 秒后重试" % max(1, int(remaining + 0.999)))
+
     async def _authoritative(self, owner_hash: str, username: str, password: str,
                              verified_token: Optional[str], record: Optional[Dict[str, Any]]) -> str:
-        """返回权威结论：active / reauth_needed / none。"""
-        if record is not None and self._password_matches(record, password):
-            return "active"
-        if verified_token and self.crypto.check_verify_token(verified_token, owner_hash):
+        """返回权威结论：active / reauth_needed / none / expired。"""
+        semester = (record or {}).get("semester") or ""
+        if record is not None:
+            if self._password_matches(record, password):
+                self._clear_auth_failures(owner_hash)
+                return "expired" if _is_expired(record) else "active"
+            self._ensure_owner_not_backoff(owner_hash)
+            self._register_auth_failure(owner_hash)
+        if verified_token and self.crypto.check_verify_token(verified_token, owner_hash, semester):
             return "reauth_needed" if record is not None else "none"
         # L3：回退真实登录（同时刷新课表行以证明凭据有效）
-        await self.school.schedule_rows(username, password,
-                                        (record or {}).get("semester") or "")
+        await self.school.schedule_rows(username, password, semester)
+        self._clear_auth_failures(owner_hash)
         return "reauth_needed" if record is not None else "none"
 
-    def issue_verify_token(self, username: str) -> str:
-        return self.crypto.issue_verify_token(self.crypto.owner_hash(username))
+    def issue_verify_token(self, username: str, semester: str = "") -> str:
+        return self.crypto.issue_verify_token(self.crypto.owner_hash(username), semester)
 
     # ---------------- 状态 ----------------
     async def status(self, username: str, password: str, semester: str,
@@ -265,8 +327,15 @@ class CalendarService:
             # 先做一次等量本地密钥校验再 404：避免「秒回 404」暴露该学号没有订阅
             self.crypto.timing_dummy()
             raise CalendarError(404, "未找到该学期的订阅", "not_found")
-        proven = self._password_matches(record, password) or bool(
-            verified_token and self.crypto.check_verify_token(verified_token, owner_hash))
+        # 退避只拦「再次失败」：正确密码立即放行，快速连猜由每次失败的退避窗口拦住
+        if self._password_matches(record, password):
+            self._clear_auth_failures(owner_hash)
+            proven = True
+        else:
+            self._ensure_owner_not_backoff(owner_hash)
+            self._register_auth_failure(owner_hash)
+            proven = bool(verified_token
+                          and self.crypto.check_verify_token(verified_token, owner_hash, semester))
         if not proven:
             raise CalendarAuthError("请先用当前密码重新授权，再生成扫码图像")
         url = self._feed_url_of(record)
@@ -283,17 +352,19 @@ class CalendarService:
         """L1 快路径：课表查询刚成功（密码已被学校接受）时的权威状态判定，零学校流量。"""
         owner_hash = self.crypto.owner_hash(username)
         record = self.store.get_by_owner_semester(owner_hash, semester)
-        token = self.issue_verify_token(username)
+        token = self.issue_verify_token(username, semester)
         if record is None:
             return {"state": "none", "enabled": False, "semester": semester,
                     "verified_token": token}
         state = "active" if self._password_matches(record, password) else "reauth_needed"
+        if _is_expired(record):
+            state = "expired"
         return {
             "state": state, "enabled": True, "semester": semester,
             "refresh_interval": record["refresh_interval"],
             "last_refresh_at": record.get("last_fetch_at"),
             "last_status": record.get("last_fetch_status"),
-            "feed_url": self._feed_url_of(record),
+            "feed_url": self._feed_url_of(record) if state != "expired" else None,
             "verified_token": token,
         }
 
@@ -303,7 +374,7 @@ class CalendarService:
         term = self._term(semester)
         owner_hash = self.crypto.owner_hash(username)
         existing = self.store.get_by_owner_semester(owner_hash, semester)
-        if existing is not None:
+        if existing is not None and not _is_expired(existing):
             if self._password_matches(existing, password):
                 return {"created": False, "state": "active", "semester": semester,
                         "feed_url": self._feed_url_of(existing),
@@ -311,6 +382,8 @@ class CalendarService:
             if not reauthorize:
                 raise CalendarError(409, "该学期已存在订阅且密码不同，请使用重新授权",
                                     "reauthorize_required")
+        # 已过期订阅走完整重建（= 续期）：重新登录学校、重建快照并顺延 TTL；
+        # 密码不对会由下方真实登录直接报凭据错误，无需 reauthorize 前置。
 
         interval = self.normalized_refresh(refresh_interval)
         # 已有订阅用 calendar_id 锁（与 refresh/refresh_record 一致，消除 owner 锁与
@@ -351,6 +424,9 @@ class CalendarService:
                 self.store.update_credentials(
                     calendar_id, self.crypto.encrypt(password, "cred|%s" % calendar_id),
                     self.crypto.encrypt(username, "user|%s" % calendar_id))
+                if _is_expired(existing):
+                    # 续期：顺延 TTL（paused/fail_count 由 save_snapshot 归零）
+                    self.store.renew_expiry(calendar_id, self._expiry(self.settings.ttl_days))
             # 新建订阅：INSERT 已代表版本 1（快照 SEQUENCE == revision 的不变量），
             # 不再因 changed=True 额外自增；重新授权按内容真实变化决定是否自增。
             self.store.save_snapshot(calendar_id, payload, etag,
@@ -371,8 +447,16 @@ class CalendarService:
         record = self.store.get_by_owner_semester(owner_hash, semester)
         if record is None:
             raise CalendarError(404, "未找到该学期的订阅", "not_found")
-        if not self._password_matches(record, password):
+        if _is_expired(record):
+            # 到期订阅的刷新没有意义（订阅源已 404）；续期走「重新开启」。
+            raise CalendarError(404, "订阅已到期，请重新开启", "not_found")
+        if self._password_matches(record, password):
+            self._clear_auth_failures(owner_hash)
+        else:
+            self._ensure_owner_not_backoff(owner_hash)
+            self._register_auth_failure(owner_hash)
             await self.school.schedule_rows(username, password, semester)   # L3 校验
+            self._clear_auth_failures(owner_hash)
         term = self._term(semester)
         async with self._holding(record["id"]):
             # 进锁后按 id 重读：并发刷新/轮换窗口内的 revision、etag 与间隔必须以
@@ -469,6 +553,8 @@ class CalendarService:
             # 先做一次等量本地密钥校验再 404：避免「秒回 404」暴露该学号没有订阅
             self.crypto.timing_dummy()
             raise CalendarError(404, "未找到该学期的订阅", "not_found")
+        if _is_expired(record):
+            raise CalendarError(404, "订阅已到期，请重新开启", "not_found")
         await self._authoritative(owner_hash, username, password, verified_token, record)
         token = self.crypto.new_token()
         self.store.rotate_token(record["id"], self.crypto.token_hash(token),

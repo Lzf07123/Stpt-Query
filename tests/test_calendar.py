@@ -261,7 +261,7 @@ def test_create_status_rotate_close_flow(store, crypto, config, monkeypatch):
     assert school.calls == 1
 
     # 状态：密码变更 + 有效验证令牌 → reauth_needed（零学校流量）
-    token = service.issue_verify_token("2023000001")
+    token = service.issue_verify_token("2023000001", "2026-2027-1")
     status2 = _run(service.status("2023000001", "newpw", "2026-2027-1", token))
     assert status2["state"] == "reauth_needed" and school.calls == 1
 
@@ -427,7 +427,7 @@ def test_qr_requires_registered_owner_and_returns_webcal_matrix(store, crypto, c
     assert feed_token not in body and "pw" not in body
 
     # L1（课表查询刚签发的短时令牌）同样可生成，且零学校流量
-    verify = service.issue_verify_token("2023000001")
+    verify = service.issue_verify_token("2023000001", "2026-2027-1")
     assert service.qr("2023000001", "whatever", "2026-2027-1", verify)["rows"] == expected["rows"]
     assert school.calls == 1
 
@@ -637,10 +637,8 @@ def test_stats_counts_states_without_loading_blobs(store, crypto, config):
     assert stats["paused"] == 0
 
 
-# ---------------- 回归：过期幂等键与审计保留期清理 ----------------
-def test_cleanup_expired_removes_ops_and_stale_audit(store):
-    store.ops_put("k1", "owner1", None, "create", b"resp", ttl_seconds=-1)   # 已过期
-    store.ops_put("k2", "owner1", None, "create", b"resp", ttl_seconds=3600)
+# ---------------- 回归：审计保留期清理 ----------------
+def test_cleanup_expired_removes_stale_audit(store):
     fresh = (datetime.now().astimezone() - timedelta(days=1)).isoformat(timespec="seconds")
     stale = (datetime.now().astimezone() - timedelta(days=200)).isoformat(timespec="seconds")
     for at in (stale, fresh):
@@ -649,10 +647,7 @@ def test_cleanup_expired_removes_ops_and_stale_audit(store):
             " VALUES (?,?,?,?,?)", (at, None, "create", "user", "ok"))
 
     removed = store.cleanup_expired()
-    assert removed["ops_removed"] == 1
-    assert removed["audit_removed"] == 1
-    assert store.ops_get("k1", "owner1") is None
-    assert store.ops_get("k2", "owner1")["idem_key"] == "k2"
+    assert removed == {"audit_removed": 1}
     remaining = store._conn.execute(
         "SELECT COUNT(*) AS c FROM calendar_audit").fetchone()["c"]
     assert remaining == 1          # 保留期内（<180 天）的审计行不动
@@ -662,7 +657,6 @@ def test_scheduler_tick_cleans_expired_rows(store, crypto, config):
     from app.calendar.scheduler import CalendarScheduler
 
     service = _service(store, crypto, config, FakeSchool(ROWS))
-    store.ops_put("k1", "owner1", None, "create", b"resp", ttl_seconds=-1)
     stale = (datetime.now().astimezone() - timedelta(days=200)).isoformat(timespec="seconds")
     store._exec(
         "INSERT INTO calendar_audit (at, calendar_id, action, actor, result)"
@@ -670,10 +664,140 @@ def test_scheduler_tick_cleans_expired_rows(store, crypto, config):
 
     _run(CalendarScheduler(service).tick())
 
-    assert store.ops_get("k1", "owner1") is None
     remaining = store._conn.execute(
         "SELECT COUNT(*) AS c FROM calendar_audit").fetchone()["c"]
     assert remaining == 0
+
+
+# ---------------- 回归：到期订阅（停止刷新 / 续期 / 状态派生） ----------------
+def _backdate_expiry(store, crypto, username, semester, days: int) -> None:
+    record = store.get_by_owner_semester(crypto.owner_hash(username), semester)
+    past = (datetime.now().astimezone() - timedelta(days=days)).isoformat(timespec="seconds")
+    store._exec("UPDATE calendars SET expires_at = ? WHERE id = ?", (past, record["id"]))
+
+
+def test_expired_subscription_is_not_claimed_by_scheduler(store, crypto, config):
+    from app.calendar.store import now_iso
+
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    calls_after_create = school.calls
+    _backdate_expiry(store, crypto, "2023000001", "2026-2027-1", days=1)
+    # 到期订阅即使 next_refresh_at 已到，也不再被调度器抢占刷新
+    claimed = store.claim_due(now_iso(), limit=5, cooldown_seconds=60)
+    assert claimed == []
+    assert school.calls == calls_after_create
+
+
+def test_expired_subscription_renews_via_create(store, crypto, config):
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    created = _run(service.create("2023000001", "pw", "2026-2027-1"))
+    _backdate_expiry(store, crypto, "2023000001", "2026-2027-1", days=1)
+    # 到期后状态派生为 expired；feed 已失效
+    record = store.get_by_owner_semester(crypto.owner_hash("2023000001"), "2026-2027-1")
+    assert service.store.stats()["states"] == {"expired": 1}
+    feed_token = created["feed_url"].rsplit("/", 1)[-1][:-4]
+    with pytest.raises(CalendarError):
+        service.feed(feed_token)
+    # 重新开启 = 续期：重新登录学校、重建快照、TTL 顺延
+    renewed = _run(service.create("2023000001", "pw", "2026-2027-1"))
+    record2 = store.get_by_owner_semester(crypto.owner_hash("2023000001"), "2026-2027-1")
+    assert record2["expires_at"] > record["expires_at"]
+    assert school.calls == 2
+    assert service.feed(feed_token)["body"].startswith(b"BEGIN:VCALENDAR")
+    assert renewed["state"] == "active"
+    # L1 快路径对到期订阅报 expired，续期后回到 active
+    assert service.local_state("2023000001", "pw", "2026-2027-1")["state"] == "active"
+
+
+def test_expired_subscription_refresh_and_rotate_are_rejected(store, crypto, config):
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    _backdate_expiry(store, crypto, "2023000001", "2026-2027-1", days=1)
+    with pytest.raises(CalendarError) as exc:
+        _run(service.refresh("2023000001", "pw", "2026-2027-1"))
+    assert exc.value.status_code == 404 and school.calls == 1
+    with pytest.raises(CalendarError) as exc2:
+        _run(service.rotate("2023000001", "pw", "2026-2027-1"))
+    assert exc2.value.status_code == 404
+
+
+# ---------------- 回归：verified_token 绑定学期/用途 ----------------
+def test_verify_token_bound_to_semester(store, crypto, config):
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    token = service.issue_verify_token("2023000001", "2026-2027-1")
+    # 同学期令牌有效（密码已变更时零学校流量下结论）
+    status = _run(service.status("2023000001", "newpw", "2026-2027-1", token))
+    assert status["state"] == "reauth_needed"
+    calls_after_l1 = school.calls
+    # 跨学期令牌无效：该学期无订阅 → 令牌不再短路，回退 L3 真实登录后判 none
+    status2 = _run(service.status("2023000001", "pw", "2026-2027-2", token))
+    assert status2["state"] == "none"
+    assert school.calls == calls_after_l1 + 1
+    # 裸 crypto 层同样绑定学期
+    owner = crypto.owner_hash("2023000001")
+    assert crypto.check_verify_token(token, owner, "2026-2027-1")
+    assert not crypto.check_verify_token(token, owner, "2026-2027-2")
+
+
+# ---------------- 回归：owner 级口令猜测退避 ----------------
+class PasswordCheckingSchool(FakeSchool):
+    """模拟真实学校端口：密码不对就抛凭据错误。"""
+
+    async def schedule_rows(self, username, password, semester):   # type: ignore[override]
+        if password != "pw":
+            self.calls += 1
+            raise CalendarAuthError()
+        return await super().schedule_rows(username, password, semester)
+
+
+def test_owner_backoff_blocks_rapid_failures_but_not_correct_password(store, crypto, config):
+    school = PasswordCheckingSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    calls_after_create = school.calls
+
+    # 第一次密码错误：L2 未中 → 允许走 L3（打一次学校，L3 报凭据错误）
+    with pytest.raises(CalendarAuthError):
+        _run(service.status("2023000001", "bad-1", "2026-2027-1"))
+    assert school.calls == calls_after_create + 1
+
+    # 紧接着的第二次失败：退避窗口内直接拒绝，不再打学校
+    with pytest.raises(CalendarAuthError) as blocked:
+        _run(service.status("2023000001", "bad-2", "2026-2027-1"))
+    assert "频繁" in blocked.value.detail
+    assert school.calls == calls_after_create + 1
+
+    # 正确密码立即放行（退避只拦再次失败），并清零失败计数
+    status = _run(service.status("2023000001", "pw", "2026-2027-1"))
+    assert status["state"] == "active"
+    assert service._auth_failures == {}
+
+    # 清零后新的一轮失败重新从 L3 开始
+    with pytest.raises(CalendarAuthError):
+        _run(service.status("2023000001", "bad-3", "2026-2027-1"))
+    assert school.calls == calls_after_create + 2
+
+
+def test_owner_backoff_expires_and_is_bounded(store, crypto, config):
+    school = FakeSchool(ROWS)
+    service = _service(store, crypto, config, school)
+    _run(service.create("2023000001", "pw", "2026-2027-1"))
+    owner = crypto.owner_hash("2023000001")
+    # 手动把退避截止时间拨回过去 → 窗口过期后恢复放行
+    service._auth_failures[owner] = (5, 0.0)
+    assert service._owner_backoff_remaining(owner) == 0.0
+    # 登记失败会推高退避窗口（指数），且有上限
+    delay1 = service._register_auth_failure(owner)
+    delay6 = service._register_auth_failure(owner)
+    assert delay6 > delay1
+    assert delay6 <= 600.0
+    assert len(service._auth_failures) == 1
 
 
 # ---------------- 回归：订阅存在性预言机（rotate/qr） ----------------

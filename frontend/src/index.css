@@ -575,7 +575,7 @@
   /* 页面内持久提示条（与 Toast 同一视觉语言） */
   .notice {
     @apply flex items-start gap-2.5 rounded-xl border p-3.5 text-sm;
-    animation: page-fade-up var(--motion-base) var(--ease-out) both;
+    animation: page-fade-up var(--motion-base) var(--ease-out) backwards;
   }
   .notice-icon {
     @apply mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full;
@@ -1177,17 +1177,21 @@
     display: block;
   }
 
-  /* 下拉菜单（Chat 已验证）：绝对定位在触发器下方，surface + shadow-lg */
+  /* 下拉菜单（Chat 已验证）：绝对定位在触发器下方。表面用 surface-2 提层：
+     白卡上的白面板（浅色）/ 同源 surface 面板（深色）都会「隐形」，提一档
+     + 主色描边 + 实影，恢复「浮起的面板」直觉（桌面端与深色同步，elevation-consistent） */
   .dropdown-menu {
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
     min-width: 200px;
     padding: 8px;
-    background: var(--eduquery-surface);
-    border: 1px solid var(--eduquery-border);
+    background: var(--eduquery-surface-2);
+    border: 1px solid color-mix(in srgb, var(--eduquery-primary) 26%, var(--eduquery-border));
     border-radius: 16px;
-    box-shadow: var(--shadow-lg);
+    box-shadow:
+      0 2px 8px rgba(24, 58, 51, 0.1),
+      0 12px 36px rgba(24, 58, 51, 0.16);
     z-index: 30;
     display: flex;
     flex-direction: column;
@@ -1209,6 +1213,23 @@
   }
   .dropdown-menu[hidden] {
     display: none;
+  }
+  /* 触发器贴近视口底部时向上翻转（app.js openMenu 测定空间后加 drop-up）：
+     彻底避免菜单越界；入场方向随翻转改为自下而上（层级运动语义） */
+  .dropdown-menu.drop-up {
+    top: auto;
+    bottom: calc(100% + 8px);
+    animation-name: menu-in-up;
+  }
+  @keyframes menu-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
   }
   .dropdown-header {
     display: flex;
@@ -1478,12 +1499,29 @@
   .site-footer {
     /* 常驻视口底部：始终可见，无需滚动到页尾；上边框与背景铺满整宽。
        层级 30：低于站点菜单(40)/弹窗(70)/提示(80)，内容底部由下方 :has 规则预留空间 */
-    /* 不透明：半透明 + backdrop-blur 会让滚动内容透出糊带，视觉上像页面下部的异常阴影 */
-    @apply fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface;
+    /* 表面按 Li-Design V1.5 模板逐值（bg-surface/60 + backdrop-blur，即 MASTER
+       已验收的「半透明表面 + blur(8px)」）；V1.8 视觉刷新将页脚归为「单实例
+       表面」，实时玻璃的重采样成本恒定，允许常驻 backdrop-filter */
+    @apply fixed inset-x-0 bottom-0 z-30 border-t border-border/60 bg-surface/60 backdrop-blur;
   }
   /* 固定页脚占位：为页面内容预留底部空间，避免被页脚遮挡 */
   body:has(.site-footer) {
     padding-bottom: 84px;
+  }
+  /* 全面屏安全区：固定页脚与占位叠加 Home Indicator 高度（无安全区时为 0） */
+  @supports (padding: env(safe-area-inset-bottom)) {
+    body:has(.site-footer) {
+      padding-bottom: calc(84px + env(safe-area-inset-bottom));
+    }
+    .site-footer {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .modal-footer {
+      padding-bottom: calc(0.875rem + env(safe-area-inset-bottom));
+    }
+    .toast-viewport {
+      top: calc(1rem + env(safe-area-inset-top));
+    }
   }
   @media print {
     body:has(.site-footer) { padding-bottom: 0; }
@@ -1520,13 +1558,12 @@
 @layer utilities {
   /* 路由切换：整页淡入上移 */
   @keyframes page-fade-up {
+    /* 只定义 from：终态 = 元素自然样式（无 transform 残留）。fill both 曾把
+       translateY(0) 定格成持久 transform → .layout/#serviceStatus 变成
+       z:auto 层叠上下文，服务状态条按树序盖住表单内的下拉菜单 */
     from {
       opacity: 0;
       transform: translateY(12px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
     }
   }
 
@@ -1536,17 +1573,17 @@
     animation: none;
   }
   .page-enter > .head {
-    animation: page-fade-up var(--motion-base) var(--ease-out) both;
+    animation: page-fade-up var(--motion-base) var(--ease-out) backwards;
   }
   .page-enter > #offlineBar,
   .page-enter > #noticeBar {
-    animation: page-fade-up var(--motion-base) var(--ease-out) 30ms both;
+    animation: page-fade-up var(--motion-base) var(--ease-out) 30ms backwards;
   }
   .page-enter > .layout {
-    animation: page-fade-up var(--motion-slow) var(--ease-out) 60ms both;
+    animation: page-fade-up var(--motion-slow) var(--ease-out) 60ms backwards;
   }
   .page-enter > #serviceStatus {
-    animation: page-fade-up var(--motion-base) var(--ease-out) 90ms both;
+    animation: page-fade-up var(--motion-base) var(--ease-out) 90ms backwards;
   }
 
   /* 骨架扫光（background-position 动画，不触发重排） */
@@ -2796,4 +2833,17 @@ html { scroll-behavior: smooth; }
   --eduquery-motion-slow: 350ms;
   --eduquery-ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
   --eduquery-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ---------- 触屏触控目标（BRAND 验收基线 ≥44px） ----------
+   桌面紧凑密度（min-h-9 / seg 36px）在 coarse pointer（手机/平板）下提升到 44px；
+   选择器强度须不低于各处 .seg-btn 的复合选择器（如 .calendar-field .seg-btn） */
+@media (pointer: coarse) {
+  .btn-sm {
+    min-height: 44px;
+  }
+  .seg-btn,
+  .calendar-field .seg-btn {
+    min-height: 44px;
+  }
 }

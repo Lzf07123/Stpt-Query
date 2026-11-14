@@ -99,14 +99,21 @@ class CalendarCrypto:
                                    str(right or "").encode("utf-8"))
 
     # ---- 短时验证令牌（查询成功后签发，证明当前密码刚被学校接受）----
-    def issue_verify_token(self, owner_hash: str, now: Optional[float] = None) -> str:
+    # 签名绑定 owner + 用途 + 学期：令牌只能用于签发时所针对的学期，
+    # 且不能被挪用到其他用途（跨学期/跨用途一律校验失败，回退密码/L3 判定）。
+    def issue_verify_token(self, owner_hash: str, semester: str = "",
+                           purpose: str = "calendar", now: Optional[float] = None) -> str:
         expires = int((now or time.time()) + self.verify_ttl)
-        signature = hmac.new(self._key, b"verify|%s|%d" % (owner_hash.encode("utf-8"), expires),
-                             hashlib.sha256).hexdigest()
+        signature = hmac.new(
+            self._key,
+            b"verify|%s|%s|%s|%d" % (owner_hash.encode("utf-8"),
+                                     str(purpose).encode("utf-8"),
+                                     str(semester).encode("utf-8"), expires),
+            hashlib.sha256).hexdigest()
         return "%d.%s" % (expires, signature)
 
-    def check_verify_token(self, token: str, owner_hash: str,
-                           now: Optional[float] = None) -> bool:
+    def check_verify_token(self, token: str, owner_hash: str, semester: str = "",
+                           purpose: str = "calendar", now: Optional[float] = None) -> bool:
         raw = str(token or "").strip()
         if "." not in raw:
             return False
@@ -115,7 +122,11 @@ class CalendarCrypto:
             return False
         if int(expires_text) < int(now or time.time()):
             return False
-        expected = hmac.new(self._key, b"verify|%s|%s" % (owner_hash.encode("utf-8"),
-                                                           expires_text.encode("ascii")),
-                            hashlib.sha256).hexdigest()
+        expected = hmac.new(
+            self._key,
+            b"verify|%s|%s|%s|%s" % (owner_hash.encode("utf-8"),
+                                     str(purpose).encode("utf-8"),
+                                     str(semester).encode("utf-8"),
+                                     expires_text.encode("ascii")),
+            hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)

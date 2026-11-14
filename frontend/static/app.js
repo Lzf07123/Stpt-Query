@@ -69,6 +69,7 @@
     const weeksInput = document.getElementById("weeks");
     const md2pdfInput = document.getElementById("md2pdf");
     const checkInput = document.getElementById("check");
+    const includeAllInput = document.getElementById("includeAll");
     const submitBtn = document.getElementById("submitBtn");
     const submitSpinner = document.getElementById("submitSpinner");
     const submitBtnText = document.getElementById("submitBtnText");
@@ -466,6 +467,14 @@
       document.getElementById("queryScopeHint").textContent = isSchedule
         ? "当前学期 · 全部周次"
         : "当前学期";
+      // 「全部学期 / 最近 N 学期」仅成绩可用：切到课表时复位，避免把多学期参数透传给课表链路
+      document.querySelectorAll("#semestersMenu .grades-only-item").forEach(function (item) {
+        item.classList.toggle("hidden", isSchedule);
+      });
+      if (isSchedule && /^(all|recent:\d+)$/.test(semestersInput.value)) {
+        semestersInput.value = "";
+        semestersDropdown.sync();
+      }
       if (!submitBtn.disabled) submitBtnText.textContent = queryButtonLabel();
     }
 
@@ -478,7 +487,30 @@
         return Array.prototype.slice.call(menu.querySelectorAll(".dropdown-item"));
       }
 
+      function positionMenu() {
+        // 触发器贴近视口底部时向上翻转，彻底避免菜单越界（含 fixed 页脚区域）；
+        // 两侧都放不下时选空间更大的一侧并限高，交给菜单内部滚动
+        menu.classList.remove("drop-up");
+        menu.style.maxHeight = "";
+        const rect = trigger.getBoundingClientRect();
+        const gap = 8;          // 与 .dropdown-menu 的 top/bottom 偏移一致
+        const margin = 12;      // 视口边缘安全余量
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const spaceAbove = rect.top;
+        const menuH = menu.offsetHeight;   // hidden 已移除，可测量
+        if (menuH + gap + margin <= spaceBelow) return;   // 下方放得下，维持向下
+        if (spaceAbove > spaceBelow) {
+          menu.classList.add("drop-up");
+          if (menuH + gap + margin > spaceAbove) {
+            menu.style.maxHeight = Math.max(160, spaceAbove - gap - margin) + "px";
+          }
+        } else if (menuH + gap + margin > spaceBelow) {
+          menu.style.maxHeight = Math.max(160, spaceBelow - gap - margin) + "px";
+        }
+      }
+
       function openMenu() {
+        hideStatusTooltip();   // 悬浮详情(z-60)不得压住下拉选项(z-30@卡内)
         document.querySelectorAll(".dropdown-menu").forEach(function (m) {
           m.classList.add("hidden");
         });
@@ -486,6 +518,7 @@
           t.setAttribute("aria-expanded", "false");
         });
         menu.classList.remove("hidden");
+        positionMenu();
         trigger.setAttribute("aria-expanded", "true");
         const current = items().find(function (item) {
           return item.getAttribute("data-value") === input.value;
@@ -495,6 +528,8 @@
 
       function closeMenu(refocus) {
         menu.classList.add("hidden");
+        menu.classList.remove("drop-up");
+        menu.style.maxHeight = "";
         trigger.setAttribute("aria-expanded", "false");
         if (refocus) trigger.focus();
       }
@@ -945,6 +980,7 @@
       if (payload.weeks && payload.weeks !== "all") params.set("weeks", payload.weeks);
       if (payload.md2pdf) params.set("md2pdf", "1");
       if (payload.check) params.set("check", "1");
+      if (payload.include_all) params.set("include_all", "1");
       const qs = params.toString();
       history.replaceState(null, "", qs ? "?" + qs : location.pathname);
     }
@@ -956,6 +992,7 @@
       if (params.has("weeks")) weeksInput.value = params.get("weeks");
       md2pdfInput.checked = params.get("md2pdf") === "1";
       checkInput.checked = params.get("check") === "1";
+      if (includeAllInput) includeAllInput.checked = params.get("include_all") === "1";
       syncOptionSeg();
       semestersDropdown.sync();
       weeksDropdown.sync();
@@ -1170,6 +1207,206 @@
       return /^\s*\|?[\s:|-]+\|?\s*$/.test(line) && line.includes("-");
     }
 
+    // ---- 课表移动端按天视图：把「节次 × 星期」大表转置为按天卡片 ----
+    // 桌面端（≥760px）由 CSS 显示原表、隐藏 dayview；小屏反之。
+    const SCHEDULE_DAY_CHARS = ["一", "二", "三", "四", "五", "六", "日"];
+
+    function scheduleDayOfHeader(text) {
+      const compact = String(text).replace(/\s/g, "");
+      for (let i = 0; i < SCHEDULE_DAY_CHARS.length; i++) {
+        if (compact.indexOf("星期" + SCHEDULE_DAY_CHARS[i]) !== -1 ||
+            compact.indexOf("周" + SCHEDULE_DAY_CHARS[i]) !== -1) return i;
+      }
+      return -1;
+    }
+
+    function buildScheduleDayView(shell) {
+      const table = shell.querySelector("table");
+      if (!table || shell.dataset.dayviewReady === "1") return;
+      const headCells = Array.from(table.querySelectorAll("thead th"));
+      if (headCells.length < 3) return;
+      const colDays = headCells.map(function (th) {
+        return scheduleDayOfHeader(th.textContent);
+      });
+      if (!colDays.some(function (day) { return day >= 0; })) return;
+
+      const byDay = [[], [], [], [], [], [], []];
+      table.querySelectorAll("tbody tr").forEach(function (tr) {
+        const cells = Array.from(tr.querySelectorAll("td"));
+        const period = cells.length ? cells[0].textContent.trim() : "";
+        cells.forEach(function (td, idx) {
+          const day = colDays[idx];
+          if (day < 0 || !period) return;
+          const html = td.innerHTML.trim();
+          if (!html || html === "&nbsp;") return;
+          byDay[day].push({ period: period, html: html });
+        });
+      });
+
+      const view = document.createElement("div");
+      view.className = "schedule-dayview";
+      const tabs = document.createElement("div");
+      tabs.className = "schedule-dayview-tabs";
+      tabs.setAttribute("role", "tablist");
+      tabs.setAttribute("aria-label", "按星期查看课表");
+      const panel = document.createElement("div");
+      panel.className = "schedule-dayview-panel";
+      const tabButtons = [];
+
+      function select(day) {
+        tabButtons.forEach(function (btn, idx) {
+          btn.classList.toggle("active", idx === day);
+          btn.setAttribute("aria-selected", idx === day ? "true" : "false");
+        });
+        panel.innerHTML = "";
+        const items = byDay[day] || [];
+        if (!items.length) {
+          const empty = document.createElement("p");
+          empty.className = "schedule-dayview-empty";
+          empty.textContent = "该日没有排课";
+          panel.appendChild(empty);
+          return;
+        }
+        items.forEach(function (item) {
+          // 单元格行内结构（已过 sanitize）：课程名 <br> 教师 <br> 教室 <br> 周次
+          const lines = item.html.split(/<br\s*\/?>/i)
+            .map(function (line) { return line.trim(); }).filter(Boolean);
+          const card = document.createElement("div");
+          card.className = "schedule-day-card";
+          const head = document.createElement("div");
+          head.className = "schedule-day-head";
+          const period = document.createElement("span");
+          period.className = "schedule-day-period";
+          period.textContent = item.period;
+          const name = document.createElement("span");
+          name.className = "schedule-day-name";
+          name.textContent = lines.shift() || "（未命名课程）";
+          head.appendChild(period);
+          head.appendChild(name);
+          card.appendChild(head);
+          if (lines.length) {
+            const meta = document.createElement("div");
+            meta.className = "schedule-day-meta";
+            lines.forEach(function (line) {
+              const span = document.createElement("span");
+              span.textContent = line;
+              meta.appendChild(span);
+            });
+            card.appendChild(meta);
+          }
+          panel.appendChild(card);
+        });
+      }
+
+      for (let day = 0; day < SCHEDULE_DAY_CHARS.length; day++) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "schedule-dayview-tab";
+        btn.setAttribute("role", "tab");
+        btn.setAttribute("aria-selected", "false");
+        btn.textContent = "周" + SCHEDULE_DAY_CHARS[day];
+        btn.addEventListener("click", function () { select(day); });
+        tabs.appendChild(btn);
+        tabButtons.push(btn);
+      }
+      tabs.addEventListener("keydown", function (event) {
+        const current = tabButtons.findIndex(function (btn) {
+          return btn.classList.contains("active");
+        });
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          select((current + 1) % SCHEDULE_DAY_CHARS.length);
+          tabButtons[(current + 1) % SCHEDULE_DAY_CHARS.length].focus();
+        } else if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          select((current + SCHEDULE_DAY_CHARS.length - 1) % SCHEDULE_DAY_CHARS.length);
+          tabButtons[(current + SCHEDULE_DAY_CHARS.length - 1) % SCHEDULE_DAY_CHARS.length].focus();
+        }
+      });
+      view.appendChild(tabs);
+      view.appendChild(panel);
+      shell.parentNode.insertBefore(view, shell);
+      shell.dataset.dayviewReady = "1";
+      // 默认选中今天；今天没课时选中第一个有课的日子
+      const today = (new Date().getDay() + 6) % 7;
+      const firstBusy = byDay.findIndex(function (items) { return items.length > 0; });
+      select(byDay[today] && byDay[today].length ? today
+        : (firstBusy >= 0 ? firstBusy : today));
+    }
+
+    // ---- 免密登录提示：渐进披露的紧凑条 ----
+    // 三行引用块（链接行 + 超长兼容性说明行 + 令牌警示行）在结果区占 ~140px，
+    // 把查询内容挤出首屏；这里保留链接 CTA 与「短时有效·勿外传」提示，
+    // 长说明收进「使用须知」折叠，并移除课表尾部与之重复的单行令牌警示。
+    function enhanceLoginNote(root) {
+      root.querySelectorAll("blockquote").forEach(function (bq) {
+        if (bq.dataset.loginNote === "1") return;
+        const raw = bq.innerHTML || "";
+        if (raw.indexOf("免密登录教务系统") === -1) return;
+        const lines = raw.split(/<br\s*\/?>/i)
+          .map(function (line) { return line.trim(); }).filter(Boolean);
+        const probe = document.createElement("template");
+        probe.innerHTML = lines.shift() || "";
+        const source = probe.content || probe;
+        const link = source.querySelector ? source.querySelector("a") : null;
+        if (!link || !link.getAttribute("href")) return;
+        bq.dataset.loginNote = "1";
+        bq.className = "login-note";
+        bq.innerHTML = "";
+        const main = document.createElement("div");
+        main.className = "login-note-main";
+        const title = document.createElement("span");
+        title.className = "login-note-title";
+        title.textContent = "免密登录教务系统";
+        const anchor = document.createElement("a");
+        anchor.className = "login-note-link";
+        anchor.href = link.getAttribute("href");
+        anchor.rel = "noopener";
+        anchor.textContent = link.textContent || "点击进入";
+        const hint = document.createElement("span");
+        hint.className = "login-note-hint";
+        hint.textContent = "链接短时有效 · 请勿外传";
+        main.appendChild(title);
+        main.appendChild(anchor);
+        main.appendChild(hint);
+        bq.appendChild(main);
+        if (lines.length) {
+          const more = document.createElement("details");
+          more.className = "login-note-more";
+          const summary = document.createElement("summary");
+          summary.textContent = "使用须知";
+          const body = document.createElement("div");
+          body.className = "login-note-body";
+          lines.forEach(function (line) {
+            const p = document.createElement("p");
+            p.innerHTML = line;   // 内容来自已过 sanitize_markdown 的渲染产物
+            body.appendChild(p);
+          });
+          more.appendChild(summary);
+          more.appendChild(body);
+          bq.appendChild(more);
+        }
+      });
+      // 课表尾部的单行令牌警示与紧凑条内提示重复：仅在紧凑条存在时移除
+      if (root.querySelector("blockquote.login-note")) {
+        root.querySelectorAll("blockquote:not(.login-note)").forEach(function (bq) {
+          const text = (bq.textContent || "").replace(/\s+/g, "");
+          if (/此链接含个人令牌，请勿外传/.test(text) && text.length < 40) bq.remove();
+        });
+      }
+    }
+
+    // 课表下载链接 CTA 化：结果区的主要后续动作（导出 PDF）用胶囊按钮呈现，
+    // 与免密跳转同一视觉语言；仅匹配本站导出地址，不误伤普通外链
+    function enhanceDownloadCta(root) {
+      root.querySelectorAll(".markdown-body a[href]").forEach(function (link) {
+        if (link.classList.contains("md-cta")) return;
+        const href = link.getAttribute("href") || "";
+        if (href.indexOf("/get_schedule/export") === -1) return;
+        link.classList.add("md-cta");
+      });
+    }
+
     function applyRenderedElementStyles(root) {
       root.querySelectorAll("[data-score]").forEach(function (node) {
         node.style.width = node.dataset.score + "%";
@@ -1177,6 +1414,9 @@
       root.querySelectorAll("[data-width]").forEach(function (node) {
         node.style.width = node.dataset.width + "%";
       });
+      root.querySelectorAll(".table-shell--schedule").forEach(buildScheduleDayView);
+      enhanceLoginNote(root);
+      enhanceDownloadCta(root);
     }
 
     function renderMarkdown(text) {
@@ -1506,6 +1746,24 @@
     function renderResultOverview(state, kicker, title, description, facts) {
       const icon = RESULT_OVERVIEW_ICONS[state] || RESULT_OVERVIEW_ICONS.info;
       const factItems = facts || [];
+      if (state === "success") {
+        // 成功态走单行紧凑条：结论 + 关键数值芯片。不再渲染 kicker/描述
+        // （与结果标题、概览描述三重冗余），把首屏高度还给真正的查询结果。
+        const chips = factItems.map(function (fact) {
+          return '<span class="result-fact-chip"><span>' + escapeHtml(fact.label) +
+            "</span><strong>" + escapeHtml(fact.value) + "</strong></span>";
+        }).join("");
+        resultOverview.className =
+          "result-overview result-overview--success result-overview--compact";
+        resultOverview.innerHTML =
+          '<span class="result-overview-icon">' + icon + "</span>" +
+          '<div class="result-overview-copy">' +
+            '<strong class="result-overview-title">' + escapeHtml(title) + "</strong>" +
+            (chips ? '<span class="result-facts-inline">' + chips + "</span>" : "") +
+          "</div>";
+        resultOverview.classList.remove("hidden");
+        return;
+      }
       const safeFacts = factItems.map(function (fact) {
         return '<div class="result-fact"><span>' + escapeHtml(fact.label) +
           "</span><strong>" + escapeHtml(fact.value) + "</strong></div>";
@@ -1605,26 +1863,33 @@
       "</div>";
     }
 
+    // 诊断报告的统一出口：状态卡 + 诊断正文。renderResultMarkdown（markdown 内嵌
+    // 报告）与 showResult 的失败信封兜底（data.diagnosis）共用，保证失败查询
+    // 永远呈现友好报告而非裸 JSON。
+    function renderDiagnosisOutcome(report) {
+      renderResultOverview(
+        /账号或密码/.test(report.category) ? "error" : "warning",
+        (resultContext.option || report.kind) + "查询",
+        /账号或密码/.test(report.category)
+          ? "登录信息需要确认"
+          : (/暂时不可用|服务未开放/.test(humanizeDiagnosticEvidence(report.evidence))
+            ? "学校服务暂不可用"
+            : "本次查询未完成"),
+        /账号或密码/.test(report.category)
+          ? "请重新核对学校统一身份认证账号和密码后再试。"
+          : "学校服务这次没有正常返回，请稍后重新查询；不要连续快速重试。",
+        [
+          { label: "环节", value: report.kind },
+          { label: "状态", value: (/HTTP\s*\d{3}/i.exec(report.evidence) || ["未完成"])[0] }
+        ]
+      );
+      return renderDiagnosticReport(report);
+    }
+
     function renderResultMarkdown(markdown, body) {
       const report = parseDiagnosticReport(markdown);
       if (report) {
-        renderResultOverview(
-          /账号或密码/.test(report.category) ? "error" : "warning",
-          (resultContext.option || report.kind) + "查询",
-          /账号或密码/.test(report.category)
-            ? "登录信息需要确认"
-            : (/暂时不可用|服务未开放/.test(humanizeDiagnosticEvidence(report.evidence))
-              ? "学校服务暂不可用"
-              : "本次查询未完成"),
-          /账号或密码/.test(report.category)
-            ? "请重新核对学校统一身份认证账号和密码后再试。"
-            : "学校服务这次没有正常返回，请稍后重新查询；不要连续快速重试。",
-          [
-            { label: "环节", value: report.kind },
-            { label: "状态", value: (/HTTP\s*\d{3}/i.exec(report.evidence) || ["未完成"])[0] }
-          ]
-        );
-        return renderDiagnosticReport(report);
+        return renderDiagnosisOutcome(report);
       }
       const meta = resultMeta(body);
       const option = resultContext.option || "查询";
@@ -1671,10 +1936,23 @@
           resultHtml.innerHTML = renderResultMarkdown(markdown, body);
           applyRenderedElementStyles(resultHtml);
         } else {
-          resultHtml.classList.add("hidden");
-          resultBox.classList.remove("hidden");
-          const text = typeof body === "string" ? body : JSON.stringify(body, null, 2);
-          resultBox.textContent = "HTTP " + statusCode + "\n\n" + text;
+          // 失败信封（{kind, diagnosis}）没有 markdown output：优先渲染
+          // 确定性诊断报告，仅在报告缺失/不可解析时回退原始 JSON 文本。
+          const report = body && typeof body === "object" && body.data &&
+            body.data.diagnosis && body.data.diagnosis.report
+            ? parseDiagnosticReport(String(body.data.diagnosis.report))
+            : null;
+          if (report) {
+            resultBox.classList.add("hidden");
+            resultHtml.classList.remove("hidden");
+            resultHtml.innerHTML = renderDiagnosisOutcome(report);
+            applyRenderedElementStyles(resultHtml);
+          } else {
+            resultHtml.classList.add("hidden");
+            resultBox.classList.remove("hidden");
+            const text = typeof body === "string" ? body : JSON.stringify(body, null, 2);
+            resultBox.textContent = "HTTP " + statusCode + "\n\n" + text;
+          }
         }
         resultCard.classList.remove("fade-out");
         resultCard.classList.add("fade-in");
@@ -1761,6 +2039,9 @@
         md2pdf: md2pdfInput.checked,
         check: checkInput.checked
       };
+      if (payload.option === "成绩" && includeAllInput && includeAllInput.checked) {
+        payload.include_all = true;
+      }
       if (semestersInput.value) {
         payload.semesters = semestersInput.value;
       }
@@ -1781,11 +2062,15 @@
       hidePdfAction();
       clearLockTimer();
       clearTimeout(resultTimer);
+      // 同步装载标记：240ms 骨架屏定时器据此判断「仍在装载」——若结果先于
+      // 定时器返回（快速失败/限流 429 等），finally 已移除该标记，定时器
+      // 直接放弃，不再把已渲染的结果覆盖回骨架屏（骨架屏常驻 bug 的根因）。
+      resultCard.setAttribute("aria-busy", "true");
       // B1 提交让位：表单卡先失焦淡出（240ms），再切结果态让骨架屏淡入 —— 空间连续性
       document.body.classList.add("querying");
       form.classList.add("is-yielding");
       window.setTimeout(function () {
-        if (seq !== querySeq) return;
+        if (seq !== querySeq || !resultCard.hasAttribute("aria-busy")) return;
         skeleton.hidden = false;
         skeleton.setAttribute("aria-hidden", "false");
         resultHtml.classList.add("hidden");
@@ -2008,6 +2293,7 @@
       weeksInput.value = "all";
       md2pdfInput.checked = false;
       checkInput.checked = false;
+      if (includeAllInput) includeAllInput.checked = false;
       passwordInput.type = "password";
       document.getElementById("togglePassword").textContent = "显示";
       document.getElementById("togglePassword").setAttribute("aria-pressed", "false");
@@ -2125,14 +2411,18 @@
     var calendarState = { state: "", feedUrl: "", verifiedToken: "", semester: "" };
     var calendarFocus = null;
     // 学期下拉：直接复用首页查询的同一份学期选项（克隆菜单项，避免两处维护）
-    (function syncCalendarSemesterOptions() {
+    function syncCalendarSemesterOptions() {
       var source = document.getElementById("semestersMenu");
       var target = document.getElementById("calendarSemesterMenu");
       if (!source || !target) return;
       var clone = source.cloneNode(true);
       clone.removeAttribute("id");
       target.innerHTML = clone.innerHTML;
-    })();
+      Array.prototype.forEach.call(target.querySelectorAll(".grades-only-item"), function (item) {
+        item.remove();   // 日历学期不需要「全部学期 / 最近 N 学期」这类成绩专用项
+      });
+    }
+    syncCalendarSemesterOptions();
     var calendarSemesterDropdown = initDropdown(
       "calendarSemesterTrigger", "calendarSemesterMenu", "calendarSemester", "默认当前学期");
 
@@ -2179,6 +2469,40 @@
       });
     }
 
+    // 首页学期下拉动态化：后台「校历校准」保存后立即反映到首页选项；
+    // 未启用日历或拉取失败时保留 HTML 静态兜底列表。
+    function refreshSemesterOptions() {
+      var menu = document.getElementById("semestersMenu");
+      if (!menu || !calendarConfig) return;
+      var configured = (calendarConfig && calendarConfig.semesters) || [];
+      if (!configured.length) return;
+      var frag = document.createDocumentFragment();
+      var keep = menu.querySelector('.dropdown-item[data-value=""]');
+      if (keep) frag.appendChild(keep);
+      // 后端学期为升序，界面按最新在前展示；textContent 赋值防注入
+      configured.slice().reverse().forEach(function (sem) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "dropdown-item";
+        btn.setAttribute("data-value", sem);
+        btn.textContent = sem;
+        frag.appendChild(btn);
+      });
+      [["all", "全部学期"], ["recent:3", "最近 3 学期"]].forEach(function (pair) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "dropdown-item grades-only-item";
+        btn.setAttribute("data-value", pair[0]);
+        btn.textContent = pair[1];
+        frag.appendChild(btn);
+      });
+      menu.innerHTML = "";
+      menu.appendChild(frag);
+      syncCalendarSemesterOptions();
+      semestersDropdown.sync();
+      calendarSemesterDropdown.sync();
+    }
+
     async function calendarLoadConfig() {
       if (calendarConfig) return calendarConfig;
       if (calendarUnavailable) return null;
@@ -2189,6 +2513,7 @@
           var body = await resp.json();
           calendarConfig = body && body.data ? body.data : null;
           calendarFilterSemesterOptions();
+          refreshSemesterOptions();
         }
       } catch (e) { /* 网络异常时保持入口可用，仅缺少默认学期 */ }
       return calendarConfig;
@@ -2816,6 +3141,32 @@
     renderHistorySelect();
     restoreUrlParams();
     syncBackToTopVisibility();
+    // PWA：注册 Service Worker（离线兜底 + 可安装）；仅安全上下文生效。
+    // 三重防御：属性缺失（http 不安全上下文）、register 缺失（部分内置 WebView
+    // 暴露残缺对象）、register 拒绝 —— 任一情况都静默降级，绝不阻断初始化
+    // （此行位于 IIFE 尾部，抛错会让其后的初始化全部中断）。
+    try {
+      if (window.location.protocol === "https:" ||
+          ["localhost", "127.0.0.1"].indexOf(window.location.hostname) !== -1) {
+        if (navigator.serviceWorker && typeof navigator.serviceWorker.register === "function") {
+          navigator.serviceWorker.register("/sw.js")
+            .catch(function () { /* 静默降级 */ });
+        }
+      }
+    } catch (e) { /* 静默降级 */ }
+    // 在线/离线感知：连接状态变化即同步离线条（与查询失败降级共用同一 UI，
+    // showOfflineBar() 无参调用 = 尚无本地缓存，只提示离线）
+    function syncOnlineState() {
+      if (navigator.onLine === false) {
+        showOfflineBar();
+      } else if (!offlineBar.classList.contains("hidden")) {
+        hideOfflineBar();
+        showToast("success", "网络已恢复");
+      }
+    }
+    window.addEventListener("offline", syncOnlineState);
+    window.addEventListener("online", syncOnlineState);
+    if (navigator.onLine === false) showOfflineBar();
     // P1 氛围微视差：栅格 0.06 / 前景 0.12（检索边界内：仅装饰层、位移封顶 140px、
     // will-change 滚动停止 300ms 后移除）；prefers-reduced-motion 下完全跳过
     var parallaxReduce = window.matchMedia("(prefers-reduced-motion: reduce)");

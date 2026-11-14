@@ -5,7 +5,7 @@
   if (!container) return;
 
   var pills = Array.prototype.slice.call(container.querySelectorAll(".health-pill"));
-  var labels = ["本站", "查询代理", "学校服务"];
+  var labels = ["网页", "查询通道", "教务系统"];
 
   function render(index, state) {
     var pill = pills[index];

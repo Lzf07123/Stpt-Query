@@ -199,6 +199,19 @@
     bar.addEventListener("focusout", function (event) {
       if (!bar.contains(event.relatedTarget)) setHoverPause(false);
     });
+    // 触屏同语义：手指按住即暂停（复用 hoverPause 通道），全部手指离开后恢复；
+    // 滚动（touchmove）不提前恢复，避免阅读长通知时轮播中途重启
+    let touchCount = 0;
+    bar.addEventListener("touchstart", function () {
+      touchCount += 1;
+      setHoverPause(true);
+    }, { passive: true });
+    const endNoticeTouch = function () {
+      touchCount = Math.max(0, touchCount - 1);
+      if (touchCount === 0) setHoverPause(false);
+    };
+    bar.addEventListener("touchend", endNoticeTouch, { passive: true });
+    bar.addEventListener("touchcancel", endNoticeTouch, { passive: true });
   }
   if (historyClose) historyClose.addEventListener("click", closeHistory);
   if (historyDismiss) historyDismiss.addEventListener("click", closeHistory);

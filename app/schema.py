@@ -30,8 +30,11 @@ class WorkflowRequest(BaseModel):
     option: str = Field(..., max_length=20, description="查询项目：成绩 / 课表")
     semesters: Optional[str] = Field(
         default=None,
-        pattern=r"^$|^\d{4}-\d{4}-[1-2]$",
-        description="学期，默认当前学期（如 2025-2026-2）",
+        pattern=r"^(|all|recent:[1-9][0-9]*|(\d{4}-\d{4}-[1-2])(,\d{4}-\d{4}-[1-2])*)$",
+        description=(
+            "学期，默认当前学期（如 2025-2026-2）；仅成绩支持 all（全部学期）、"
+            "recent:N（最近 N 个学期）与逗号分隔多学期，上限由查询代理约束"
+        ),
     )
     weeks: str = Field(
         default="all",
@@ -40,12 +43,27 @@ class WorkflowRequest(BaseModel):
     )
     md2pdf: bool = Field(default=False, description="仅生成 PDF（仅成绩适用）")
     check: bool = Field(default=False, description="分析成绩（默认不分析）")
+    include_all: bool = Field(
+        default=False,
+        description="附带全部成绩与学分概况（仅成绩适用，透传查询代理 include_all）",
+    )
+    odd_or_double: Optional[int] = Field(
+        default=None,
+        description="课表单双周：1 或 2（仅课表适用；留空沿用查询代理默认 1）",
+    )
     user: Optional[str] = Field(default=None, max_length=100,
                                 description="终端用户标识，默认取 username")
     inputs: Optional[Dict[str, Any]] = Field(
         default=None,
         description="历史遗留的嵌套 inputs（兼容读取），字段自动合并到顶层，平铺字段优先",
     )
+
+    @field_validator("odd_or_double")
+    @classmethod
+    def _validate_odd_or_double(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value not in (1, 2):
+            raise ValueError("odd_or_double 只接受 1 或 2")
+        return value
 
     @field_validator("username", mode="before")
     @classmethod

@@ -47,6 +47,18 @@ server {
         expires epoch;
     }
 
+    # PWA 资产：SW 与 manifest 必须禁缓存（旧 SW 会滞留新版页面与缓存的更新通道）。
+    # 用 expires -1 而非 add_header：后者会阻断 server 级 CSP/安全头的继承。
+    location = /sw.js {
+        try_files /sw.js =404;
+        expires -1;
+    }
+    location = /manifest.json {
+        try_files /manifest.json =404;
+        default_type application/manifest+json;
+        expires -1;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
         expires 1h;

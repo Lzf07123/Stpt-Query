@@ -1,20 +1,24 @@
 """编排主流程测试：注入假客户端，验证分支逻辑。"""
 from __future__ import annotations
 
+import pytest
+
 from app.llm import LLMClient
 from app.pipeline import Pipeline, ServiceError
 from app.schema import SessionWorkflowRequest, WorkflowRequest
 
 
 class FakeService:
-    """记录调用路径并按规则返回。"""
+    """记录调用路径与负载并按规则返回。"""
 
     def __init__(self, grade_success: bool = True) -> None:
         self.grade_success = grade_success
         self.calls = []
+        self.payloads = {}
 
     async def post(self, path, payload):
         self.calls.append(path)
+        self.payloads.setdefault(path, []).append(payload)
         if path == "/login":
             return {"success": True, "session": "s1", "token": "t1",
                     "username": payload["username"]}
@@ -104,6 +108,48 @@ async def test_schedule_branch():
     assert result["success"] and result["kind"] == "schedule"
     assert result["output"].startswith("[点击下载课表（PDF 文件）]")
     assert "download_url" in result["meta"]["response_summary"]
+
+
+async def test_grades_multi_semester_and_include_all_passthrough():
+    """代理已支持多学期与全部成绩+学分概况，编排层必须原样透传。"""
+    svc = FakeService()
+    result = await Pipeline(service=svc, llm=FakeLLM()).run(_req(
+        semesters="recent:3", include_all=True))
+    assert result["success"] and result["kind"] == "grades"
+    payload = svc.payloads["/get_grades"][0]
+    assert payload["semesters"] == "recent:3"
+    assert payload["include_all"] is True
+    assert payload["include_rows"] == "false"
+
+
+async def test_schedule_odd_or_double_passthrough():
+    svc = FakeService()
+    await Pipeline(service=svc, llm=FakeLLM()).run(_req(option="课表", odd_or_double=2))
+    payload = svc.payloads["/get_schedule"][0]
+    assert payload["odd_or_double"] == 2
+    # 未指定时不附加该键（沿用代理默认 1）
+    svc2 = FakeService()
+    await Pipeline(service=svc2, llm=FakeLLM()).run(_req(option="课表"))
+    assert "odd_or_double" not in svc2.payloads["/get_schedule"][0]
+
+
+async def test_schema_accepts_multi_semester_forms_and_rejects_bad_values():
+    from pydantic import ValidationError
+
+    for value in ("", "2025-2026-1", "all", "recent:3",
+                  "2024-2025-1,2025-2026-2", None):
+        assert _req(semesters=value).semesters == value
+    for bad in ("recent:", "RECENT:3", "2025-2026-3", "2025-2026,2026-2027-1", "x"):
+        with pytest.raises(ValidationError):
+            _req(semesters=bad)
+    # odd_or_double 只接受 1/2/None（pydantic lax 模式宽进："2"/True 归一为 2/1）
+    assert _req(odd_or_double=1).odd_or_double == 1
+    assert _req(odd_or_double=None).odd_or_double is None
+    assert _req(odd_or_double="2").odd_or_double == 2
+    assert _req(odd_or_double=True).odd_or_double == 1
+    for bad_odd in (0, 3, -1, 1.5):
+        with pytest.raises(ValidationError):
+            _req(odd_or_double=bad_odd)
 
 
 async def test_session_job_skips_password_login():

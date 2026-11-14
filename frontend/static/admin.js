@@ -1054,7 +1054,7 @@
 
   function calendarStateLabel(value) {
     return { active: "正常", reauth_needed: "需重新授权", degraded: "上游异常",
-             locked: "已暂停" }[value] || value || "—";
+             locked: "已暂停", expired: "已到期" }[value] || value || "—";
   }
 
   async function loadCalendars() {

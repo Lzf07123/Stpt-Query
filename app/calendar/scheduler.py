@@ -20,12 +20,11 @@ class CalendarScheduler:
         self.jitter = max(0.0, min(0.5, float(jitter)))
 
     async def tick(self) -> None:
-        """单轮工作：顺带清理过期数据（幂等键 + 超保留期审计行），再刷新到期订阅。"""
+        """单轮工作：顺带清理超保留期的审计行，再刷新到期订阅。"""
         try:
             removed = self.service.store.cleanup_expired()
-            if removed["ops_removed"] or removed["audit_removed"]:
-                LOG.info("日历过期数据清理 ops=%s audit=%s",
-                         removed["ops_removed"], removed["audit_removed"])
+            if removed["audit_removed"]:
+                LOG.info("日历过期审计清理 removed=%s", removed["audit_removed"])
         except Exception as exc:
             LOG.warning("日历过期数据清理异常：%s", exc.__class__.__name__)
         try:

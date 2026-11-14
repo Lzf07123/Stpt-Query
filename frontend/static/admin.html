@@ -19,7 +19,7 @@
       document.documentElement.classList.toggle("dark", theme === "dark");
     })();
   </script>
-  <link rel="stylesheet" href="/style-admin.css?v=4">
+  <link rel="stylesheet" href="/style-admin.css?v=5">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到后台内容</a>
@@ -314,6 +314,7 @@
                 <option value="reauth_needed">需重新授权</option>
                 <option value="degraded">上游异常</option>
                 <option value="locked">已暂停</option>
+                <option value="expired">已到期</option>
               </select>
             </label>
             <div class="filter-control">
@@ -561,6 +562,6 @@
   </footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=34" defer></script>
+  <script src="/admin.js?v=35" defer></script>
 </body>
 </html>

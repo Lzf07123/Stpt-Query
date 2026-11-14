@@ -1,9 +1,10 @@
-"""SQLite 权威存储：订阅、幂等键与不含身份的审计。
+"""SQLite 权威存储：订阅与不含身份的审计。
 
 设计约束：
 - 学号/密码/订阅令牌只存密文；索引使用 HMAC（owner_hash）与 token 哈希
 - 关闭订阅 = 立即删除密文与快照（幂等：再次调用返回 already=true）
 - 刷新调度使用 next_refresh_at 的单条原子 UPDATE 抢占，天然避免重复执行
+- 到期（expires_at）订阅不再被调度刷新，续期由用户重新开启触发
 """
 from __future__ import annotations
 
@@ -21,12 +22,15 @@ SCHEMA_VERSION = "1"
 # 保留 180 天供安全排查，到期由调度器清理，防止无限增长。
 AUDIT_RETENTION_DAYS = 180
 
-# 与 _admin_state 保持同一判定顺序（暂停优先于最近一次拉取状态）的 SQL 表达；
-# `?` 占位符为当前时间（now_iso()），供 paused_until 比较。
+# 与 _admin_state 保持同一判定顺序（暂停优先于过期，过期优先于最近一次拉取状态）
+# 的 SQL 表达；第一个 `?` 占位符为当前时间（now_iso()），供 paused_until 比较，
+# 第二个供 expires_at 比较。
 _ADMIN_STATE_SQL = (
     "CASE"
     " WHEN paused_until IS NOT NULL AND paused_until != '' AND paused_until > ?"
     " THEN 'locked'"
+    " WHEN expires_at IS NOT NULL AND expires_at != '' AND expires_at <= ?"
+    " THEN 'expired'"
     " WHEN last_fetch_status = 'credential_error' THEN 'reauth_needed'"
     " WHEN last_fetch_status = 'upstream_error' THEN 'degraded'"
     " ELSE 'active' END"
@@ -61,16 +65,6 @@ CREATE TABLE IF NOT EXISTS calendars (
     UNIQUE (owner_hash, semester)
 );
 CREATE INDEX IF NOT EXISTS idx_calendars_due ON calendars (next_refresh_at);
-CREATE TABLE IF NOT EXISTS calendar_ops (
-    idem_key     TEXT NOT NULL,
-    owner_hash   TEXT NOT NULL,
-    calendar_id  TEXT,
-    op           TEXT NOT NULL,
-    response_enc BLOB,
-    created_at   TEXT NOT NULL,
-    expires_at   TEXT NOT NULL,
-    PRIMARY KEY (idem_key, owner_hash)
-);
 CREATE TABLE IF NOT EXISTS calendar_audit (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     at          TEXT NOT NULL,
@@ -234,6 +228,11 @@ class CalendarStore:
         self._exec("UPDATE calendars SET token_hash = ?, token_enc = ?, updated_at = ? WHERE id = ?",
                    (token_hash, token_enc, now_iso(), calendar_id))
 
+    def renew_expiry(self, calendar_id: str, expires_at: str) -> None:
+        """续期：顺延订阅 TTL（用户对已过期订阅重新开启时由 service 调用）。"""
+        self._exec("UPDATE calendars SET expires_at = ?, updated_at = ? WHERE id = ?",
+                   (expires_at, now_iso(), calendar_id))
+
     def set_paused(self, calendar_id: str, paused_until: Optional[str]) -> None:
         self._exec("UPDATE calendars SET paused_until = ?, updated_at = ? WHERE id = ?",
                    (paused_until, now_iso(), calendar_id))
@@ -258,14 +257,19 @@ class CalendarStore:
             return cursor.rowcount > 0
 
     def claim_due(self, now: str, limit: int, cooldown_seconds: int) -> List[Dict[str, Any]]:
-        """原子抢占到期订阅：抢占成功者才执行刷新（重启/重复触发安全）。"""
+        """原子抢占到期订阅：抢占成功者才执行刷新（重启/重复触发安全）。
+
+        已过 TTL（expires_at）的订阅不再被抢占——订阅源已 404，继续登录学校
+        刷新属于无意义流量；续期由用户「重新开启」触发（service.create）。
+        """
         claimed: List[Dict[str, Any]] = []
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM calendars WHERE revoked_at IS NULL AND ics_blob IS NOT NULL"
                 " AND next_refresh_at IS NOT NULL AND next_refresh_at <= ?"
                 " AND (paused_until IS NULL OR paused_until <= ?)"
-                " ORDER BY next_refresh_at LIMIT ?", (now, now, int(limit))).fetchall()
+                " AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)"
+                " ORDER BY next_refresh_at LIMIT ?", (now, now, now, int(limit))).fetchall()
             for row in rows:
                 data = self._row(row)
                 if not data:
@@ -278,30 +282,6 @@ class CalendarStore:
                     claimed.append(data)
             self._conn.commit()
         return claimed
-
-    # ---------- 幂等键 ----------
-    def ops_get(self, idem_key: str, owner_hash: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM calendar_ops WHERE idem_key = ? AND owner_hash = ?",
-                (idem_key, owner_hash)).fetchone()
-            if row is None:
-                return None
-            if row["expires_at"] < now_iso():
-                self._conn.execute("DELETE FROM calendar_ops WHERE idem_key = ? AND owner_hash = ?",
-                                   (idem_key, owner_hash))
-                self._conn.commit()
-                return None
-        return dict(row)
-
-    def ops_put(self, idem_key: str, owner_hash: str, calendar_id: Optional[str], op: str,
-                response_enc: Optional[bytes], ttl_seconds: int = 86400) -> None:
-        self._exec(
-            "INSERT OR REPLACE INTO calendar_ops"
-            " (idem_key, owner_hash, calendar_id, op, response_enc, created_at, expires_at)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (idem_key, owner_hash, calendar_id, op, response_enc, now_iso(),
-             now_iso(ttl_seconds)))
 
     # ---------- 审计（不含身份）与统计 ----------
     def audit(self, calendar_id: Optional[str], action: str, actor: str, result: str) -> None:
@@ -346,7 +326,9 @@ class CalendarStore:
         if state:
             # state 条件必须进 SQL WHERE（在分页之前过滤），total 按同条件统计；
             # 否则 total 与页内条目数对不上，且翻页会丢条目。
+            # _ADMIN_STATE_SQL 带两个时间占位符（paused_until / expires_at）。
             where.append("%s = ?" % _ADMIN_STATE_SQL)
+            args.append(now_iso())
             args.append(now_iso())
             args.append(str(state))
         clause = " AND ".join(where)
@@ -363,7 +345,7 @@ class CalendarStore:
         # 只取 _admin_state 所需列，避免把全表 ics_blob（BLOB）载入内存
         with self._lock:
             rows = self._conn.execute(
-                "SELECT paused_until, last_fetch_status FROM calendars"
+                "SELECT paused_until, expires_at, last_fetch_status FROM calendars"
                 " WHERE revoked_at IS NULL").fetchall()
         items = [dict(row) for row in rows]
         counter: Dict[str, int] = {}
@@ -375,25 +357,25 @@ class CalendarStore:
 
     # ---------- 过期数据清理 ----------
     def cleanup_expired(self, now: Optional[str] = None) -> Dict[str, int]:
-        """删除过期幂等键与超过保留期的审计行（调度器每轮顺带执行）。
+        """删除超过保留期的审计行（调度器每轮顺带执行）。
 
-        calendar_ops 的 TTL 在写入时给定（默认 86400 秒）；calendar_audit 按
-        AUDIT_RETENTION_DAYS（180 天）保留，到期删除。返回各自删除的行数。
+        calendar_audit 按 AUDIT_RETENTION_DAYS（180 天）保留，到期删除。
         """
         stamp = now or now_iso()
         cutoff = (datetime.now().astimezone()
                   - timedelta(days=AUDIT_RETENTION_DAYS)).isoformat(timespec="seconds")
-        ops_removed = self._exec(
-            "DELETE FROM calendar_ops WHERE expires_at < ?", (stamp,)).rowcount
         audit_removed = self._exec(
             "DELETE FROM calendar_audit WHERE at < ?", (cutoff,)).rowcount
-        return {"ops_removed": max(0, ops_removed), "audit_removed": max(0, audit_removed)}
+        return {"audit_removed": max(0, audit_removed)}
 
 
 def _admin_state(item: Dict[str, Any]) -> str:
     paused_until = item.get("paused_until") or ""
     if paused_until and paused_until > now_iso():
         return "locked"
+    expires_at = item.get("expires_at") or ""
+    if expires_at and expires_at <= now_iso():
+        return "expired"
     status = (item.get("last_fetch_status") or "").strip()
     if status == "credential_error":
         return "reauth_needed"

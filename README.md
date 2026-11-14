@@ -136,6 +136,22 @@ webvpn/cas/portal/jwxt 四层三态结论；`/health/deep` 的 stages 逐阶段�
 | sys.workflow_run_id | `app/trace.py::new_run_id` |
 | 3 个 END | `app/schema.py::QueryResult` 单一体 |
 
+## 查询能力与参数
+
+`POST /api/v1/run` 请求体（`WorkflowRequest`，完整字段见 docs/api-semantics.md 第 4 节）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `option` | `成绩` / `课表` |
+| `semesters` | 空=当前学期；单学期（如 `2025-2026-2`）；`all`（全部学期）；`recent:N`（最近 N 学期）；逗号分隔多学期（多学期形态仅成绩适用，上限由查询代理 `JWXT_MAX_SEMESTERS` 约束） |
+| `weeks` | 周次（`all`/`1-8,10`），仅课表生效 |
+| `include_all` | 附带全部成绩（个人首页）与学分概况，仅成绩适用 |
+| `odd_or_double` | 课表单双周 `1`/`2`，透传学校接口原始语义，留空沿用代理默认 `1` |
+| `md2pdf` / `check` | 成绩 PDF / LLM 成绩分析 |
+
+首页学期下拉会按 `/api/v1/calendars/config` 返回的学期列表动态重建（后台「校历校准」保存后立即生效）；
+日历未启用时回落静态列表。成绩模式下额外提供「全部学期」「最近 3 学期」快捷项。
+
 ## 异步查询任务
 
 `POST /api/v1/run/jobs` 用于高峰排队。接口先同步完成学校登录，把密码换成短期
@@ -225,6 +241,14 @@ GET  /api/v1/run/jobs/{id}   轮询信封 data.state=queued/running/success/fail
   并有回归测试保护；
 - **关闭订阅 = 立即删除加密凭据与课表快照**，地址失效（404）；已同步到手机/日历软件的事件
   需在客户端自行删除；
+- **到期语义**：订阅有 TTL（`CALENDAR_TTL_DAYS`，默认 210 天）。到期后订阅源立即 404、
+  调度器不再为其刷新（不打学校）；状态展示为「已失效/已到期」，后台「网络日历」可按
+  expired 筛选；**重新开启（对同学期再次「一键开启」）即续期**——重新登录学校、重建快照并顺延 TTL；
+- **凭据校验退避**：本地密码比对失败按学号（HMAC 索引）记失败次数并指数退避
+  （2s 起、上限 10 分钟），退避窗口内的请求不再回退真实登录学校，防按学号撞库与撞学校风控；
+  正确密码立即放行并清零计数；
+- **短时验证令牌绑定学期与用途**：课表查询成功签发的 `verified_token` 只对签发时学期有效，
+  跨学期/跨用途一律校验失败并回退密码/L3 判定；
 - 连续 3 次凭据失败会暂停刷新 24 小时并提示重新授权，避免反复撞学校风控；
 - rotate / qr 对**不存在的订阅**也先执行一次等量本地密钥校验再返回 404，
   消除按响应差异/时序枚举学号是否开过订阅的信道；close 保持幂等（不存在返回 200）；
@@ -377,6 +401,20 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   超时销毁重建。导出完成日志与 `/get_schedule/export` 最近状态记录学校导出、转换等待、
   转换执行、缓存命中和输出字节数，不记录学号或会话值。
 
+## PWA 安装与离线兜底
+
+查询页可安装为应用（桌面 Chrome/Edge、Android Chrome、iOS Safari「添加到主屏幕」）：
+
+- `manifest.json`：standalone 展示、品牌图标（`image/icon-*.png` 由
+  `scripts/gen_pwa_icons.py` 纯标准库生成，含 maskable 与 apple-touch）；
+  长按应用图标可使用「查成绩 / 查课表」快捷方式；
+- `sw.js`（页面加载时注册，仅 https/localhost 生效）：页面壳与静态资源
+  stale-while-revalidate 缓存，导航请求离线回退缓存壳；`/api/*`、`/cal/*`、`/jump`、
+  `/get_schedule`、`/health`、`/metrics`、`/admin` 与环境变量生成的 `/brand-env.js`
+  一律不缓存——查询永远走网络，离线兜底由页面自身的「本机缓存结果」承担；
+- nginx 对 `/sw.js` 与 `/manifest.json` 禁缓存（`expires -1`，不阻断 server 级 CSP 继承）；
+- 页面监听 `online`/`offline` 事件：断网立即显示离线条，恢复即隐藏并提示。
+
 ## 可靠性与过载保护
 
 - 单体应用对 `/api/v1/run` 设置全局并发槽位（默认 4）和等待超时；满载返回 503 信封（code=`capacity.concurrency_full`）。
@@ -406,6 +444,11 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 
 - 近期：真实账号端到端验收；异步任务多副本压测与学校上游安全并发标定；
   单二进制分发形态（前置项为 LibreOffice 移除——纯 Python 课表 PDF）
+- 已完成：**功能增强与多端体验专项**（查询能力：多学期成绩/全部成绩+学分概况/
+  课表单双周编排层暴露；安全待办：到期订阅停止刷新与重新开启续期、
+  verified_token 绑定学期/用途、owner 级口令退避、Idempotency-Key 死代码清理；
+  多端：PWA 安装与离线兜底、课表移动端按天视图、safe-area/触控目标/
+  在线离线感知/学期下拉动态化）
 - 已完成：**统一接口语义**（全部对外 JSON 接口迁移 `/api/v1/*`，五键信封 +
   21 个稳定错误码 + 真实 HTTP 状态码；前端以 `code` 编程化判断，消除错误文案
   正则耦合；不再兼容 Dify，规范见 `docs/api-semantics.md`，标准流程见
@@ -419,9 +462,7 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
   测试基线 238 → 255 通过）
 - 已完成：**网络日历订阅**（页脚入口 + 查询结果区自动展示；只读 ICS 订阅、托管凭据加密存储、后台可查可管；
   设备识别一键导入 + 本地二维码扫码订阅）
-- 待办（本轮逻辑/安全审查发现，尚未修改）：状态派生统一（locked/expired/degraded 与 status/create 对齐）、
-  到期订阅续期与停止刷新、`verified_token` 绑定学期/用途、订阅主记录与首份快照同事务、
-  `Idempotency-Key` 落地或删除死代码、按 owner 的口令猜测退避、CSV 导出公式注入防护
+- 待办：订阅主记录与首份快照同事务、CSV 导出公式注入防护（导出功能落地时实施）
 - 中期：查询日志接入集中式日志平台；Prometheus 指标告警；HTTPS 与密钥轮换
 - 远期：扩展成绩分析能力与可复用编排方案沉淀
 
@@ -552,14 +593,17 @@ Stpt-Query/
 │   ├── static/style.css       # Tailwind CSS 4 编译产物（自托管，查询页）
 │   ├── static/style-admin.css # 后台编译产物（admin 专属样式拆分）
 │   ├── static/brand.js        # 品牌单点（名称/slogan/页脚/备案占位）
-│   ├── static/image/          # 站点图标
+│   ├── static/sw.js           # Service Worker（静态资源缓存 + 导航离线回退）
+│   ├── static/manifest.json   # PWA manifest（可安装、图标、快捷方式）
+│   ├── static/image/          # 站点图标（含 PWA 位图图标，scripts/gen_pwa_icons.py 生成）
 │   ├── src/index.css          # 令牌源（+ app.css，模板实例化）
 │   ├── src/admin.css          # 后台专属样式（import index.css 复用共享令牌）
 │   └── package.json           # npm run build 重新编译样式
 ├── design-system/edu-query-app/   # 项目内品牌方案（BRAND/MASTER，设计事实）
 ├── tests/                     # pytest（渲染/分类/编排/HTTP/查询日志/契约）
 ├── scripts/
-│   └── contract_selfcheck.py  # 学校侧契约自检（无凭据分层探测 + 可选深度登录链路）
+│   ├── contract_selfcheck.py  # 学校侧契约自检（无凭据分层探测 + 可选深度登录链路）
+│   └── gen_pwa_icons.py       # PWA 位图图标生成（纯标准库，产物已提交）
 ├── docs/
 │   ├── kubernetes-migration.md    # K8s 迁移指引
 │   ├── production-operations.md   # 生产容量与运维
