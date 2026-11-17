@@ -87,10 +87,9 @@ python scripts/contract_selfcheck.py --json   # 或：docker compose exec app py
 # 2b. 前端令牌构建（改动 frontend/src/ 或 brand.js 后必须重编译）
 cd frontend && npm install && npm run build && cd ..
 # 查询页脚本已外置为 static/app.js（首屏主题预置为 static/theme-init.js），
-# CSP 的 script-src 对其走 'self'，无需哈希。唯一保留的内联脚本在
-# frontend/static/admin.html：改动后必须同步更新
-# frontend/templates/default.conf.template 中 script-src 对应内联脚本的
-# SHA-256 哈希（否则 CSP 拦截脚本，后台无法使用）。
+# 后台 admin.html 的主题预置复用同一 theme-init.js 单源。
+# 全站已无内联脚本，CSP 的 script-src 只走 'self'，无需维护任何内联哈希；
+# 资产改动后同步 bump 页内 ?v=N 版本号与 sw.js 的 VERSION。
 
 # 3. 两容器端到端冒烟（需 Docker daemon；含统一语义验收）
 API_TOKEN=smoke-token AUTO_ROTATE_TOKEN=false docker compose up -d --build

@@ -151,6 +151,11 @@ webvpn/cas/portal/jwxt 四层三态结论；`/health/deep` 的 stages 逐阶段�
 
 首页学期下拉会按 `/api/v1/calendars/config` 返回的学期列表动态重建（后台「校历校准」保存后立即生效）；
 日历未启用时回落静态列表。成绩模式下额外提供「全部学期」「最近 3 学期」快捷项。
+周数下拉会在公开校历基线（同一接口下发的 `periods`/`terms`，非机密文件基线）可解析出
+当前教学周时提供「第 N 周（本周）」快捷项；课表结果还会给出时间上下文——概览徽章
+「第 N 教学周 · 星期X（· 第 Y 节进行中）」、桌面表格今天列头与进行中节次行高亮、
+移动端按天视图当前节次卡高亮。以上标记仅在**查询周覆盖本周**时出现（历史周次/聚合
+数据不做误导性高亮），校历不可解析或日历未启用时全部静默降级。
 
 ## 异步查询任务
 
@@ -520,10 +525,8 @@ docker compose up -d --build
 > 样式后重新构建：`cd frontend && npm install && npm run build`。
 
 > 查询页脚本已外置为 `frontend/static/app.js`（首屏主题预置为 `frontend/static/theme-init.js`），
-> 走 CSP `script-src 'self'`，改动后只需同步 bump 页内 `?v=N` 版本号；仅当修改
-> `frontend/static/admin.html` 的内联脚本时，才需要同步更新
-> `frontend/templates/default.conf.template` 中 `script-src` 的 SHA-256 哈希，
-> 否则 CSP 会拦截脚本导致后台无法使用。
+> 走 CSP `script-src 'self'`，改动后只需同步 bump 页内 `?v=N` 版本号。后台页面的主题预置
+> 复用同一 `theme-init.js` 单源——全站已无内联脚本，无需维护 CSP 哈希。
 
 > 品牌文案（标题 / slogan / 页脚作者与 GitHub 链接）可由环境变量 `BRAND_NAME`、
 > `BRAND_SLOGAN`、`BRAND_DESCRIPTION`、`BRAND_AUTHOR`、`BRAND_GITHUB` 覆盖；留空即使用

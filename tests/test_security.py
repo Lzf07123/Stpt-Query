@@ -147,17 +147,17 @@ def test_only_frontend_publishes_host_port():
 
 
 def test_inline_script_hashes_are_covered_by_csp():
-    """查询页脚本已外置（CSP 走 'self'），残留的内联脚本必须全部被哈希覆盖。"""
+    """全站脚本已外置（查询页/后台 CSP 均走 'self'），页面不允许任何内联脚本；
+    nginx 模板中残留的哈希只允许属于 /jump/go 桥接页（由 app/jwxt_http.py 维护）。"""
     config = open("frontend/templates/default.conf.template", encoding="utf-8").read()
     declared_hashes = set(re.findall(r"'(sha256-[A-Za-z0-9+/=]+)'", config))
     index_html = open("frontend/static/index.html", encoding="utf-8").read()
     assert re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", index_html, re.S) == []
     admin_html = open("frontend/static/admin.html", encoding="utf-8").read()
-    inline_scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", admin_html, re.S)
-    assert inline_scripts
-    for script in inline_scripts:
-        digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
-        assert f"sha256-{digest}" in declared_hashes
+    assert re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", admin_html, re.S) == []
+    # 主站 server 级 CSP（/jump/go 之前）不得再声明任何内联哈希
+    main_csp = config[:config.index("location = /jump/go {")]
+    assert "sha256-" not in main_csp
 
 
 def test_csp_does_not_allow_inline_styles():

@@ -522,6 +522,10 @@
     background: var(--eduquery-primary-soft-solid);
     color: var(--eduquery-primary-soft-fg);
   }
+  /* 「第 N 周（本周）」快捷项：主色文字弱强调（非选中态也可见） */
+  .dropdown-item--today {
+    @apply font-semibold text-primary;
+  }
 
   /* ---------- 状态/离线条：复用模板 .notice；按钮做紧凑密度 ---------- */
   .notice {
@@ -589,9 +593,6 @@
     grid-template-columns: 1fr 1fr;
     gap: 10px;
   }
-  @media (max-width: 560px) {
-    .calendar-grid { grid-template-columns: 1fr; }
-  }
   .calendar-field {
     display: grid;
     gap: 4px;
@@ -601,6 +602,7 @@
   .calendar-field .input { width: 100%; }
   .calendar-field .segmented { width: 100%; }
   @media (max-width: 560px) {
+    .calendar-grid { grid-template-columns: 1fr; }
     .calendar-panel {
       width: 100%;
       max-width: min(96vw, 560px);
@@ -837,6 +839,14 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     white-space: normal;
+  }
+
+  /* reduced-motion 静态列表项：与 notice-text 同排版（此前无样式，继承混乱） */
+  .notice-static-item {
+    color: var(--eduquery-fg);
+    font-size: .84rem;
+    font-weight: 550;
+    line-height: 1.45;
   }
 
   .notice-text {
@@ -1605,6 +1615,25 @@
     background: color-mix(in srgb, var(--eduquery-surface-2) 72%, transparent);
   }
 
+  /* 课表时间上下文（公开校历基线可解析时由 JS 标记）：
+     今天列头 = 主色文字 + 底部主色条；进行中节次行 = 主色微底 + 左侧主色条。
+     粘性首列/表头依赖背景覆盖，is-now 行的 td 也要同步铺底色 */
+  .markdown-body .table-shell thead th.is-today {
+    box-shadow: inset 0 -2px 0 var(--eduquery-primary);
+    color: var(--eduquery-primary);
+  }
+  .markdown-body .table-shell--schedule tbody tr.is-now {
+    background: color-mix(in srgb, var(--eduquery-primary) 10%, transparent);
+  }
+  .markdown-body .table-shell--schedule tbody tr.is-now td {
+    background: transparent;
+    box-shadow: inset 2px 0 0 var(--eduquery-primary);
+  }
+  .markdown-body .table-shell--schedule tbody tr.is-now td:first-child {
+    background: color-mix(in srgb, var(--eduquery-primary) 10%, transparent);
+    box-shadow: inset 2px 0 0 var(--eduquery-primary), inset -1px 0 0 var(--eduquery-border);
+  }
+
   .markdown-body .table-shell th,
   .markdown-body .table-shell td {
     overflow-wrap: anywhere;
@@ -1812,6 +1841,13 @@
       display: grid;
       gap: 8px;
       padding: 12px;
+    }
+
+    /* 正在上的节次卡：主色微底 + 左侧主色条 */
+    .schedule-day-card.is-now {
+      background: color-mix(in srgb, var(--eduquery-primary) 10%, transparent);
+      border-color: color-mix(in srgb, var(--eduquery-primary) 42%, transparent);
+      box-shadow: inset 3px 0 0 var(--eduquery-primary);
     }
 
     .schedule-day-head {

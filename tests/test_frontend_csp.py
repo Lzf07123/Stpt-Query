@@ -1,8 +1,8 @@
 """前端脚本外置与 CSP 契约回归测试。
 
-index.html 的内联脚本已外置：主脚本为 static/app.js（defer），首屏主题预置为
-static/theme-init.js（阻塞执行，防深色首绘闪烁）；二者走 CSP `script-src 'self'`，
-主站 CSP 只保留 admin.html 唯一内联主题脚本的 SHA-256 哈希。
+index.html 与 admin.html 的内联脚本均已外置：主脚本为 static/app.js（defer），
+首屏主题预置为 static/theme-init.js（阻塞执行，防深色首绘闪烁，两页共用同一单源）；
+全站走 CSP `script-src 'self'`，无需任何内联哈希（/jump/go 桥接页哈希独立，不在此列）。
 """
 from __future__ import annotations
 
@@ -18,9 +18,6 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# admin.html 唯一内联脚本（主题预置）的哈希；/jump/go 桥接页哈希独立，不在此列
-ADMIN_INLINE_HASH = "sha256-DIcJv9zUX/pnA3GFnUMOhDwaaS7IpPVKTp651n/piMc="
 
 
 def _read(relative: str) -> str:
@@ -40,29 +37,27 @@ def _location_body(config: str, head_prefix: str) -> str:
 
 
 def test_index_html_has_no_inline_scripts_and_references_external_assets():
-    """查询页不允许任何内联脚本：主脚本与主题预置全部外置，CSP 走 'self'。"""
+    """查询页与后台均不允许内联脚本：主脚本与主题预置全部外置，CSP 走 'self'。"""
     index = _read("frontend/static/index.html")
     assert _inline_scripts("index.html") == []
     assert '<script src="/app.js?v=' in index
     assert '/theme-init.js?v=' in index
     assert (ROOT / "frontend" / "static" / "app.js").is_file()
     assert (ROOT / "frontend" / "static" / "theme-init.js").is_file()
-    # admin.html 仍保留唯一内联主题脚本（其哈希在 CSP 中声明）
-    assert len(_inline_scripts("admin.html")) == 1
+    # admin.html 主题预置同样外置（与查询页共用 theme-init.js 单源）
+    admin = _read("frontend/static/admin.html")
+    assert _inline_scripts("admin.html") == []
+    assert '/theme-init.js?v=' in admin
 
 
-def test_frontend_script_src_only_keeps_admin_inline_hash():
-    """主站 CSP 的 script-src 只含 'self' 与 admin 内联哈希，且哈希与实际脚本一致。"""
+def test_frontend_script_src_is_self_without_inline_hashes():
+    """主站 CSP 的 script-src 只含 'self'：全站脚本外置后不再声明任何内联哈希。"""
     policy = _read("frontend/templates/default.conf.template")
     main_csp = policy[:policy.index("location = /jump/go {")]
-    script_src = re.search(r"script-src ([^;\"]+)", main_csp).group(1)
+    script_src = re.search(r"script-src ('[^;\"]+)", main_csp).group(1)
     hashes = re.findall(r"'(sha256-[A-Za-z0-9+/=]+)'", script_src)
-    assert hashes == [ADMIN_INLINE_HASH]
-    assert "'self'" in script_src
-
-    script = _inline_scripts("admin.html")[0]
-    digest = hashlib.sha256(script.encode("utf-8")).digest()
-    assert "sha256-" + base64.b64encode(digest).decode("ascii") == ADMIN_INLINE_HASH
+    assert hashes == []
+    assert script_src == "'self'"
 
 
 def test_theme_init_runs_before_stylesheet_and_follows_system_preference():
@@ -138,7 +133,9 @@ def test_admin_console_has_consistent_navigation_and_responsive_tooling():
     assert page.count('aria-controls="') >= 5
     assert page.count('class="admin-panel-head"') == 4
     assert page.count('role="region" aria-label="') >= 6
-    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in page
+    # 主题预置已外置为 theme-init.js（与查询页共用同一单源），页面不再内联
+    assert '/theme-init.js?v=' in page
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in _read("frontend/static/theme-init.js")
 
     assert 'elements.adminLoginBtn.disabled = true;' in script
     assert 'initialButton.focus({ preventScroll: true });' in script
@@ -322,10 +319,12 @@ def test_design_v16_back_to_top_and_skeleton_contract():
     ):
         assert expected in style
 
-    assert "background-size: 220% 100%;" in style
-    assert "animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;" in style
+    # 骨架屏消费方在 app.css（#skeleton .skeleton-line/.skeleton-row）；
+    # index.css 仅保留 @keyframes skeleton-shimmer 定义（模板遗留 .search-skeleton* 已删）
     assert "background-size: 220% 100%;" in app_style
     assert "animation: skeleton-shimmer 1.35s var(--eduquery-ease-out) infinite;" in app_style
+    assert "@keyframes skeleton-shimmer" in style
+    assert ".search-skeleton" not in style
 
 
 def test_admin_mobile_header_and_dashboard_keep_first_use_context():

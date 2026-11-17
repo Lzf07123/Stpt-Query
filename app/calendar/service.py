@@ -602,9 +602,20 @@ class CalendarService:
         return max(self.config.terms.values(), key=lambda t: t.monday).semester
 
     def public_config(self) -> Dict[str, Any]:
+        # periods/terms 为非机密校历基线（config/calendar.json 随仓库/镜像发布）：
+        # 公开下发供首页计算「当前教学周 / 本节进行中」，terms 不含 exdates 以最小化公开面
         return {
             "default_semester": self.default_semester(),
             "semesters": sorted(self.config.terms),
+            "periods": {str(k): list(v) for k, v in self.config.periods.items()},
+            "terms": {
+                sem: {
+                    "monday": term.monday.isoformat(),
+                    "teaching_start": term.teaching_start.isoformat(),
+                    "weeks": term.weeks,
+                }
+                for sem, term in self.config.terms.items()
+            },
             "inferred_periods": list(self.config.inferred_periods()),
             "default_refresh_interval": int(self.settings.default_refresh),
             "min_refresh_interval": int(self.settings.min_refresh),

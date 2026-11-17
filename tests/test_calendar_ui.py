@@ -293,3 +293,51 @@ def test_admin_calibration_tab_and_endpoints():
     assert 'request("calendar-config/reset", { method: "POST"' in script
     assert "function renderCalibration(" in script
     assert "第一周周一" in page and "正式上课首日" in page
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="需要 node 才能执行前端片段")
+def test_teaching_context_pure_functions(tmp_path):
+    """教学周上下文纯函数在 node 中跑同一份实现：
+    queryCoversWeek 覆盖判定（all/单值/区间/逗号/不含）与
+    resolveTeachingContext 的学期/周次/节次判定（真实校历基线夹具）。"""
+    script = _read("frontend/static/app.js")
+    covers = _extract_function(script, "queryCoversWeek(weeksValue, week)")
+    parse_date = _extract_function(script, "parseDateOnly(value)")
+    parse_clock = _extract_function(script, "parseClockMinutes(value)")
+    resolve = _extract_function(script, "resolveTeachingContext(now, config)")
+    with open("config/calendar.json", encoding="utf-8") as fh:
+        config = json.load(fh)
+    harness = tmp_path / "teaching.mjs"
+    harness.write_text(
+        covers + "\n" + parse_date + "\n" + parse_clock + "\n" + resolve + "\n"
+        "const cfg = " + json.dumps(config) + ";\n"
+        "const assert = (ok, msg) => { if (!ok) { console.error(msg); process.exit(1); } };\n"
+        "// queryCoversWeek：all/单值/区间/逗号/不含\n"
+        "assert(queryCoversWeek('all', 12), 'all 必须覆盖');\n"
+        "assert(queryCoversWeek(null, 12), '空值按 all 处理');\n"
+        "assert(queryCoversWeek('12', 12), '单值命中');\n"
+        "assert(queryCoversWeek('11-15', 12), '区间命中');\n"
+        "assert(queryCoversWeek('1-5,11-15', 12), '逗号区间命中');\n"
+        "assert(!queryCoversWeek('1-5', 12), '不含则不高亮');\n"
+        "assert(!queryCoversWeek('13', 12), '其他单值不覆盖');\n"
+        "// resolveTeachingContext：第 12 周周三上午 10:00（第 3 节 09:55-10:40）\n"
+        "const inClass = resolveTeachingContext(new Date(2026, 10, 18, 10, 0, 0), cfg);\n"
+        "assert(inClass && inClass.semester === '2026-2027-1', '学期判定');\n"
+        "assert(inClass.week === 12, '周次判定, got ' + (inClass && inClass.week));\n"
+        "assert(inClass.dayIdx === 2, '星期三=2, got ' + (inClass && inClass.dayIdx));\n"
+        "assert(inClass.periodText === '第3节', '进行中节次, got ' + (inClass && inClass.periodText));\n"
+        "// 课前（07:00）与课间（09:00）节次为空，周次仍可判定\n"
+        "const before = resolveTeachingContext(new Date(2026, 10, 18, 7, 0, 0), cfg);\n"
+        "assert(before && before.week === 12 && before.periodText === '', '课前节次为空');\n"
+        "const mid = resolveTeachingContext(new Date(2026, 10, 18, 9, 0, 0), cfg);\n"
+        "assert(mid && mid.week === 12 && mid.periodText === '', '课间节次为空');\n"
+        "// 第 1 周周一与学期外（开始前/结束后）判定\n"
+        "const first = resolveTeachingContext(new Date(2026, 7, 31, 10, 0, 0), cfg);\n"
+        "assert(first && first.week === 1, '第一周周一=第1周');\n"
+        "assert(resolveTeachingContext(new Date(2026, 7, 20, 10, 0, 0), cfg) === null, '学期开始前无上下文');\n"
+        "assert(resolveTeachingContext(new Date(2027, 3, 1, 10, 0, 0), cfg) === null, '学期结束后无上下文');\n"
+        "assert(resolveTeachingContext(new Date(2026, 10, 18, 10, 0, 0), null) === null, '无 config 降级');\n"
+        "console.log('ok');\n",
+        encoding="utf-8")
+    result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or result.stdout

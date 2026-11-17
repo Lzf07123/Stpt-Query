@@ -1,6 +1,6 @@
 # edu-query-app · 前端实现速览（MASTER）
 
-> 版本：V1.2 ｜ 日期：2026-10-31 ｜ 状态：Li-Design V1.6 + 后台响应式深化
+> 版本：V1.3 ｜ 日期：2026-11-18 ｜ 状态：Li-Design V1.6 + 可靠性/债务清理专项
 > 代码事实优先：令牌源 `frontend/src/index.css`；运行时产物 `frontend/static/style.css`；
 > 品牌单点 `frontend/static/brand.js`。本文档与代码冲突时以代码为准并回写本文档。
 
@@ -51,7 +51,7 @@
 | 按钮 | `.btn` / `.btn-primary` / `.btn-ghost` / `.btn-sm` | 半透明单色 + 扫光 + 涟漪；查询/清空整行 7:3，控件统一 48px |
 | 结果卡 | `.project-card`（液态玻璃） | hover 上浮 3px、顶部主色细线展开 |
 | 结果表格 | `.table-shell`（规范表格组件） | 表头 surface-2、行 hover `bg-surface-2/60`；移动端横向滚动（表格 `min-width:480px`） |
-| 加载骨架 | `.search-skeleton` 结构（`#skeleton` 内） | V1.6 shimmer 1.35s / 220% + 容器 240ms 淡入 |
+| 加载骨架 | `.skeleton` / `.skeleton-line` / `.skeleton-row`（消费方在 app.css，shimmer 关键帧在 index.css） | V1.6 shimmer 1.35s / 220% + 容器 240ms 淡入；模板遗留 `.search-skeleton*` 已删除 |
 | 空状态 | `.empty-state` / `.empty-state-art` / `.empty-state-text` | SVG 小图 + 引导文案 |
 | 提示/状态 | `.notice` 变体、`.status`（ok/error）、`.status-dot` | 语义色只表状态 |
 | Toast | `.toast` / `.toast-success` / `.toast-error` / `.toast-info` | 进度条 + 进入/离开动画 |
@@ -133,6 +133,61 @@
   发布、存草稿和行操作在执行期间禁用按钮并设置 `aria-busy`，成功提示在表单重置后保留。
 
 ## 5. 全量视觉规范验收（2026-10-31，Li-Design V1.6 + 后台响应式）
+
+**滚动频闪修复（2026-11-18，合成反模式治理）**：用户报告「滑动频闪」，排查定位两处
+合成反模式：① 视差层 will-change 按「用后即清」动态挂摘（body.is-parallaxing，
+滚动加/停 300ms 摘）——对全宽×视口+280px、四层渐变+mask 的巨层，每次滚动都触发
+合成层提升+全量重新栅格化、停止后层回退，反复滑动反复栅格化/回退，大层 tile 未就绪
+瞬间即见闪白，即频闪主因；② `.tech-grid` 常驻 background-position 动画
+（tech-grid-pan）不可合成、每帧主线程重绘全宽巨层，`will-change: background-position`
+为无效提示。修复（视觉零漂移）：① 网格缓移搬入 `.tech-grid::before`（inset:-336px
+四边扩平铺周期余量、中心不变，mask 留主元素基准不变），动画改 transform
+translate3d(0,0)→(-336px,-336px)（336px 图案周期无缝循环），归合成器零重绘；
+② 两块视差巨层 will-change 常驻（@media ≥768px + no-preference），
+删除 is-parallaxing 动态挂摘（app.js/admin.js 同步清理，class 仅存于注释）；
+③ 移动端 animation:none 指向修正为 ::before。实测：::before 动画 running 且
+600ms 位移 16.8px（=336px/12s 精确速率）、视差 1:2 比例不变（151.5px 滚动 →
+9.1/18.2px）、氛围层截图与修复前逐像素一致、全量 306 通过 + 4 跳过。
+**准则修订**：「will-change 用后即清」仅适用于偶发动效元素；每帧滚动/常驻动画的
+巨大装饰层必须常驻 will-change，动态切换本身就是频闪源。资产版本：style.css v119 /
+app.js v14 / admin.js v37 / sw.js v5。IAB 内滚动 jank 采样五组隔离实验均为零长帧
+（WebView 合成器无法复现），修复依据为代码级证据链。
+
+**课表时间上下文专项验收（2026-11-18，同类产品基准对照）**：调研 WakeUp 课程表/课查查/
+西瓜课表/强智 Flutter 客户端等同类产品的共性模式后补齐核心差距——课表缺「时间上下文」。
+① 公开 `/api/v1/calendars/config` 下发非机密校历基线 `periods`/`terms`（terms 不含
+exdates 最小化公开面，service.public_config）；② app.js 新增纯函数
+`resolveTeachingContext`/`queryCoversWeek`（node 抽取执行测试覆盖学期判定/周次/节次/
+学期外/无 config 降级）；③ 周数下拉「第 N 周（本周）」快捷项（`dropdown-item--today`
+主色弱强调，默认值保持「全部周次」不变，静态列表同值项语义一致）；④ 课表结果高亮：
+今天列头 `th.is-today`（主色文字+底部主色条）、进行中节次行 `tr.is-now`（主色微底+
+左侧主色条，粘性首列同步铺底）、移动端 dayview 当前节次卡 `.is-now`；⑤ 概览徽章复用
+result-facts 通道追加「教学周 第 N 周 · 星期X（· 第 Y 节进行中）」。诚实标记护栏：
+高亮与徽章仅在**查询周覆盖本周**时出现（weeks=all/单值/区间/逗号解析），历史周次回放
+按其 weeks 判定；校历不可解析/日历未启用/课间课前全部静默降级。资产版本：app.js v13 /
+style.css v118 / sw.js v4。实测：无头浏览器注入样本课表，今天列/进行中行/徽章落点与
+明暗两态渲染正确，weeks=1-5 不做任何高亮；compose 冒烟 config 新字段下发正确；
+全量 307 通过 + 3 跳过（新增 test_public_config_exposes_nonsecret_baseline 与
+test_teaching_context_pure_functions）。真实凭据的课表高亮端到端验收待真实账号
+（与「当前目标」一致）。
+
+**可靠性与债务清理专项验收（2026-11-18，ui-ux-pro-max 审计 + 四块修复）**：
+① 查询页请求全部带超时兜底（jobs 提交 30s / 轮询单次 30s / 同步 run 180s / 日历 60s），
+超时与网络失败分文案呈现；任务轮询加 8 分钟总上限，非 JSON 轮询响应不再抛 TypeError
+被误报为网络失败；② 查询完成仅当结果标题不在视口时才滚动到结果卡（reduced-motion
+降级 auto），可见时保持原位；③ resize 触发的服务状态刷新防抖 200ms，tooltip mousemove
+rAF 合帧；④ 历史下拉选中项 aria-selected 同步；⑤ `.field-label` 基础样式上移共享层
+（修复查询页 6 处标签无样式）；⑥ admin.html 主题预置外置为 theme-init.js（全站零内联
+脚本，CSP script-src 仅 'self'，nginx 哈希已移除），manifest theme_color 对齐品牌
+#3A3F45；⑦ index.css 模板遗产死代码清理约 700 行（masonry/post-card/mobile-nav/
+site-menu/aurora 变体/search-skeleton 等，逐类 grep 确认零引用后删除；`empty-state*`/
+`table-empty-state`/`--eduquery-motion-*` 别名为在用项保留），style.css 产物 142KB→129KB；
+⑧ 后台：日志面板错误改走专用提示条（不再写「数据源」统计格）、自动轮询按激活面板执行、
+连续 2 轮失败升级为可见提示（metrics 走健康徽标/logs 走面板提示条）、表格刷新 aria-busy
++ 降透明、自动登录失败明确提示。全量 305 通过 + 3 跳过；compose 冒烟（信封/错误码/CSP/
+资产 200）与无头浏览器实测（1440/1024/375 无横向溢出、明暗两态、字段校验路径、
+自动登录失败提示、admin 首绘 theme-color 正确）通过。资产版本联动：style.css v117 /
+style-admin.css v6 / app.js v11 / notice.js v9 / admin.js v36 / sw.js v3。
 
 **视觉效果编排验收（2026-11-14，第二批打磨）**：ui-ux-pro-max 二轮检索（hover-vs-tap /
 focus-states / toast 时序 / number-tabular / 图表 screen-reader-summary）确认 4 项差距并修复：

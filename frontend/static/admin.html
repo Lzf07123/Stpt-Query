@@ -7,19 +7,10 @@
   <meta name="robots" content="noindex,nofollow">
   <link rel="icon" href="/image/icon.svg">
   <meta name="theme-color" content="#3A3F45">
-  <script>
-    (function () {
-      var theme = null;
-      try { theme = localStorage.getItem("eduquery-theme"); } catch (e) {}
-      if (theme !== "dark" && theme !== "light") {
-        theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
-      }
-      document.documentElement.classList.toggle("dark", theme === "dark");
-    })();
-  </script>
-  <link rel="stylesheet" href="/style-admin.css?v=5">
+  <!-- 主题预置外置脚本（与查询页同一单源）：阻塞执行防深色首绘闪白，
+       全站自此不再有内联脚本，CSP script-src 只保留 'self' -->
+  <script src="/theme-init.js?v=1"></script>
+  <link rel="stylesheet" href="/style-admin.css?v=6">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到后台内容</a>
@@ -55,7 +46,7 @@
       </form>
     </section>
 
-    <section class="layout admin-app layout-wide" id="adminApp" hidden aria-label="后台工作台">
+    <section class="layout admin-app" id="adminApp" hidden aria-label="后台工作台">
       <header class="admin-page-head" aria-label="后台页眉">
         <div class="admin-brand">
           <span class="admin-brand-mark"><img src="/image/icon.svg" alt=""></span>
@@ -173,7 +164,7 @@
         </div>
 
         <div class="section-caption">宿主机内核</div>
-        <div class="metric-grid monitor-grid host-grid">
+        <div class="metric-grid monitor-grid">
           <article class="card metric-card"><span>内存</span><strong id="hostMemory">—</strong><small id="hostMemoryMeta">—</small></article>
           <article class="card metric-card"><span>负载</span><strong id="hostLoad">—</strong><small id="hostLoadMeta">—</small></article>
           <article class="card metric-card"><span>运行时长</span><strong id="hostUptime">—</strong><small id="hostSource">—</small></article>
@@ -451,6 +442,8 @@
           <article class="card metric-card stat-card"><span>数据源</span><strong id="statSource">—</strong></article>
         </div>
 
+        <output class="notice notice-error hidden" id="logsMessage" role="alert"></output>
+
         <div class="card table-card logs-primary">
           <div class="table-scroll" tabindex="0" role="region" aria-label="查询日志列表，可横向滚动">
             <table>
@@ -562,6 +555,6 @@
   </footer>
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
-  <script src="/admin.js?v=35" defer></script>
+  <script src="/admin.js?v=37" defer></script>
 </body>
 </html>

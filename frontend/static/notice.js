@@ -50,7 +50,8 @@
     bar.classList.toggle("notice-bar-warning", item.level === "warning");
     text.textContent = item.content;
     text.removeAttribute("style");
-    track.classList.remove("is-scrolling", "is-static");
+    // is-scrolling：溢出走跑马灯；不溢出即静态展示（无需额外状态类）
+    track.classList.remove("is-scrolling");
     track.innerHTML = "";
     track.append(text);
     window.requestAnimationFrame(function () {
@@ -65,7 +66,6 @@
         track.classList.add("is-scrolling");
         scheduleRotation((duration + 0.25) * 1000);
       } else {
-        track.classList.add("is-static");
         scheduleRotation();
       }
     });
@@ -73,7 +73,7 @@
 
   function renderStaticList() {
     track.innerHTML = "";
-    track.classList.remove("is-scrolling", "is-static");
+    track.classList.remove("is-scrolling");
     track.classList.add("is-static-list");
     bar.classList.toggle("notice-bar-warning", notices.some(function (item) {
       return item.level === "warning";

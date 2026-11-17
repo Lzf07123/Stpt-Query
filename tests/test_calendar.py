@@ -929,3 +929,22 @@ def test_admin_terms_with_non_integer_weeks_returns_422(store, crypto, config):
     assert exc.value.code == "invalid_calendar_config"
     # 校准失败不得污染运行时配置
     assert service.config.term("2026-2027-1").weeks == 20
+
+
+def test_public_config_exposes_nonsecret_baseline(store, crypto, config):
+    """公开配置下发节次时间与学期基准（非机密文件基线），供首页计算
+    「当前教学周 / 本节进行中」；terms 不含 exdates，period_source 等内部字段不下发。"""
+    service = _service(store, crypto, config, FakeSchool(ROWS))
+    payload = service.public_config()
+    assert payload["periods"]["1"] == ["08:00", "08:45"]
+    assert payload["periods"]["11"] == ["20:50", "21:35"]
+    term = payload["terms"]["2026-2027-1"]
+    assert term["monday"] == "2026-08-31"
+    assert term["teaching_start"] == "2026-09-01"
+    assert term["weeks"] == 20
+    assert "exdates" not in term
+    assert "period_source" not in payload
+    assert "block_codes" not in payload
+    # 既有字段不回归
+    assert payload["default_semester"] == "2026-2027-1"
+    assert payload["inferred_periods"] == [11]

@@ -3,6 +3,49 @@
     // 本地直开静态文件调试时该值为空，查询请求会被后端 401 拒绝
     const GATEWAY_TOKEN = "";
 
+    // 请求超时上限（毫秒）：后端单次编排有总预算（默认 100s），前端兜底避免
+    // 上游/网关挂起时按钮无限 loading；轮询总时长上限防止任务永久 queued
+    const FETCH_TIMEOUT_JOBS_SUBMIT = 30000;
+    const FETCH_TIMEOUT_JOB_POLL = 30000;
+    const FETCH_TIMEOUT_SYNC_RUN = 180000;
+    // 日历操作含学校登录/快照重建（L3 回退真实登录），上界放宽到 60s
+    const FETCH_TIMEOUT_CALENDAR = 60000;
+    const JOB_POLL_MAX_DURATION = 8 * 60 * 1000;
+
+    // 组合外部 signal（取消旧查询/返回按钮）与超时定时器：外部 abort 保持
+    // AbortError 语义（静默返回），超时转为 TimeoutError（错误卡可区分文案）
+    function fetchWithTimeout(url, options, timeoutMs) {
+      const controller = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(function () {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      const external = options && options.signal;
+      if (external) {
+        if (external.aborted) controller.abort();
+        else external.addEventListener("abort", function () {
+          controller.abort();
+        }, { once: true });
+      }
+      const opts = Object.assign({}, options, { signal: controller.signal });
+      return fetch(url, opts).then(
+        function (resp) {
+          clearTimeout(timer);
+          return resp;
+        },
+        function (err) {
+          clearTimeout(timer);
+          if (timedOut) {
+            const timeoutError = new Error("请求超时（" + Math.round(timeoutMs / 1000) + " 秒无响应）");
+            timeoutError.name = "TimeoutError";
+            throw timeoutError;
+          }
+          throw err;
+        }
+      );
+    }
+
     const themeToggle = document.getElementById("themeToggle");
     const SUN_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
     const MOON_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
@@ -233,7 +276,9 @@
       const current = historyTrigger.getAttribute("data-label") || "";
       historyMenu.innerHTML = arr.map(function (r, i) {
         const label = recordLabel(r);
-        return '<button type="button" class="dropdown-item" role="option" aria-selected="false" data-index="' + i + '">' +
+        // 与 initDropdown 契约一致：选中项同步 aria-selected，屏幕阅读器可感知当前值
+        const selected = current && label === current ? "true" : "false";
+        return '<button type="button" class="dropdown-item" role="option" aria-selected="' + selected + '" data-index="' + i + '">' +
           label.replace(/"/g, "&quot;") + "</button>";
       }).join("");
       if (current && arr.some(function (r) { return recordLabel(r) === current; })) {
@@ -310,6 +355,7 @@
         const label = recordLabel(rec);
         historyTrigger.textContent = label;
         historyTrigger.setAttribute("data-label", label);
+        renderHistorySelect();
       }
       historyMenu.classList.add("hidden");
       historyTrigger.setAttribute("aria-expanded", "false");
@@ -620,17 +666,6 @@
         t.setAttribute("aria-expanded", "false");
       });
     });
-
-    function showLoading() {
-      statusBox.innerHTML = '<span class="spinner"></span>正在查询';
-      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
-    }
-
-    function showQueued(position) {
-      const suffix = position ? " · 第 " + position + " 位" : "";
-      statusBox.innerHTML = '<span class="spinner"></span>排队中' + suffix;
-      statusBox.classList.remove("hidden", "notice-success", "notice-error", "notice-warning", "notice-info");
-    }
 
     let progressStepStates = [];
     let currentJobPhase = null;
@@ -1115,10 +1150,18 @@
     serviceStatusBox.addEventListener("mouseover", function (event) {
       showStatusTooltip(event);
     });
+    // mousemove 高频触发且 positionStatusTooltip 读取 offsetWidth/Height 会强制
+    // 回流：rAF 合帧节流，每帧最多定位一次
+    let tooltipPositioningFrame = 0;
     serviceStatusBox.addEventListener("mousemove", function (event) {
-      if (!statusTooltip.classList.contains("hidden")) {
-        positionStatusTooltip(event);
-      }
+      if (statusTooltip.classList.contains("hidden")) return;
+      const clientX = event.clientX;
+      const clientY = event.clientY;
+      if (tooltipPositioningFrame) return;
+      tooltipPositioningFrame = window.requestAnimationFrame(function () {
+        tooltipPositioningFrame = 0;
+        positionStatusTooltip({ clientX: clientX, clientY: clientY });
+      });
     });
     serviceStatusBox.addEventListener("mouseleave", hideStatusTooltip);
     serviceStatusBox.addEventListener("touchstart", function (event) {
@@ -1220,6 +1263,94 @@
       return -1;
     }
 
+    // ---- 教学周上下文（同类课表产品标配：本周定位/今天列/进行中节次）----
+    // 数据来自公开校历基线 /api/v1/calendars/config（periods + terms，非机密）。
+    // 任何一步不可解析都返回 null：下游高亮/快捷项/徽章全部静默降级。
+    function parseDateOnly(value) {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+      if (!match) return null;
+      const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+      return isNaN(date.getTime()) ? null : date;
+    }
+
+    function parseClockMinutes(value) {
+      const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+      if (!match) return null;
+      return Number(match[1]) * 60 + Number(match[2]);
+    }
+
+    function resolveTeachingContext(now, config) {
+      if (!config || !config.terms || !config.periods) return null;
+      const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      let hit = null;
+      const semesters = Object.keys(config.terms);
+      for (let i = 0; i < semesters.length; i++) {
+        const term = config.terms[semesters[i]] || {};
+        const monday = parseDateOnly(term.monday);
+        const weeks = Number(term.weeks);
+        if (!monday || !Number.isFinite(weeks) || weeks < 1) continue;
+        const week = Math.floor((dayStart.getTime() - monday.getTime()) / 604800000) + 1;
+        if (week < 1 || week > weeks) continue;
+        hit = { semester: semesters[i], week: week };
+        break;
+      }
+      if (!hit) return null;
+      const dayIdx = (dayStart.getDay() + 6) % 7;   // 0=周一
+      const minutes = now.getHours() * 60 + now.getMinutes();
+      const periodKeys = Object.keys(config.periods).sort(function (a, b) {
+        return Number(a) - Number(b);
+      });
+      let periodNumber = 0;
+      for (let i = 0; i < periodKeys.length; i++) {
+        const window = config.periods[periodKeys[i]];
+        const start = parseClockMinutes(window && window[0]);
+        const end = parseClockMinutes(window && window[1]);
+        if (start == null || end == null) continue;
+        periodNumber += 1;
+        if (minutes >= start && minutes < end) {
+          return {
+            semester: hit.semester,
+            week: hit.week,
+            dayIdx: dayIdx,
+            periodNumber: periodNumber,
+            periodText: "第" + periodKeys[i] + "节"
+          };
+        }
+      }
+      // 课间/课前/课后：学期与周仍可判定，节次为空
+      return {
+        semester: hit.semester,
+        week: hit.week,
+        dayIdx: dayIdx,
+        periodNumber: 0,
+        periodText: ""
+      };
+    }
+
+    // 查询周参数是否覆盖某个周次：all / 单值 / a-b 区间 / 逗号混合
+    function queryCoversWeek(weeksValue, week) {
+      const raw = String(weeksValue == null ? "all" : weeksValue).trim();
+      if (!raw || raw === "all") return true;
+      const parts = raw.split(/[,，]/);
+      for (let i = 0; i < parts.length; i++) {
+        const seg = parts[i].trim();
+        if (!seg) continue;
+        const range = seg.match(/^(\d+)\s*[-~至到]\s*(\d+)$/);
+        if (range) {
+          if (week >= Number(range[1]) && week <= Number(range[2])) return true;
+        } else if (Number(seg) === week) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // 节次标签 → 节次序号（"第3节" → 3；无法解析返回 0）
+    function periodNumberOf(text) {
+      const match = /第(\d+)节/.exec(String(text || "").replace(/\s/g, ""));
+      return match ? Number(match[1]) : 0;
+    }
+
     function buildScheduleDayView(shell) {
       const table = shell.querySelector("table");
       if (!table || shell.dataset.dayviewReady === "1") return;
@@ -1245,6 +1376,8 @@
 
       const view = document.createElement("div");
       view.className = "schedule-dayview";
+      // 教学周上下文：渲染时解析一次（切换星期 tab 复用同一结论）
+      const ctx = calendarConfig ? resolveTeachingContext(new Date(), calendarConfig) : null;
       const tabs = document.createElement("div");
       tabs.className = "schedule-dayview-tabs";
       tabs.setAttribute("role", "tablist");
@@ -1273,6 +1406,11 @@
             .map(function (line) { return line.trim(); }).filter(Boolean);
           const card = document.createElement("div");
           card.className = "schedule-day-card";
+          // 教学周上下文：当天视图里正在上的节次卡高亮（公开校历可解析时）
+          if (calendarConfig && ctx && ctx.periodNumber &&
+              day === ctx.dayIdx && periodNumberOf(item.period) === ctx.periodNumber) {
+            card.classList.add("is-now");
+          }
           const head = document.createElement("div");
           head.className = "schedule-day-head";
           const period = document.createElement("span");
@@ -1407,6 +1545,36 @@
       });
     }
 
+    // 课表时间上下文：今天列头高亮 + 正在上的节次行高亮。
+    // 仅当公开校历基线可解析出教学周、且查询周参数覆盖本周时标记，
+    // 避免对历史周次/聚合数据做误导性高亮；重放历史记录同样按其 weeks 判定。
+    function enhanceScheduleToday(root) {
+      if (!calendarConfig) return;
+      const ctx = resolveTeachingContext(new Date(), calendarConfig);
+      if (!ctx) return;
+      if (!queryCoversWeek(resultContext.weeks, ctx.week)) return;
+      root.querySelectorAll(".table-shell--schedule").forEach(function (shell) {
+        const table = shell.querySelector("table");
+        if (!table || shell.dataset.todayReady === "1") return;
+        shell.dataset.todayReady = "1";
+        const headCells = Array.from(table.querySelectorAll("thead th"));
+        let todayCol = -1;
+        headCells.forEach(function (th, idx) {
+          if (scheduleDayOfHeader(th.textContent) === ctx.dayIdx) todayCol = idx;
+        });
+        // 0 为节次表头列；命中的是星期列才标记
+        if (todayCol > 0) headCells[todayCol].classList.add("is-today");
+        if (ctx.periodText) {
+          table.querySelectorAll("tbody tr").forEach(function (tr) {
+            const cells = tr.querySelectorAll("td");
+            if (cells.length && periodNumberOf(cells[0].textContent) === ctx.periodNumber) {
+              tr.classList.add("is-now");
+            }
+          });
+        }
+      });
+    }
+
     function applyRenderedElementStyles(root) {
       root.querySelectorAll("[data-score]").forEach(function (node) {
         node.style.width = node.dataset.score + "%";
@@ -1415,6 +1583,7 @@
         node.style.width = node.dataset.width + "%";
       });
       root.querySelectorAll(".table-shell--schedule").forEach(buildScheduleDayView);
+      enhanceScheduleToday(root);
       enhanceLoginNote(root);
       enhanceDownloadCta(root);
     }
@@ -1897,6 +2066,17 @@
         { label: "学期", value: resultContext.semesters || "当前学期" },
         { label: "范围", value: resultContext.weeks === "all" ? "全部周次" : resultContext.weeks }
       ];
+      // 教学周上下文徽章（同类课表产品标配）：公开校历基线可解析且查询覆盖本周时
+      // 追加「教学周」事实；只陈述位置事实（第 N 周/星期X/进行中节次），不列课程清单，
+      // 避免对全周聚合表做误导性结论
+      if (option !== "成绩" && calendarConfig) {
+        const teachingCtx = resolveTeachingContext(new Date(), calendarConfig);
+        if (teachingCtx && queryCoversWeek(resultContext.weeks, teachingCtx.week)) {
+          let teachingValue = "第 " + teachingCtx.week + " 周 · 星期" + SCHEDULE_DAY_CHARS[teachingCtx.dayIdx];
+          if (teachingCtx.periodText) teachingValue += " · " + teachingCtx.periodText + "进行中";
+          facts.push({ label: "教学周", value: teachingValue });
+        }
+      }
       renderResultOverview(
         "success",
         option + "查询",
@@ -2088,12 +2268,12 @@
       try {
         let resp;
         let data;
-        const jobSubmitResp = await fetch("/api/v1/run/jobs", {
+        const jobSubmitResp = await fetchWithTimeout("/api/v1/run/jobs", {
           method: "POST",
           headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
           body: JSON.stringify(payload),
           signal: queryController.signal
-        });
+        }, FETCH_TIMEOUT_JOBS_SUBMIT);
         let jobSubmitText = await jobSubmitResp.text();
         let jobSubmitData;
         try { jobSubmitData = JSON.parse(jobSubmitText); } catch (err) { jobSubmitData = jobSubmitText; }
@@ -2108,15 +2288,25 @@
 
         if (jobSubmitResp.ok && jobSubmitPayload && jobSubmitPayload.job_id) {
           renderJobProgress("queued", payload, "queued", jobSubmitPayload.position || 0);
+          const pollDeadline = Date.now() + JOB_POLL_MAX_DURATION;
           let terminalJob = null;
           while (seq === querySeq && !queryController.signal.aborted) {
             await new Promise(function (resolve) { setTimeout(resolve, 2000); });
             if (seq !== querySeq || queryController.signal.aborted) return;
-            const pollResp = await fetch("/api/v1/run/jobs/" + encodeURIComponent(jobSubmitPayload.job_id), {
+            if (Date.now() > pollDeadline) {
+              // 轮询上限：任务长期无终态时给出明确出路，不让按钮无限 loading
+              markJobProgressFailed(payload);
+              showErrorCard("查询任务等待超时（超过 8 分钟无结果），请稍后重试");
+              showToast("error", "查询任务超时");
+              showStatus("查询失败", false);
+              renderServiceStatus();
+              return;
+            }
+            const pollResp = await fetchWithTimeout("/api/v1/run/jobs/" + encodeURIComponent(jobSubmitPayload.job_id), {
               headers: authHeaders(),
               cache: "no-store",
               signal: queryController.signal
-            });
+            }, FETCH_TIMEOUT_JOB_POLL);
             const pollText = await pollResp.text();
             let pollData;
             try { pollData = JSON.parse(pollText); } catch (err) { pollData = pollText; }
@@ -2132,10 +2322,14 @@
               throw new Error((pollData && pollData.message) || ("HTTP " + pollResp.status));
             }
             const jobPayload = pollData && pollData.data ? pollData.data : null;
-            if (jobPayload && jobPayload.state === "queued") {
+            if (!jobPayload || !jobPayload.state) {
+              // 非 JSON/非信封响应：不读 null.phase 抛 TypeError 被误报为网络失败
+              throw new Error((pollData && pollData.message) || "查询任务状态异常，请重试");
+            }
+            if (jobPayload.state === "queued") {
               renderJobProgress(
                 jobPayload.phase || "queued", payload, jobPayload.state, jobPayload.position);
-            } else if (jobPayload && jobPayload.state === "running") {
+            } else if (jobPayload.state === "running") {
               renderJobProgress(jobPayload.phase || "querying", payload, jobPayload.state, 0);
             } else {
               terminalJob = jobPayload;
@@ -2157,12 +2351,12 @@
           });
         } else if (jobSubmitResp.ok || jobFeatureUnavailable) {
           hideJobProgress();
-          resp = await fetch("/api/v1/run", {
+          resp = await fetchWithTimeout("/api/v1/run", {
             method: "POST",
             headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
             body: JSON.stringify(payload),
             signal: queryController.signal
-          });
+          }, FETCH_TIMEOUT_SYNC_RUN);
           const text = await resp.text();
           try { data = JSON.parse(text); } catch (err) { data = text; }
         } else {
@@ -2264,6 +2458,11 @@
           showOfflineBar(cached.savedAt);
           showStatus("网络异常，已展示缓存数据", false);
           showToast("info", "网络异常，已展示本地缓存数据");
+        } else if (err && err.name === "TimeoutError") {
+          // 超时与网络失败区分文案：超时通常是学校侧/上游缓慢，建议稍后重试
+          hideOfflineBar();
+          showErrorCard(err.message + "，请稍后重试");
+          showToast("error", "查询超时");
         } else {
           hideOfflineBar();
           showErrorCard("网络请求失败，请稍后重试");
@@ -2277,9 +2476,21 @@
           form.classList.remove("is-yielding");
           resultCard.removeAttribute("aria-busy");
           setButtonLoading(false);
-          window.scrollTo(0, savedScrollY);
           if (layout.classList.contains("has-result")) {
+            // 结果态布局与表单态差异大：旧滚动位置可能落在结果卡下方空白处，
+            // 仅当结果标题不在视口内时才滚动到结果卡，可见时保持原位不打扰
+            const titleRect = resultTitle.getBoundingClientRect();
+            const titleVisible = titleRect.top >= 0 && titleRect.top < window.innerHeight;
+            if (!titleVisible) {
+              const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+              resultCard.scrollIntoView({
+                behavior: reduceMotion ? "auto" : "smooth",
+                block: "start"
+              });
+            }
             resultTitle.focus({ preventScroll: true });
+          } else {
+            window.scrollTo(0, savedScrollY);
           }
         }
       }
@@ -2503,17 +2714,40 @@
       calendarSemesterDropdown.sync();
     }
 
+    // 周数下拉快捷项：公开校历基线可解析出当前教学周时，紧跟「全部周次」插入
+    // 「第 N 周（本周）」；默认选中值保持「全部周次」不变（全学期聚合仍有价值）。
+    // 静态兜底列表可能已含同值「第 N 周」项，二者语义一致；后台校准学期后
+    // 旧快捷项按标记移除重建。config 拉取失败/未启用日历时静默降级。
+    function refreshWeekOptions() {
+      const menu = document.getElementById("weeksMenu");
+      if (!menu || !calendarConfig) return;
+      const ctx = resolveTeachingContext(new Date(), calendarConfig);
+      const stale = menu.querySelector(".dropdown-item--today");
+      if (stale) stale.remove();
+      if (!ctx || ctx.week < 1 || ctx.week > 20) return;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "dropdown-item dropdown-item--today";
+      btn.setAttribute("data-value", String(ctx.week));
+      btn.textContent = "第 " + ctx.week + " 周（本周）";
+      const keep = menu.querySelector('.dropdown-item[data-value="all"]');
+      if (keep) keep.insertAdjacentElement("afterend", btn);
+      else menu.insertBefore(btn, menu.firstChild);
+      weeksDropdown.sync();
+    }
+
     async function calendarLoadConfig() {
       if (calendarConfig) return calendarConfig;
       if (calendarUnavailable) return null;
       try {
-        var resp = await fetch("/api/v1/calendars/config", { headers: authHeaders() });
+        var resp = await fetchWithTimeout("/api/v1/calendars/config", { headers: authHeaders() }, FETCH_TIMEOUT_CALENDAR);
         if (resp.status === 404) { calendarDisableEntry(); return null; }
         if (resp.ok) {
           var body = await resp.json();
           calendarConfig = body && body.data ? body.data : null;
           calendarFilterSemesterOptions();
           refreshSemesterOptions();
+          refreshWeekOptions();
         }
       } catch (e) { /* 网络异常时保持入口可用，仅缺少默认学期 */ }
       return calendarConfig;
@@ -2554,11 +2788,11 @@
     }
 
     async function calendarRequest(path, body, method) {
-      var resp = await fetch(path, {
+      var resp = await fetchWithTimeout(path, {
         method: method || "POST",
         headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
         body: body ? JSON.stringify(body) : undefined
-      });
+      }, FETCH_TIMEOUT_CALENDAR);
       var data = null;
       try { data = await resp.json(); } catch (e) { data = null; }
       if (!resp.ok) {
@@ -3167,11 +3401,12 @@
     window.addEventListener("offline", syncOnlineState);
     window.addEventListener("online", syncOnlineState);
     if (navigator.onLine === false) showOfflineBar();
-    // P1 氛围微视差：栅格 0.06 / 前景 0.12（检索边界内：仅装饰层、位移封顶 140px、
-    // will-change 滚动停止 300ms 后移除）；prefers-reduced-motion 下完全跳过
+    // P1 氛围微视差：栅格 0.06 / 前景 0.12（仅装饰层、位移封顶 140px）；
+    // prefers-reduced-motion 下完全跳过。巨层的 will-change 已常驻（CSS 侧
+    // 桌面 + 允许动效时声明），不再用 body.is-parallaxing 动态挂摘——
+    // 动态切换会让每次滚动触发全层重新栅格化、停止后层回退，即「滑动频闪」根因
     var parallaxReduce = window.matchMedia("(prefers-reduced-motion: reduce)");
     var parallaxTicking = false;
-    var parallaxResetTimer = 0;
     function applyParallax() {
       parallaxTicking = false;
       if (parallaxReduce.matches) return;
@@ -3180,11 +3415,6 @@
       var fore = document.querySelector(".tech-ambience-fore");
       if (grid) grid.style.transform = "translate3d(0," + Math.min(y * 0.06, 140).toFixed(1) + "px,0)";
       if (fore) fore.style.transform = "translate3d(0," + Math.min(y * 0.12, 140).toFixed(1) + "px,0)";
-      document.body.classList.add("is-parallaxing");
-      clearTimeout(parallaxResetTimer);
-      parallaxResetTimer = window.setTimeout(function () {
-        document.body.classList.remove("is-parallaxing");
-      }, 300);
     }
     window.addEventListener("scroll", function () {
       if (!parallaxTicking) {
@@ -3193,10 +3423,14 @@
       }
     }, { passive: true });
     window.addEventListener("scroll", hideStatusTooltip, { passive: true });
+    // renderServiceStatus 每次触发都发 fetch：resize 高频连发时防抖合并，
+    // 拖拽窗口/旋转屏幕只请求一次；纯 DOM 同步的两项保持即时执行
+    let serviceStatusResizeTimer = 0;
     window.addEventListener("resize", function () {
       hideStatusTooltip();
-      renderServiceStatus();
       syncBackToTopVisibility();
+      clearTimeout(serviceStatusResizeTimer);
+      serviceStatusResizeTimer = window.setTimeout(renderServiceStatus, 200);
     }, { passive: true });
     // 内容高度变化（结果卡渲染/收起）也要重估“是否有可回滚距离”
     if (window.ResizeObserver && document.body) {

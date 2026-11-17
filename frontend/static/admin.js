@@ -20,6 +20,7 @@
     calendarActive: $("calendarActive"), calendarReauth: $("calendarReauth"),
     calendarPaused: $("calendarPaused"), calendarMessage: $("calendarMessage"),
     logsPanel: $("logsPanel"), noticesPanel: $("noticesPanel"),
+    logsMessage: $("logsMessage"),
     metricsPanel: $("metricsPanel"), filter: $("logFilter"), exportBtn: $("exportBtn"),
     filterToggle: $("filterToggle"),
     limitSelect: $("limitSelect"),
@@ -84,8 +85,11 @@
     detail: null, detailScope: "", relatedLogs: [], relatedRequest: 0,
     metricHistory: [], metricsLoading: false,
     noticeOffset: 0, noticeLimit: 20, noticeEditingId: "", noticeItems: [],
-    calibration: null
+    calibration: null, activeTab: "metrics"
   };
+
+  // 自动刷新连续失败计数：连续 2 轮失败才升级为可见提示（抖动不刷屏），成功即复位
+  var autoRefreshFailures = { logs: 0, metrics: 0 };
 
   function getToken() {
     try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; }
@@ -541,7 +545,7 @@
             noticeActionButton("重新上线", "publish", item.id);
         }
         row.innerHTML =
-          '<td class="notice-content">' + escapeHtml(item.content) + '</td>' +
+          '<td>' + escapeHtml(item.content) + '</td>' +
           '<td>' + noticeLevelBadge(item.level) + '</td>' +
           '<td>' + noticeBadge(item.status) + '</td>' +
           '<td>' + escapeHtml(formatTime(item.published_at)) + '</td>' +
@@ -567,8 +571,14 @@
   }
 
   async function loadNotices() {
-    var payload = await request("notices?" + noticeQuery());
-    renderNotices(payload);
+    var scroll = elements.noticesPanel ? elements.noticesPanel.querySelector(".table-scroll") : null;
+    setTableBusy(scroll, true);
+    try {
+      var payload = await request("notices?" + noticeQuery());
+      renderNotices(payload);
+    } finally {
+      setTableBusy(scroll, false);
+    }
   }
 
   async function submitNotice(status) {
@@ -810,6 +820,7 @@
 
   function setActiveTab(tab, reload, historyMode) {
     if (!ADMIN_TABS[tab]) tab = "metrics";
+    state.activeTab = tab;
     var isMetrics = tab === "metrics";
     var isNotices = tab === "notices";
     var isCalendars = tab === "calendars";
@@ -1049,7 +1060,8 @@
     if (!elements.calendarMessage) return;
     elements.calendarMessage.textContent = text || "";
     elements.calendarMessage.classList.toggle("hidden", !text);
-    elements.calendarMessage.classList.toggle("notice-warning", kind === "error");
+    // 错误统一用 notice-error（与其他面板一致）；notice-warning 留给降级类提示
+    elements.calendarMessage.classList.toggle("notice-error", kind === "error");
   }
 
   function calendarStateLabel(value) {
@@ -1109,7 +1121,6 @@
         } else {
           td.textContent = value;
         }
-        if (index === 0) td.className = "notice-content";
         row.appendChild(td);
       });
       var actions = document.createElement("td");
@@ -1166,11 +1177,33 @@
   function startTimers() {
     stopTimers();
     state.autoLogsTimer = window.setInterval(function () {
-      if (elements.autoLogs.checked && document.visibilityState === "visible") loadLogs().catch(function () {});
+      // 按需轮询：只刷新当前激活面板（metrics 页眉健康徽标仍由 loadMetrics 驱动），
+      // 后台标签页不可见时跳过
+      if (elements.autoLogs.checked && document.visibilityState === "visible" &&
+          state.activeTab === "logs") {
+        loadLogs().catch(function (error) { noteAutoRefreshFailure("logs", error); });
+      }
     }, 10000);
     state.autoMetricsTimer = window.setInterval(function () {
-      if (elements.autoMetrics.checked && document.visibilityState === "visible") loadMetrics().catch(function () {});
+      if (elements.autoMetrics.checked && document.visibilityState === "visible" &&
+          state.activeTab === "metrics") {
+        loadMetrics().catch(function (error) { noteAutoRefreshFailure("metrics", error); });
+      }
     }, 5000);
+  }
+
+  function noteAutoRefreshFailure(channel, error) {
+    autoRefreshFailures[channel] += 1;
+    if (autoRefreshFailures[channel] < 2) return;
+    var message = "自动刷新失败（已 " + autoRefreshFailures[channel] + " 轮未更新）：" +
+      (error && error.message ? error.message : "未知错误");
+    if (channel === "metrics") {
+      // 页眉健康徽标由资源监控驱动，用警告态提示刷新链路异常
+      setAdminHealth("warning", "自动刷新失败", message);
+    } else {
+      elements.logsMessage.textContent = message;
+      elements.logsMessage.classList.remove("hidden");
+    }
   }
 
   function selectedFilters(form) {
@@ -1191,11 +1224,28 @@
     return query.toString();
   }
 
+  // 表格刷新加载态：aria-busy 表达语义 + 降透明表达视觉（不阻塞交互）
+  function setTableBusy(container, busy) {
+    if (!container) return;
+    container.setAttribute("aria-busy", busy ? "true" : "false");
+    container.classList.toggle("is-refreshing", busy);
+  }
+
   async function loadLogs() {
     var query = selectedFilters(elements.filter);
-    var payload = await request("query-logs?" + query);
-    state.logs = payload.logs || [];
-    renderLogs(payload);
+    var scroll = elements.logsPanel ? elements.logsPanel.querySelector(".table-scroll") : null;
+    setTableBusy(scroll, true);
+    try {
+      var payload = await request("query-logs?" + query);
+      state.logs = payload.logs || [];
+      renderLogs(payload);
+      // 成功即复位自动刷新失败计数与提示（手动筛选出错提示由 showError 写入，
+      // 下一次成功加载同样清除）
+      autoRefreshFailures.logs = 0;
+      if (elements.logsMessage) elements.logsMessage.classList.add("hidden");
+    } finally {
+      setTableBusy(scroll, false);
+    }
   }
 
   function formatDetailValue(value) {
@@ -1695,6 +1745,8 @@
       renderHost(latest);
       renderStorage(latest, payload.services || {});
       renderDependencyNotices(payload);
+      // 成功一轮即复位自动刷新失败计数；健康徽标由 renderDependencyNotices 按依赖实况重设
+      autoRefreshFailures.metrics = 0;
     } catch (error) {
       renderServices(null);
       clearMetrics("采样失败");
@@ -1734,14 +1786,14 @@
     }).join("");
   }
 
-  function bindEvents() {
-    function setLoginMessage(message, state) {
-      elements.loginMessage.textContent = message;
-      elements.loginMessage.classList.toggle("hidden", !message);
-      elements.loginMessage.classList.toggle("notice-info", state !== "error");
-      elements.loginMessage.classList.toggle("notice-error", state === "error");
-    }
+  function setLoginMessage(message, state) {
+    elements.loginMessage.textContent = message;
+    elements.loginMessage.classList.toggle("hidden", !message);
+    elements.loginMessage.classList.toggle("notice-info", state !== "error");
+    elements.loginMessage.classList.toggle("notice-error", state === "error");
+  }
 
+  function bindEvents() {
     elements.loginForm.addEventListener("submit", async function (event) {
       event.preventDefault();
       elements.adminLoginBtn.disabled = true;
@@ -1990,7 +2042,10 @@
   }
 
   function showError(error) {
-    elements.source.textContent = error.message;
+    // 日志面板专用错误提示条（此前误写进「数据源」统计格，语义错位）
+    if (!elements.logsMessage) return;
+    elements.logsMessage.textContent = error && error.message ? error.message : String(error);
+    elements.logsMessage.classList.remove("hidden");
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -2001,11 +2056,11 @@
       });
       state.chartObserver.observe(elements.cpuChart);
     }
-    // P1 氛围微视差（后台同款）：栅格 0.06 / 前景 0.12，位移封顶 140px，
-    // will-change 滚动停止 300ms 后移除；prefers-reduced-motion 下完全跳过
+    // P1 氛围微视差（后台同款）：栅格 0.06 / 前景 0.12，位移封顶 140px；
+    // prefers-reduced-motion 下完全跳过。will-change 由 CSS 常驻声明，
+    // 不再用 is-parallaxing 动态挂摘（动态切换 = 滑动频闪根因，见 app.js 同款注释）
     var parallaxReduce = window.matchMedia("(prefers-reduced-motion: reduce)");
     var parallaxTicking = false;
-    var parallaxResetTimer = 0;
     function applyParallax() {
       parallaxTicking = false;
       if (parallaxReduce.matches) return;
@@ -2014,11 +2069,6 @@
       var fore = document.querySelector(".tech-ambience-fore");
       if (grid) grid.style.transform = "translate3d(0," + Math.min(y * 0.06, 140).toFixed(1) + "px,0)";
       if (fore) fore.style.transform = "translate3d(0," + Math.min(y * 0.12, 140).toFixed(1) + "px,0)";
-      document.body.classList.add("is-parallaxing");
-      clearTimeout(parallaxResetTimer);
-      parallaxResetTimer = window.setTimeout(function () {
-        document.body.classList.remove("is-parallaxing");
-      }, 300);
     }
     window.addEventListener("scroll", function () {
       if (!parallaxTicking) {
@@ -2028,7 +2078,11 @@
     }, { passive: true });
     var saved = getToken();
     if (saved) {
-      activate(saved).catch(function () { setToken(""); });
+      activate(saved).catch(function () {
+        // 自动登录失败：清凭据并明确告知（此前静默清 token，用户不知道发生了什么）
+        setToken("");
+        setLoginMessage("保存的凭据已失效或服务暂不可用，请重新输入管理员令牌。", "error");
+      });
     }
   });
 })();

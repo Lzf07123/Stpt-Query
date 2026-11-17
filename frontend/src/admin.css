@@ -152,9 +152,7 @@
   @apply text-sm text-muted;
 }
 
-.field-label {
-  @apply text-left text-sm font-medium text-foreground;
-}
+/* .field-label 基础样式已上移到共享层 index.css（查询页/后台共用） */
 
 .layout.admin-app {
   grid-area: auto;
@@ -1160,6 +1158,12 @@
   overflow-x: auto;
   scrollbar-color: var(--eduquery-border) transparent;
   scrollbar-width: thin;
+}
+
+/* 表格刷新加载态：JS 在 loadLogs/loadNotices 期间挂 aria-busy + is-refreshing */
+.table-scroll.is-refreshing {
+  opacity: 0.6;
+  transition: opacity 150ms var(--eduquery-ease-out, ease-out);
 }
 
 .table-scroll:focus-visible {
