@@ -787,7 +787,9 @@
     display: grid;
     gap: 6px;
     grid-template-columns: auto minmax(0, 1fr) auto;
-    margin: -14px auto 22px;
+    /* 旧版 -14px 上浮边距是给一屏化之前 120-180px 的高头部设计的：头部收窄到
+       48-76px 后会把公告条压到标题上（移动端实测重叠 6px），改为正常文档流 */
+    margin: 0 auto 22px;
     max-width: 680px;
     min-height: 44px;
     padding: 4px 8px;
@@ -2087,6 +2089,24 @@ body > .page-shell {
     }
     .field-help:not(.field-trust) {
       display: none;   /* 学号格式提示可由 pattern/校验兜底，短屏让位给主字段；信任行豁免 */
+    }
+    /* 公告条同步降密度：44px 条 + 22px 下边距合计比无公告时多占 52px，会把
+       表单底部（提交按钮/健康状态条）压进固定页脚玻璃后面 —— 压缩到 36px 条
+       + 12px 下边距（按钮 32px 触控区经 ::before 仍达 44px） */
+    .notice-bar {
+      min-height: 36px;
+      margin-bottom: 12px;
+      padding: 2px 8px;
+    }
+    /* 有公告时头部让出内部留白、主区贴近公告条，抵消公告条的追加高度，
+       保证发布公告后表单底部不被固定页脚压住（仅查询页，结果页头部不压） */
+    .wrap:has(> .layout:not(.has-result)):has(> #noticeBar:not(.hidden)) > .head {
+      min-height: 44px;
+      max-height: 64px;
+      padding-top: 4px;
+    }
+    .wrap:has(> #noticeBar:not(.hidden)) > .layout:not(.has-result) {
+      margin-top: 4px;
     }
   }
   @media (max-height: 640px) {
