@@ -75,7 +75,7 @@ edu-query-app 是**单容器双进程（nginx 边缘入口 + uvicorn 应用进�
 # 1. 编排配置合法
 docker compose config --quiet
 
-# 2. 单元测试（当前基线 295 通过 + 3 跳过，跳过为容器内无 node 的前端片段用例）
+# 2. 单元测试（当前基线 306 通过 + 4 跳过，跳过为容器内无 node 的前端片段用例）
 docker build -q -t edu-query-app:test .
 docker run --rm -v "$PWD":/app -w /app edu-query-app:test \
   sh -c "pip install -q pytest pytest-asyncio && python -m pytest -q"

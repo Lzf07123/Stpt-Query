@@ -13,6 +13,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Compose
         run: docker compose config --quiet
+      # 评审栈卷名覆盖必须始终可与主 compose 叠加
+      - name: Validate Compose (review overlay)
+        run: docker compose -f docker-compose.yml -f compose.review.yml config --quiet
 
   backend:
     runs-on: ubuntu-latest
@@ -62,11 +65,29 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Audit frontend dependencies
         working-directory: frontend
-        run: npm ci --ignore-scripts && npm audit --audit-level=high
+        run: |
+          npm ci --ignore-scripts
+          # picomatch GHSA-fc5q-39xc-vjpf（<=4.0.7）修复版尚未发布，无法通过升级消除：
+          # 仅存在于构建期 devDependency 链（@tailwindcss/cli → @parcel/watcher →
+          # micromatch → picomatch），运行时零第三方资源不受影响。允许集合之外的
+          # 漏洞一律使审计失败；picomatch 发布修复版后请把该豁免移除。
+          npm audit --json > audit.json || true
+          python3 - <<'PY'
+          import json, sys
+
+          allow = {"picomatch", "@parcel/watcher", "@tailwindcss/cli"}
+          vulns = json.load(open("audit.json")).get("vulnerabilities", {})
+          unexpected = sorted(set(vulns) - allow)
+          if unexpected:
+              print("未豁免的漏洞:", unexpected)
+              sys.exit(1)
+          print("npm audit: 仅剩已豁免的构建链漏洞", sorted(vulns) or "无")
+          PY
+          rm -f audit.json
 
   images:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build all service images
-        run: APP_IMAGE_TAG=${{ github.sha }} docker compose build app frontend
+      - name: Build single-container image
+        run: APP_IMAGE_TAG=${{ github.sha }} docker compose build

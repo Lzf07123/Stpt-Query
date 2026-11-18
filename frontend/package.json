@@ -11,5 +11,8 @@
   "devDependencies": {
     "@tailwindcss/cli": "^4.1.0",
     "tailwindcss": "^4.1.0"
+  },
+  "overrides": {
+    "source-map-js": "1.2.2"
   }
 }
