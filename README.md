@@ -1,6 +1,6 @@
 # 教务查询编排 · Stpt-Query
 
-> **单体应用 + 边缘代理**：查询、渲染、分析、PDF 与内嵌查询代理同进程运行。
+> **单容器双进程（nginx 边缘入口 + uvicorn 应用进程）**：查询、渲染、分析、PDF 与内嵌查询代理同进程运行。
 > 对外 JSON 接口统一 `/api/v1/*` 命名与统一语义（信封 + 稳定错误码，见
 > [docs/api-semantics.md](docs/api-semantics.md)），不再兼容 Dify 契约。
 
@@ -31,13 +31,13 @@
 
 ## 关于
 
-本仓库是自包含项目，由两个容器组成：`app`（单体应用）与 `frontend`（前端）。查询代理已并入 `app/` 包，以**进程内 ASGI** 方式被调用，负责学校统一认证登录、免密跳转与成绩/课表原始查询；编排层负责固定工作流、成绩/课表渲染、成绩分析 LLM、异常分类与 PDF；前端托管查询页面与后台，是默认唯一对外入口。
+本仓库是自包含项目，以**单容器**部署：`edu-query-app` 容器内运行 nginx（8080 唯一对外入口）与 uvicorn（仅容器内回环 8000）双进程。查询代理已并入 `app/` 包，以**进程内 ASGI** 方式被调用，负责学校统一认证登录、免密跳转与成绩/课表原始查询；编排层负责固定工作流、成绩/课表渲染、成绩分析 LLM、异常分类与 PDF；nginx 托管查询页面与后台静态资产并反代 API，是默认唯一对外入口。`frontend/` 目录保留为 nginx 资产目录（静态页/模板/入口脚本片段），构建期并入单镜像。
 
 | 项目 | 内容 |
 | --- | --- |
 | 身份 | 教务查询编排服务（统一 /api/v1/* 语义） |
 | 方向 | 教育信息化 · 教务数据服务（信封式 API + 稳定错误码） |
-| 方式 | 单体应用 + 边缘代理（2 容器）+ 统一身份认证（WebVPN/CAS）+ OpenAI 兼容 LLM |
+| 方式 | 单容器（nginx + uvicorn 双进程）+ 统一身份认证（WebVPN/CAS）+ OpenAI 兼容 LLM |
 | 目标 | 不依赖 Dify 地为页面与自动化脚本提供稳定、可扩展的教务查询接口（统一语义见 docs/api-semantics.md） |
 
 ## 技能栈
@@ -48,7 +48,7 @@
 | 渲染与文档 | Markdown 渲染（1:1 移植原代码节点）· reportlab PDF（内置 CID 中文字体） |
 | LLM | OpenAI 兼容协议直连（默认智谱 `glm-4.5-flash`，可关闭深度思考并覆盖系统提示词） |
 | 前端 | Nginx 静态页面 + Tailwind CSS 4 品牌令牌（构建期 CLI 编译、运行时零第三方资源）+ 反向代理注入网关令牌 |
-| 部署 | Docker Compose 两容器（app + frontend）· 单实例默认无 Redis · 内嵌查询代理（免内部网络/内部令牌） |
+| 部署 | Docker Compose 单容器（nginx + uvicorn 双进程）· 单实例默认无 Redis · 内嵌查询代理（免内部网络/内部令牌） |
 | 测试与文档 | pytest 单元测试 · K8s 迁移指引 |
 
 ## 项目
@@ -56,47 +56,35 @@
 | 项目 | 简介 | 技术栈 | 状态 |
 | --- | --- | --- | --- |
 | [单体应用](app/) | 统一 /api/v1/* 语义的查询编排 + 成绩/课表渲染 + 成绩分析 LLM + PDF + 内嵌查询代理（登录/免密跳转/原始查询） | Python · FastAPI · httpx · reportlab · LibreOffice | 活跃 |
-| [前端](frontend/) | Nginx 托管查询页与后台，反向代理 /api/v1/* 并注入网关令牌 | Nginx | 活跃 |
+| [前端资产](frontend/) | nginx 托管查询页与后台，反向代理 /api/v1/* 并注入网关令牌（构建期并入单镜像） | Nginx | 活跃 |
 
 ## 架构
 
 ```mermaid
 flowchart LR
-    U[用户浏览器] -->|默认唯一入口 :8000| F["frontend（nginx）<br/>静态页 + 反代 /api/v1/*、/health*"]
-    F -->|web 网络| S["app（单体应用）<br/>编排 + 渲染 + 分析 + PDF<br/>内嵌查询代理（进程内 ASGI）"]
+    U[用户浏览器] -->|默认唯一入口 :8000| F["edu-query-app 单容器<br/>nginx 8080：静态页 + 反代 /api/v1/*、/health*"]
+    F -->|容器内回环| S["uvicorn（仅 127.0.0.1:8000）<br/>编排 + 渲染 + 分析 + PDF<br/>内嵌查询代理（进程内 ASGI）"]
     S -.可选外部 Redis.-> R["Redis（限流/日志聚合/异步任务，默认不启用）"]
     S -.成绩分析.-> L["DeepSeek（OpenAI 兼容）"]
     S --> U2["学校教务系统（WebVPN/CAS）"]
 ```
 
-**默认端口与网络隔离**：仅 `frontend` 映射宿主端口 `8000`（容器内为无特权 `8080`）；`app` 只在 `web` 网络内暴露 `8000`，不映射宿主端口。查询代理不再有独立进程与端口——它在 `app` 进程内以 ASGI 方式调用，宿主与前端都无法直达，也不再需要内部网络与内部令牌。
+**默认端口与网络隔离**：容器唯一宿主映射 `${APP_PORT:-8000}` → nginx `8080`；uvicorn 仅绑定容器内回环 `127.0.0.1:8000`，宿主与外部均无法直达。查询代理没有独立进程与端口——它在 uvicorn 进程内以 ASGI 方式调用，也不再需要内部网络与内部令牌。
 
-### 服务边界与可选直连
+### 服务边界与进程调试
 
-| 容器 | 职责边界 | 默认网络 | 对外契约 |
+| 进程 | 职责边界 | 监听 | 对外契约 |
 | --- | --- | --- | --- |
-| `frontend` | 静态页面、CSP/安全响应头、注入网关令牌并反代 /api/v1/* | `web` | `APP_PORT` 上的页面和受代理 API |
-| `app` | 固定工作流编排、成绩/课表渲染、LLM、PDF、日志、异步任务，以及内嵌查询代理（统一认证/会话/免密跳转/原始查询/课表导出） | `web` | Bearer `API_TOKEN` 保护 `/api/v1/run`、`/api/v1/notices*`、`/api/v1/service-status`、`/api/v1/status`；`/health*` 探针有公开/受限契约 |
+| nginx（容器内 8080） | 静态页面、CSP/安全响应头、注入网关令牌并反代 /api/v1/* | 容器 `8080` → 宿主 `APP_PORT` | `APP_PORT` 上的页面和受代理 API |
+| uvicorn（容器内回环） | 固定工作流编排、成绩/课表渲染、LLM、PDF、日志、异步任务，以及内嵌查询代理（统一认证/会话/免密跳转/原始查询/课表导出） | `127.0.0.1:8000` | Bearer `API_TOKEN` 保护 `/api/v1/run`、`/api/v1/notices*`、`/api/v1/service-status`、`/api/v1/status`；`/health*` 探针有公开/受限契约 |
 
-默认编排保持“只有 frontend 暴露宿主端口”。需要直连 `app` 做验收时，自行创建 override：
-
-```yaml
-# compose.direct-app.yml（自行创建；默认绑定宿主回环，且必须关闭代理信任）
-services:
-  app:
-    ports:
-      - "127.0.0.1:18080:8000"
-    environment:
-      - TRUST_PROXY=false
-```
+双进程由 `docker-entrypoint.sh` 守护（`wait -n`：任一退出即容器退出，交由编排重启）。需要直连 uvicorn 做验收时，进入容器用回环地址：
 
 ```bash
-docker compose -f docker-compose.yml -f compose.direct-app.yml up -d --no-deps app
-curl -s http://127.0.0.1:18080/health/ready
+docker compose exec edu-query-app curl -s http://127.0.0.1:8000/health/ready
 ```
 
-若把直连地址从 `127.0.0.1` 改为 `0.0.0.0`，必须自行补上 TLS、防火墙、反向代理与最小来源访问控制；
-`/metrics` 等运维接口只适合回环或内网访问。
+uvicorn 只监听容器内回环，不对外发布端口；`/metrics` 等运维接口同样只适合容器内或内网访问。
 
 ## 学校侧契约与升级路径
 
@@ -331,7 +319,7 @@ Redis 写入使用 Sorted Set 单事务，`ZADD NX` 保证重复回填不产生�
   `/api/v1/service-status` 降级到本实例历史，限流降级为本副本固定窗口。无 Redis 模式只有
   进程内有界历史；多副本之间不会共享状态，严禁让多个副本解析到同一个可轮转 JSONL 文件。
 - `/query-logs` 包含用户学号，不对外暴露；仅可从内部网络运维查看，例如
-  `docker compose exec app curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/api/v1/query-logs`；
+  `docker compose exec edu-query-app curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/api/v1/query-logs`；
   生产建议经集中日志查询，不长期依赖进程内存。
 - 公开站通过 `GET /api/v1/status` 获取本站、查询代理和学校服务的粗粒度状态（信封）；
   接口只返回状态、延迟和检查时间，不暴露内部地址、错误详情或凭据，结果缓存 15 秒。
@@ -366,11 +354,12 @@ Nginx 对 `/admin/api/*` 原样透传管理员 Authorization，不注入公共�
 - 管理端是单实例运维视图：读取当前副本文件和本地进程指标；Redis 仅在无文件通道时作
   历史降级源。生产多副本应继续把 stdout 交给集中平台聚合分析。
 - `GET /metrics` 输出 Prometheus 文本指标（请求状态/耗时、LLM 成功/失败、PDF 缓存命中、
-  并发等待和 Redis 降级）；它只在内网服务发现中抓取，不经 frontend 反代。
+  并发等待和 Redis 降级）；它只在容器内或内网抓取，不经 nginx 反代。
 - nginx 使用不含 query string 的隐私访问日志；携带个人票号的 `/jump/go` 与 `/get_schedule/export`
   不写 access log。边缘响应启用 CSP、反点击劫持与 Referrer 隔离，本地历史结果只保留 6 小时。
-- Compose 默认启用内存/PID 护栏：Python 服务 `640m / 128 PIDs`（`APP_MEM_LIMIT` 可调），Nginx `64m / 32 PIDs`，
-  并设置 `MALLOC_ARENA_MAX=2`；内存模式查询代理默认最多 1000 个会话与每类 1000 条缓存。
+- Compose 默认启用内存/PID 护栏：单容器 `640m / 128 PIDs`（`APP_MEM_LIMIT` 可调，
+  覆盖 nginx + uvicorn/编排），并设置 `MALLOC_ARENA_MAX=2`；内存模式查询代理默认
+  最多 1000 个会话与每类 1000 条缓存。
 
 ### 全站通知
 
@@ -510,15 +499,15 @@ docker compose up -d --build
 # 浏览器打开 http://127.0.0.1:8000
 ```
 
-默认编排为 **2 容器、单实例、无 Redis**：`app`（单体应用，内嵌查询代理）+ `frontend`（唯一对外入口）。
+默认编排为 **单容器、单实例、无 Redis**：容器内 nginx（8080 唯一对外入口）+ uvicorn（编排/渲染/PDF，内嵌查询代理，仅容器内回环）双进程。
 查询走同步链路；`/run/jobs` 会返回 503 并提示「异步查询未启用」，前端自动回退同步查询。
 需要异步排队或多副本时，自备外部 Redis 并设置 `REDIS_URL`（查询代理侧可同时设置 `JWXT_REDIS_URL`）。
 
 > `PUBLIC_BASE_URL` 为浏览器可访问的对外入口地址，用于生成免密登录 `/jump/go` 与课表下载
 > `/get_schedule/export` 链接（本地默认 `http://127.0.0.1:8000`，生产改成公网域名）。
-> `APP_PORT` 控制 frontend 映射到宿主机的唯一端口；修改后需同步 `PUBLIC_BASE_URL`。
+> `APP_PORT` 控制单容器映射到宿主机的唯一端口（容器内 nginx 8080）；修改后需同步 `PUBLIC_BASE_URL`。
 >
-> 若 `frontend` 前还有外层 Nginx/Caddy 等反代，把 `TRUSTED_PROXY_CIDR` 改成该反代
+> 若容器前还有外层 Nginx/Caddy 等反代，把 `TRUSTED_PROXY_CIDR` 改成该反代
 > 连接本服务时的来源 IP/CIDR；nginx 只信任该来源的 `X-Forwarded-For` 并恢复真实客户端 IP。
 
 > 前端令牌样式已预编译提交（`frontend/static/style.css`），普通部署无需 npm；修改
@@ -532,7 +521,7 @@ docker compose up -d --build
 > `BRAND_SLOGAN`、`BRAND_DESCRIPTION`、`BRAND_AUTHOR`、`BRAND_GITHUB` 覆盖；留空即使用
 > `frontend/static/brand.js` 的内置默认值，`BRAND_GITHUB=none` 隐藏页脚 GitHub 链接。
 
-> 前端与 `app` 共用固定 `API_TOKEN`（默认 `change-me`），由 nginx 反代时注入 `Authorization` 头，浏览器页面不持有令牌；内嵌查询代理使用进程内随机令牌，无需配置。生产环境必须把 `PUBLIC_BASE_URL` 改成 HTTPS 域名。
+> 页面与后端共用固定 `API_TOKEN`（默认 `change-me`），由 nginx 反代时注入 `Authorization` 头，浏览器页面不持有令牌；内嵌查询代理使用进程内随机令牌，无需配置。生产环境必须把 `PUBLIC_BASE_URL` 改成 HTTPS 域名。
 
 ## 测试
 
@@ -586,10 +575,11 @@ Stpt-Query/
 │   ├── school_contract.py     # 学校侧契约单一来源（域名/路径/盐/正则，升级改这里）
 │   ├── school_endpoints.py    # 上游接口注册表（21 端点；新增查询端点的挂载点）
 │   └── rtf_pdf.py             # 课表 RTF→PDF（LibreOffice profile 池）
-├── Dockerfile                 # 单体镜像（python:3.11-slim + LibreOffice + CJK 字体）
+├── Dockerfile                 # 单容器镜像（python:3.11-slim + apt nginx + LibreOffice + CJK 字体）
+├── docker-entrypoint.sh       # 双进程入口：envsubst 渲染 + uvicorn/nginx + wait -n 守护
 ├── requirements.txt
-├── frontend/                  # 前端（nginx，默认唯一对外入口）
-│   ├── templates/default.conf.template  # 反代 /run 等并注入令牌
+├── frontend/                  # nginx 资产目录（构建期并入单镜像，无独立容器）
+│   ├── templates/default.conf.template  # 反代 /api/v1/* 等并注入令牌
 │   ├── static/index.html      # 查询页面（Li-Design 令牌重构）
 │   ├── static/app.js          # 查询页主脚本（自 index.html 内联脚本外置，CSP 走 'self'）
 │   ├── static/theme-init.js   # 首屏主题预置（阻塞加载，防深色首绘闪白）
@@ -612,7 +602,7 @@ Stpt-Query/
 │   ├── production-operations.md   # 生产容量与运维
 │   └── upstream-contract.md       # 学校侧契约取证/升级重适配手册
 ├── Li-Design/                 # Git 子模块：仅设计/README 规范参考，非运行时依赖
-├── docker-compose.yml         # 两容器（app + frontend）单实例编排
+├── docker-compose.yml         # 单容器（nginx + uvicorn 双进程）单实例编排
 ├── compose.review.yml         # 评审/演练栈卷名隔离覆盖（须与主 compose 叠加使用）
 ├── .env.example               # 环境变量模板
 ├── AGENTS.md                  # 项目协作手册

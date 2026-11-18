@@ -134,6 +134,20 @@
 
 ## 5. 全量视觉规范验收（2026-10-31，Li-Design V1.6 + 后台响应式）
 
+**后台滚动频闪排查（2026-11-18，查询页频闪修复的延续）**：用户确认查询页改善后
+排查 admin 页，发现并修复两处：① **style-admin.css 版本键未随上轮 tech-grid 拆层
+修复联动 bump**（仍 v6）——admin 页浏览器/HTTP 缓存继续持旧产物（background-position
+帮凶动画仍在跑），这是「有所改善但不彻底」的直接原因，bump v6→v7；② `.tab-group`
+透明覆盖残留 backdrop-filter：基础组件玻璃态在此被 `background: transparent` 清除
+但 filter 忘清，在已 blur(18px) 的粘性页眉内形成**嵌套二次采样**（透明底视觉无增益、
+每帧白做），一并清零（`backdrop-filter: none`，视觉不变）。粘性玻璃页眉
+（≥1024px sticky + blur）为固有毛玻璃语义保留，其采样源经上轮修复已是纯合成动画。
+全仓 backdrop-filter 审计（index/app/admin 三源逐块核对背景）：仅此一处透明残留。
+实测：admin 页 computed `tab-group backdrop-filter=none`、v7 生效、页眉玻璃与 sticky
+语义保留、无横向溢出；全量 306 通过 + 4 跳过。IAB 标签页合成器对全部 CSS 动画
+时间轴节流（currentTime 冻结，visibility=visible/reduce=false），pan 推进验证以
+查询页上轮实测为准（336px/12s 精确速率）。
+
 **滚动频闪修复（2026-11-18，合成反模式治理）**：用户报告「滑动频闪」，排查定位两处
 合成反模式：① 视差层 will-change 按「用后即清」动态挂摘（body.is-parallaxing，
 滚动加/停 300ms 摘）——对全宽×视口+280px、四层渐变+mask 的巨层，每次滚动都触发

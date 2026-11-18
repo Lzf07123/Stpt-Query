@@ -4,10 +4,9 @@
 
 ## 一、项目是什么
 
-edu-query-app 是**单体应用 + 边缘代理**的教务查询服务：
+edu-query-app 是**单容器双进程（nginx 边缘入口 + uvicorn 应用进程）**的教务查询服务：
 
-- **app（单体应用）**：`app/` 包内的单一 Python 应用，包含学校统一认证登录、免密跳转、成绩/课表原始查询（内嵌查询代理，以 ASGI 方式同进程调用）、固定工作流编排、Markdown 渲染、成绩分析 LLM、异常分类与 PDF。
-- **frontend（前端）**：Nginx 托管查询页与后台，是默认唯一对外入口，反向代理 `/api/v1/*`（注入网关令牌；`/api/v1/admin/*` 原样透传管理员凭据）与 `/health*`、`/jump/go`、`/get_schedule/export`、`/cal/`。
+- **edu-query-app（单容器）**：容器内 nginx（8080 唯一对外入口，托管查询页与后台、反向代理 `/api/v1/*`——注入网关令牌，`/api/v1/admin/*` 原样透传管理员凭据——与 `/health*`、`/jump/go`、`/get_schedule/export`、`/cal/`）+ uvicorn（仅容器内回环 8000：学校统一认证登录、免密跳转、成绩/课表原始查询（内嵌查询代理，以 ASGI 方式同进程调用）、固定工作流编排、Markdown 渲染、成绩分析 LLM、异常分类与 PDF）。`frontend/` 目录保留为 nginx 资产目录（静态页/模板/入口脚本片段），构建期并入单镜像。
 - **对外契约**：全部 JSON 接口统一 `/api/v1/*` 命名与统一语义（信封 + 稳定错误码，见 `docs/api-semantics.md`）；**不再兼容 Dify**，旧路径（/run、/v1/workflows/run 等）已删除。
 - **上游契约**：学校侧四层链路（WebVPN → CAS → 门户 → 教务系统）的全部事实集中在契约模块，学校升级时改一处即可恢复（见第六节标准流程）。
 
@@ -16,7 +15,7 @@ edu-query-app 是**单体应用 + 边缘代理**的教务查询服务：
 动手前先读以下文件，禁止用猜测代替调查：
 
 - `README.md`：架构、契约与使用方式。
-- `docker-compose.yml`：两容器（app + frontend）、端口与网络的唯一事实（仅 frontend 暴露宿主端口）。
+- `docker-compose.yml`：单容器（nginx + uvicorn 双进程）的端口与限额唯一事实（唯一宿主映射 `${APP_PORT:-8000}` → 容器内 nginx `8080`；uvicorn 仅容器内回环）。
 - `app/`：单体应用代码事实（编排、渲染、内嵌查询代理 `app/jwxt_*.py`）。
 - `frontend/`：页面与 nginx 模板事实。
 - `design-system/edu-query-app/`：项目内品牌方案（BRAND/MASTER），前端视觉决策的唯一事实来源。
@@ -31,11 +30,11 @@ edu-query-app 是**单体应用 + 边缘代理**的教务查询服务：
 ## 三、硬性规则
 
 1. **单体应用边界**：查询代理与编排合并为 `app/` 单一应用（整体搬迁、不得残留副本）；查询代理以进程内 ASGI 方式调用，禁止新增跨服务 HTTP 调用或绕过本仓库恢复兄弟仓库构建依赖。
-2. **默认唯一对外入口**：默认编排只有 `frontend` 映射宿主端口，`app` 只在 `web` 网络内暴露 8000；内嵌查询代理无独立端口、无内部网络。需要直连应用容器时，自行编写 override 文件并把端口绑定到宿主回环地址，公网直连必须先补 TLS、防火墙、访问控制与安全验收。
+2. **默认唯一对外入口**：单容器内 nginx 监听 8080 并映射宿主 `${APP_PORT:-8000}`，uvicorn 仅绑定容器内回环 `127.0.0.1:8000`；内嵌查询代理无独立端口、无对外网络。需要直连 uvicorn 做验收时用 `docker compose exec edu-query-app curl http://127.0.0.1:8000/...`（容器内回环），不得将回环端口发布到宿主或公网，公网直连必须先补 TLS、防火墙、访问控制与安全验收。
 3. **应用持久状态仅两项**：①全站通知运营配置（JSONL 权威存储 + 可选 Redis 恢复副本）；②日历订阅（数据落本地库，学校凭据仅以 AES-GCM 密文存储）。其余查询业务状态不落盘，PDF 以 Base64 内联返回。两项持久状态均要求单实例部署并纳入备份。
 4. **令牌安全**：固定 `API_TOKEN`（前端与后端共用）；nginx 反代时注入 `Authorization`；页面不得持有令牌；日志与响应不得输出密码/session/token。
 5. **单一事实来源**：提示词只在 `prompts.py`、异常规则只在 `classifier.py`、渲染逻辑只在 `render.py`、接口语义（信封/错误码/分页）只在 `api_semantics.py`、学校侧事实只在 `school_contract.py`、上游端点只在 `school_endpoints.py`、环境变量文档只在 `.env.example`，禁止重复实现。
-6. **命名连字符**：服务与镜像一律连字符（`app`、`frontend`、`edu-query-app`）；Python 内部模块沿用 `app/jwxt_*.py` 既有命名。
+6. **命名连字符**：服务与镜像一律连字符（单容器 `edu-query-app`）；Python 内部模块沿用 `app/jwxt_*.py` 既有命名。
 7. **完成 = 验证 + 文档**：声称完成前跑第五节验证命令并保留输出；涉及结构/契约变更时同步 README、`.env.example` 与 `docs/api-semantics.md`。
 8. **不做破坏性操作**：不执行 `rm -rf`、force push、删除他人提交；不动未提交的改动。
 9. **日历订阅 URL 属长期密钥**：禁止出现在日志、记忆库、提交信息与通知中；服务端只存 token 哈希 + 加密副本，必须支持轮换、撤销与到期，`/cal/` 关闭访问日志。
@@ -82,7 +81,7 @@ docker run --rm -v "$PWD":/app -w /app edu-query-app:test \
   sh -c "pip install -q pytest pytest-asyncio && python -m pytest -q"
 
 # 2c. 学校侧契约自检（无凭据只读探测；发现漂移证据时退出码 1）
-python scripts/contract_selfcheck.py --json   # 或：docker compose exec app python scripts/contract_selfcheck.py --json
+python scripts/contract_selfcheck.py --json   # 或：docker compose exec edu-query-app python scripts/contract_selfcheck.py --json
 
 # 2b. 前端令牌构建（改动 frontend/src/ 或 brand.js 后必须重编译）
 cd frontend && npm install && npm run build && cd ..
@@ -91,7 +90,7 @@ cd frontend && npm install && npm run build && cd ..
 # 全站已无内联脚本，CSP 的 script-src 只走 'self'，无需维护任何内联哈希；
 # 资产改动后同步 bump 页内 ?v=N 版本号与 sw.js 的 VERSION。
 
-# 3. 两容器端到端冒烟（需 Docker daemon；含统一语义验收）
+# 3. 单容器端到端冒烟（需 Docker daemon；含统一语义验收）
 API_TOKEN=smoke-token AUTO_ROTATE_TOKEN=false docker compose up -d --build
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/
 curl -s http://127.0.0.1:8000/health/ready

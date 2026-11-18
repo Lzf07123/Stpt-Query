@@ -12,6 +12,7 @@ docs
 tests
 design-system
 Li-Design
-frontend
+# frontend/ 为 nginx 资产目录（构建期并入单镜像）：仅排除构建期依赖与缓存
+frontend/node_modules
 *.md
 .DS_Store

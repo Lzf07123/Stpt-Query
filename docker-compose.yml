@@ -1,8 +1,9 @@
 services:
-  # ===== 容器 1：单体应用（编排 + 渲染 + 分析 + PDF + 内嵌查询代理）=====
-  # 查询代理以内嵌 ASGI 应用在同一进程内运行，不再需要内部网络与内部令牌。
+  # ===== 单容器：nginx（8080 唯一对外入口）+ uvicorn（仅容器内回环 8000）=====
+  # 编排 + 渲染 + 分析 + PDF + 内嵌查询代理（进程内 ASGI）在 uvicorn 进程运行；
+  # nginx 承担静态页托管、反代 /api/v1/*、注入网关令牌与边缘安全头。
   # 默认单实例、无 Redis（同步查询 + 内存限流/历史 + JSONL 文件通道）。
-  app:
+  edu-query-app:
     build:
       context: .
       args:
@@ -16,27 +17,32 @@ services:
     cap_drop:
       - ALL
     read_only: true
+    # 单容器总限额：覆盖 nginx（约 10MB）+ uvicorn/编排 + LibreOffice 转换余量
     mem_limit: ${APP_MEM_LIMIT:-640m}
+    # nginx（1 master + 2 worker）+ uvicorn + LibreOffice 短暂进程，128 足够
     pids_limit: 128
     tmpfs:
       - /tmp:size=256m,mode=1777
       - /var/log/jwxt:size=16m,uid=10001,gid=10001
+      # nginx 可写路径：apt nginx 默认日志目录 + envsubst 渲染输出（conf.d）
+      - /var/log/nginx:size=16m,uid=10001,gid=10001
+      - /etc/nginx/conf.d:size=64k,uid=10001,gid=10001
     volumes:
       - app-query-logs:/var/log/edu-query
       - app-notice-fallback:/var/lib/edu-query/notices
       - app-calendar:/var/lib/edu-query/calendar
       - /proc:/host/proc:ro
       - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
-    networks:
-      - web
-    expose:
-      - "8000"
+    ports:
+      # 唯一宿主映射：nginx 8080 入口（uvicorn 仅容器内 127.0.0.1:8000，不对外）
+      - "${APP_PORT:-8000}:8080"
     env_file:
       - path: .env
         required: false
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - AUTO_ROTATE_TOKEN=${AUTO_ROTATE_TOKEN:-false}
+      # 前后端共用同一 API_TOKEN：app 校验 Authorization，nginx 反代时注入
       - API_TOKEN=${API_TOKEN:-change-me}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       # 留空 = 单体模式（进程内直连查询代理）；显式地址仅用于过渡期或测试直连
@@ -57,9 +63,13 @@ services:
       - CONCURRENCY_WAIT_TIMEOUT=${CONCURRENCY_WAIT_TIMEOUT:-2}
       - GLOBAL_CONCURRENCY=${GLOBAL_CONCURRENCY:-4}
       - RATE_LIMIT=${RATE_LIMIT:-30}
-      # 默认唯一入口在 nginx 之后：信任被覆盖后的 X-Forwarded-For 做按 IP 限流
+      # 唯一入口在容器内 nginx（127.0.0.1:8000）之后：信任本机 nginx 覆盖后的
+      # X-Forwarded-For 做按 IP 限流；外层反代场景由 nginx 按 TRUSTED_PROXY_CIDR
+      # 恢复真实 IP 后再写 XFF，链路不变
       - TRUST_PROXY=${TRUST_PROXY:-true}
-      - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
+      - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-127.0.0.0/8}
+      # nginx 外层反代来源：nginx 仅信任该来源的 XFF 并恢复真实客户端 IP
+      - TRUSTED_PROXY_CIDR=${TRUSTED_PROXY_CIDR:-172.16.0.0/12}
       # 单实例默认无 Redis；如需异步任务/多副本，显式配置外部 Redis
       - REDIS_URL=${REDIS_URL:-}
       - INSTANCE_ID=${INSTANCE_ID:-}
@@ -133,13 +143,21 @@ services:
       - CALENDAR_MAX_PER_OWNER=${CALENDAR_MAX_PER_OWNER:-5}
       - CALENDAR_TTL_DAYS=${CALENDAR_TTL_DAYS:-210}
       - CALENDAR_SCHEDULER_INTERVAL_SECONDS=${CALENDAR_SCHEDULER_INTERVAL_SECONDS:-60}
+      # ---- 品牌文案覆盖（留空使用 brand.js 内置默认值）----
+      - BRAND_NAME=${BRAND_NAME:-}
+      - BRAND_SLOGAN=${BRAND_SLOGAN:-}
+      - BRAND_DESCRIPTION=${BRAND_DESCRIPTION:-}
+      - BRAND_AUTHOR=${BRAND_AUTHOR:-}
+      - BRAND_GITHUB=${BRAND_GITHUB:-}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
+      # 走 nginx 入口：同时验证 nginx 与 uvicorn 双进程全链路
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready')"]
       interval: 30s
       timeout: 5s
-      start_period: 15s
+      start_period: 20s
       retries: 3
-    # stdout 是查询日志权威通道：本地 json-file 滚动，防止无界增长挤爆宿主磁盘
+    # stdout 是查询日志与 nginx 访问日志的权威通道：本地 json-file 滚动，
+    # 防止无界增长挤爆宿主磁盘
     logging:
       driver: json-file
       options:
@@ -147,60 +165,6 @@ services:
         max-file: "3"
     # 优雅停机：留足在途查询（渲染 + LLM 分析 + PDF）收尾时间，默认 10s 会 SIGKILL 腰斩
     stop_grace_period: 45s
-
-  # ===== 容器 2：前端（默认唯一对外入口）=====
-  # nginx 静态页 + 反代 /run、/service-status、/health*、/notices* 到单体应用
-  frontend:
-    build:
-      context: ./frontend
-      args:
-        BASE_IMAGE: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}nginxinc/nginx-unprivileged:1.27-alpine
-    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}edu-query-frontend:${APP_IMAGE_TAG:-1.0.0}
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    read_only: true
-    mem_limit: ${FRONTEND_MEM_LIMIT:-64m}
-    pids_limit: 32
-    tmpfs:
-      - /tmp:size=32m,mode=1777
-      - /etc/nginx/conf.d:size=64k,uid=101,gid=101
-    networks:
-      - web
-    environment:
-      # 与单体应用共用同一 API_TOKEN，由 nginx 反代时注入 Authorization
-      - API_TOKEN=${API_TOKEN:-change-me}
-      # 外层反代来源；nginx 仅信任该来源的 XFF 并恢复真实客户端 IP
-      - TRUSTED_PROXY_CIDR=${TRUSTED_PROXY_CIDR:-172.16.0.0/12}
-      # 品牌文案覆盖（留空使用 brand.js 内置默认值；BRAND_GITHUB=none 隐藏页脚链接）
-      - BRAND_NAME=${BRAND_NAME:-}
-      - BRAND_SLOGAN=${BRAND_SLOGAN:-}
-      - BRAND_DESCRIPTION=${BRAND_DESCRIPTION:-}
-      - BRAND_AUTHOR=${BRAND_AUTHOR:-}
-      - BRAND_GITHUB=${BRAND_GITHUB:-}
-    ports:
-      - "${APP_PORT:-8000}:8080"
-    depends_on:
-      app:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
-      interval: 30s
-      timeout: 5s
-      start_period: 5s
-      retries: 3
-    # nginx 访问日志走 stdout：本地 json-file 滚动，防止无界增长挤爆宿主磁盘
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-networks:
-  # 边缘网络：nginx ↔ 单体应用（唯一网络；不再有内网分层）
-  web: {}
 
 volumes:
   # 查询日志文件通道；业务编排仍无状态，日志随具名持久卷跨容器/守护进程重启保留

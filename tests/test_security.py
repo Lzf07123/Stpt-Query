@@ -127,23 +127,42 @@ def test_query_log_file_uses_persistent_named_volume():
 
 def test_runtime_memory_guardrails_are_configured():
     compose = open("docker-compose.yml", encoding="utf-8").read()
+    # 单容器总限额：覆盖 nginx + uvicorn/编排 + LibreOffice 转换余量
     assert "mem_limit: ${APP_MEM_LIMIT:-640m}" in compose
-    assert "mem_limit: ${FRONTEND_MEM_LIMIT:-64m}" in compose
+    assert "FRONTEND_MEM_LIMIT" not in compose
     assert compose.count("MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}") == 1
     nginx = open("frontend/nginx.conf", encoding="utf-8").read()
-    # worker_processes 固定值：auto 会按宿主核数 fork，与 pids_limit: 32 冲突
+    # worker_processes 固定值：auto 会按宿主核数 fork，与容器 pids 上限冲突
     assert "worker_processes 2;" in nginx
 
 
-def test_only_frontend_publishes_host_port():
-    """单体拓扑：app 只在 web 网络内暴露端口，唯一宿主映射属于 frontend。"""
+def test_single_container_topology():
+    """单容器拓扑：唯一 service edu-query-app（nginx 8080 唯一宿主映射），
+    uvicorn 仅容器内回环 8000，不再有跨容器网络与依赖。"""
     compose = open("docker-compose.yml", encoding="utf-8").read()
-    app_block = compose.split("  app:", 1)[1].split("  frontend:", 1)[0]
-    frontend_block = compose.split("  frontend:", 1)[1].split("\nnetworks:", 1)[0]
-    assert "ports:" not in app_block
-    assert "expose:" in app_block
-    assert "ports:" in frontend_block
+    # 恰一个 service，名为 edu-query-app（连字符规范）
+    assert compose.count("\n  edu-query-app:") == 1
+    assert not any(marker in compose for marker in ("\n  app:", "\n  frontend:"))
+    # 唯一宿主映射：nginx 8080 入口；uvicorn 不对外（无 expose）
     assert compose.count("ports:") == 1
+    assert '"${APP_PORT:-8000}:8080"' in compose
+    assert "expose:" not in compose
+    # 无跨容器网络与依赖
+    assert "depends_on:" not in compose
+    assert "\nnetworks:" not in compose
+    # nginx 反代目标为容器内回环 uvicorn
+    nginx_template = open("frontend/templates/default.conf.template", encoding="utf-8").read()
+    assert "proxy_pass http://127.0.0.1:8000;" in nginx_template
+    assert "http://app:8000" not in nginx_template
+    # 双进程入口：uvicorn 绑回环 + nginx daemon off + bash wait -n
+    entrypoint = open("docker-entrypoint.sh", encoding="utf-8").read()
+    assert "uvicorn app.main:app --host 127.0.0.1 --port 8000" in entrypoint
+    assert 'nginx -g "daemon off;"' in entrypoint
+    assert "wait -n" in entrypoint
+    dockerfile = open("Dockerfile", encoding="utf-8").read()
+    assert "nginx " in dockerfile and "gettext-base" in dockerfile
+    assert "COPY --chown=10001:10001 frontend/static /usr/share/nginx/html" in dockerfile
+    assert 'CMD ["bash", "/app/docker-entrypoint.sh"]' in dockerfile
 
 
 def test_inline_script_hashes_are_covered_by_csp():

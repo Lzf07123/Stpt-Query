@@ -84,8 +84,8 @@ def test_no_legacy_multi_service_residue():
         assert not (root / name).exists(), "%s 目录应在单体化后删除" % name
 
     compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
-    services = compose.split("services:", 1)[1].split("\nnetworks:", 1)[0]
-    assert re.findall(r"^  ([a-z0-9-]+):$", services, re.M) == ["app", "frontend"]
+    services = compose.split("services:", 1)[1].split("\nvolumes:", 1)[0]
+    assert re.findall(r"^  ([a-z0-9-]+):$", services, re.M) == ["edu-query-app"]
 
     nginx = (root / "frontend/templates/default.conf.template").read_text(encoding="utf-8")
     assert "proxy_pass http://format-service" not in nginx

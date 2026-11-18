@@ -8,7 +8,7 @@
 
 | 能力 | 现状 | K8s 对应 |
 |---|---|---|
-| 单一应用 | 编排、渲染、PDF 与内嵌查询代理同进程（`app/`），无跨服务 HTTP 调用 | 一个 Deployment + Service |
+| 单一应用 | 单容器双进程（nginx 8080 边缘入口 + uvicorn 回环 8000）：编排、渲染、PDF 与内嵌查询代理同进程（`app/`），无跨服务 HTTP 调用 | 一个 Deployment（双进程由 entrypoint 守护）+ Service + Ingress |
 | 业务状态 | 查询会话/缓存/限流在进程内存；持久状态仅两项：查询日志文件、全站通知 JSONL（日历订阅落本地库，见第六节） | 单实例部署；持久卷挂载 |
 | PDF 内联返回 | `pdf_base64` 直接放在响应里，无文件存储 | **无需 PV/PVC** |
 | 环境变量配置 | 全部配置来自 `.env`/环境变量（`Settings`） | ConfigMap + Secret 直接映射 |
@@ -23,12 +23,11 @@
 | 全站通知 | JSONL 文件为权威存储（可选 Redis 恢复副本） | 单实例用独立 PVC；多副本需 `ReadWriteMany` |
 | 镜像仓库前缀 | Compose 已支持 `IMAGE_REGISTRY` 拼接 | 推送到私有仓库后复用同一镜像名 |
 
-## 二、迁入 K8s 时的映射清单（两容器 → 两个 Deployment）
+## 二、迁入 K8s 时的映射清单（单容器 → 单 Deployment）
 
 | 现状（Compose） | K8s 对象 |
 |---|---|
-| `app` | Deployment（默认 `replicas: 1`）+ Service + 查询日志/通知 PVC |
-| `frontend` | Deployment + Service + Ingress（终止 HTTPS） |
+| `edu-query-app` 单容器（nginx + uvicorn 双进程） | 单 Deployment（默认 `replicas: 1`）+ Service + Ingress（终止 HTTPS）+ 查询日志/通知 PVC；容器端口 8080 |
 | `API_TOKEN` / `ADMIN_TOKEN` / `LLM_API_KEY` | Secret |
 | `LLM_*` / `RATE_LIMIT` / `JWXT_*` | ConfigMap / 环境变量 |
 | 可选外部 Redis | 托管 Redis（仅在需要异步任务或多副本时接入） |
@@ -39,10 +38,10 @@
 
 ## 三、迁入前需要补充的事项（届时再做）
 
-1. **镜像治理**：两个镜像统一语义化 tag + digest，开启镜像扫描与签名。
-2. **资源规格**：`requests/limits`（CPU/内存，含 LibreOffice 转换余量）、
+1. **镜像治理**：单镜像统一语义化 tag + digest，开启镜像扫描与签名。
+2. **资源规格**：`requests/limits`（CPU/内存，含 LibreOffice 转换余量与 nginx 边缘代理）、
    `securityContext.runAsNonRoot`、`readOnlyRootFilesystem`（写盘仅限挂载的卷与 `/tmp`）。
-3. **探针参数**：liveness 建议 `initialDelaySeconds: 10, periodSeconds: 10`；
+3. **探针参数**：liveness/readiness 走容器内 nginx 入口（与容器 healthcheck 一致）；
    readiness 建议 `periodSeconds: 10`；`TRUST_PROXY=true` 时限流依赖 Ingress 正确传递 `X-Forwarded-For`。
 4. **优雅退出**：`terminationGracePeriodSeconds: 30`（uvicorn 默认在 SIGTERM 后完成在途请求）。
 5. **可选 Redis**：需要异步队列或多副本时接入托管 Redis，避免单点。
@@ -69,9 +68,9 @@ spec:
     spec:
       terminationGracePeriodSeconds: 30
       containers:
-        - name: app
+        - name: edu-query-app
           image: registry.example.com/edu-query-app:1.0.0
-          ports: [{ containerPort: 8000 }]
+          ports: [{ containerPort: 8080 }]
           env:
             - name: ENVIRONMENT
               value: "production"
@@ -86,11 +85,11 @@ spec:
             - { name: notices, mountPath: /var/lib/edu-query/notices }
             - { name: tmp, mountPath: /tmp }
           livenessProbe:
-            httpGet: { path: /health/live, port: 8000 }
+            httpGet: { path: /health/live, port: 8080 }
             initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
-            httpGet: { path: /health/ready, port: 8000 }
+            httpGet: { path: /health/ready, port: 8080 }
             periodSeconds: 10
           resources:
             requests: { cpu: 200m, memory: 384Mi }

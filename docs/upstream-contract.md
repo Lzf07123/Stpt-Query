@@ -121,7 +121,7 @@ python scripts/contract_selfcheck.py --json     # 机器可读，退出码 0/1 �
 JWXT_HEALTH_USERNAME=... JWXT_HEALTH_PASSWORD=... python scripts/contract_selfcheck.py --deep
 
 # 容器内（与生产同环境）
-docker compose exec app python scripts/contract_selfcheck.py --json
+docker compose exec edu-query-app python scripts/contract_selfcheck.py --json
 ```
 
 输出包含：三层结论（ok/延迟/HTTP 状态）、逐条契约事实判定（通过/漂移/未判定）、

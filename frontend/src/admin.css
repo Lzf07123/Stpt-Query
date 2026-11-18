@@ -293,7 +293,11 @@
 }
 
 .tab-group {
-  backdrop-filter: blur(18px) saturate(1.25);
+  /* 基础 tab-group 的玻璃态在此被透明覆盖（background: transparent +
+     无边框阴影），backdrop-filter 必须一并清零：残留会在已 blur(18px) 的
+     粘性页眉内做嵌套二次采样——透明底 + 嵌套 blur 视觉无增益、每帧白做 */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   background: transparent;
   border: 0;
   border-radius: 0;
