@@ -1540,17 +1540,19 @@
         };
         // ---- 重新获取链接（重新认证签发）----
         // 过期码无法证明持有者身份，不提供无认证续期；重新获取走
-        // POST /api/v1/jump/renew（学号 + 密码重新登录，LOGIN_REUSE 命中时不打学校）
-        const actions = document.createElement("div");
-        actions.className = "login-note-actions";
+        // POST /api/v1/jump/renew（学号 + 密码重新登录，LOGIN_REUSE 命中时不打学校）。
+        // 主色 CTA 收进第一行（过期态显示）；密码表单走浮层卡片（与「使用须知」
+        // 同语言）——组件高度全程恒定，不撑开。
         const renewBtn = document.createElement("button");
         renewBtn.type = "button";
-        renewBtn.className = "btn btn-ghost btn-sm";
+        renewBtn.className = "login-note-link login-note-renew-cta";
         renewBtn.hidden = true;
         renewBtn.textContent = "重新获取链接";
-        actions.appendChild(renewBtn);
-        const renewRow = document.createElement("div");
-        renewRow.className = "login-note-renew hidden";
+        // 浮层锚点：pop 以此为包含块（absolute），从按钮下缘向下弹
+        const ctaWrap = document.createElement("span");
+        ctaWrap.className = "login-note-renew-anchor";
+        const renewPop = document.createElement("div");
+        renewPop.className = "login-note-renew-pop hidden";
         const renewLabel = document.createElement("label");
         renewLabel.className = "login-note-renew-label";
         renewLabel.textContent = "教务系统密码";
@@ -1565,30 +1567,19 @@
         renewSubmit.type = "button";
         renewSubmit.className = "btn btn-primary btn-sm";
         renewSubmit.textContent = "签发新链接";
-        const renewCancel = document.createElement("button");
-        renewCancel.type = "button";
-        renewCancel.className = "btn btn-ghost btn-sm";
-        renewCancel.textContent = "取消";
         const renewErr = document.createElement("span");
         renewErr.className = "login-note-renew-error hidden";
         renewErr.setAttribute("role", "alert");
-        renewRow.appendChild(renewLabel);
-        renewRow.appendChild(renewInput);
-        renewRow.appendChild(renewSubmit);
-        renewRow.appendChild(renewCancel);
-        renewRow.appendChild(renewErr);
-        bq.appendChild(actions);
-        bq.appendChild(renewRow);
+        renewPop.appendChild(renewLabel);
+        renewPop.appendChild(renewInput);
+        renewPop.appendChild(renewSubmit);
+        renewPop.appendChild(renewErr);
+        ctaWrap.appendChild(renewBtn);
+        ctaWrap.appendChild(renewPop);
+        main.appendChild(ctaWrap);
         renewBtn.addEventListener("click", function () {
-          renewRow.classList.toggle("hidden");
-          actions.classList.toggle("expanded", !renewRow.classList.contains("hidden"));
-          if (!renewRow.classList.contains("hidden")) renewInput.focus();
-        });
-        renewCancel.addEventListener("click", function () {
-          renewRow.classList.add("hidden");
-          actions.classList.remove("expanded");
-          renewErr.classList.add("hidden");
-          renewInput.value = "";
+          renewPop.classList.toggle("hidden");
+          if (!renewPop.classList.contains("hidden")) renewInput.focus();
         });
         const showRenewError = function (message) {
           renewErr.textContent = message;
@@ -1643,8 +1634,7 @@
             const noteTtl = noteText.match(/(\d+)\s*秒内有效/);
             startCountdown(noteTtl ? Math.max(1, parseInt(noteTtl[1], 10)) : 60);
             renewInput.value = "";
-            renewRow.classList.add("hidden");
-            actions.classList.remove("expanded");
+            renewPop.classList.add("hidden");
             showToast("success", "新免密链接已生成，请尽快使用");
           } catch (e) {
             showRenewError("网络请求失败，请稍后重试");

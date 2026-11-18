@@ -1550,57 +1550,76 @@
     color: var(--eduquery-warning);
     font-weight: 650;
   }
-  /* 重新获取链接（重新认证签发）：过期态动作行 + 内联密码行 */
-  .login-note-actions {
-    display: flex;
-    justify-content: center;
+  /* 重新获取链接（重新认证签发）：主色 CTA 收进第一行（过期态显示），
+     密码表单走浮层卡片（absolute 锚定 CTA 右缘、向下弹）——组件高度全程恒定 */
+  .login-note-renew-cta {
+    border: 0;
+    cursor: pointer;
+    flex: none;
+    font: inherit;
   }
-  .login-note-actions:not(:has(.hidden)) {
-    margin-top: 2px;
+  /* 过期态组件底色已灰化：CTA 用实色主色保证醒目（半透明主色会透出灰底）
+     深浅两态经 --eduquery-primary/-fg 自适应 */
+  .login-note.expired .login-note-renew-cta {
+    background: var(--eduquery-primary);
+    border-color: var(--eduquery-primary);
+    color: var(--eduquery-primary-fg);
   }
-  .login-note-renew {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    justify-content: center;
-    margin-top: 6px;
+  .login-note.expired .login-note-renew-cta:hover {
+    background: var(--eduquery-primary-hover);
   }
-  .login-note-renew.hidden {
+  .login-note-renew-anchor {
+    display: inline-flex;
+    position: relative;
+  }
+  .login-note-renew-pop {
+    background: var(--eduquery-surface);
+    border: 1px solid var(--eduquery-border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+    position: absolute;
+    right: 0;
+    text-align: left;
+    top: calc(100% + 8px);
+    width: min(280px, calc(100vw - 48px));
+    z-index: 10;
+  }
+  .login-note-renew-pop.hidden {
     display: none;
   }
   .login-note-renew-label {
-    align-items: center;
     color: var(--eduquery-muted);
-    display: flex;
-    flex: 1 1 200px;
-    flex-direction: column;
+    display: grid;
     font-size: 0.72rem;
-    gap: 3px;
-    min-width: 0;
+    gap: 4px;
   }
   .login-note-renew .input {
     min-height: 40px;
     width: 100%;
   }
   .login-note-renew .btn {
-    flex: none;
+    justify-self: end;
   }
   .login-note-renew-error {
     color: var(--eduquery-warning);
-    flex-basis: 100%;
     font-size: 0.75rem;
-    text-align: center;
+    line-height: 1.5;
+    text-align: left;
   }
-  /* 「使用须知」收进第一行：手动折叠按钮（button + aria-expanded），展开时
-     body 独占一行。不用 details/display:contents——后者的内容隐匿机制与
-     该布局手法冲突，收起态内容会泄漏渲染 */
+  /* 「使用须知」收进第一行 + 展开内容走浮层卡片（absolute 锚定右缘、向上弹）
+     ——彻底脱离文档流，展开/收起都不改变免密块高度（不撑开组件）。
+     不用 details/display:contents——其内容隐匿机制与该布局手法冲突，
+     收起态内容会泄漏渲染 */
   .login-note-more {
     align-items: center;
     display: inline-flex;
-    flex-wrap: wrap;
-    gap: 2px 8px;
+    /* 右对齐：推到第一行行尾 */
+    margin-left: auto;
     min-width: 0;
+    position: relative;
   }
   .login-note-summary {
     background: transparent;
@@ -1618,12 +1637,12 @@
     border-bottom: 1px solid currentColor;
     height: 4px;
     margin-left: 4px;
-    transform: rotate(45deg);
+    transform: rotate(-135deg);
     width: 4px;
     transition: transform var(--eduquery-motion-fast) var(--eduquery-ease-out);
   }
   .login-note-more.open .login-note-summary::after {
-    transform: rotate(-135deg) translate(-1px, -1px);
+    transform: rotate(45deg) translate(-1px, -1px);
   }
   .login-note-summary:hover {
     color: var(--eduquery-foreground);
@@ -1632,9 +1651,19 @@
     outline: 2px solid var(--eduquery-ring);
     outline-offset: 2px;
   }
+  /* 浮层卡片：锚定按钮右缘、向上弹出；卡片内恢复标准左对齐阅读 */
   .login-note-body {
-    flex: 1 1 100%;
-    min-width: 0;
+    background: var(--eduquery-surface);
+    border: 1px solid var(--eduquery-border);
+    border-radius: 12px;
+    bottom: calc(100% + 8px);
+    box-shadow: var(--shadow-lg);
+    padding: 12px 14px;
+    position: absolute;
+    right: 0;
+    text-align: left;
+    width: min(340px, calc(100vw - 48px));
+    z-index: 10;
   }
   .login-note-body.hidden {
     display: none;
@@ -1643,8 +1672,12 @@
     color: var(--eduquery-muted);
     font-size: 0.78rem;
     line-height: 1.55;
-    margin: 4px 0 0;
+    margin: 0 0 6px;
     text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .login-note-body p:last-child {
+    margin-bottom: 0;
   }
   .markdown-body code {
     @apply rounded bg-surface-2 px-1.5 py-0.5 text-xs;
