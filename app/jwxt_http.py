@@ -469,6 +469,10 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
                 LOG.warning("课表导出令牌无效: %s", e)
                 if session:
                     self.server.sessions.invalidate(session)
+                # 会话已失效，下载码继续留存的唯一结果是反复 401：一并消费删除
+                # （与下方认证类失败分支一致；瞬时上游失败不消费，链接可重试）
+                if code:
+                    self.server.export_codes.resolve(code, consume=True)
                 self._reply(401, {"success": False,
                                   "error": str(e),
                                   "output": "", "count": 0, "rows": []})
@@ -859,6 +863,10 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
             cache = getattr(self.server, "jump_cache", None)
             if cache is not None:
                 cache.delete("jump|" + sid)
+            # 会话已失效，跳转码继续留存的唯一结果是反复 401：一并消费删除
+            # （与下方认证类失败分支的语义一致；瞬时签票失败不消费，码可重试）
+            if code:
+                self.server.jump_codes.resolve(code, consume=True)
             msg = str(e)
             if json_mode:
                 self._reply(401, {"success": False, "error": msg})
