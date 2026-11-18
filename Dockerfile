@@ -8,7 +8,11 @@ FROM ${BASE_IMAGE}
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    # 镜像默认固定令牌（与 compose/.env.example 同值）：Settings 类默认 true 会让
+    # 裸 docker run 场景启动即生成随机令牌，固定 API_TOKEN 全部 401；
+    # 多实例场景经 compose/环境显式传 AUTO_ROTATE_TOKEN=true 可覆盖
+    AUTO_ROTATE_TOKEN=false
 
 # 国内环境可设 APT_MIRROR 加速 nginx/LibreOffice 与 CJK 字体下载
 ARG APT_MIRROR=http://deb.debian.org/debian
@@ -28,8 +32,7 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p -m 700 /var/log/edu-query \
     && mkdir -p -m 700 /var/lib/edu-query/notices \
     && mkdir -p -m 700 /var/lib/edu-query/calendar \
-    && mkdir -p -m 700 /var/log/jwxt \
-    && chown -R 10001:10001 /var/log/edu-query /var/lib/edu-query /var/log/jwxt
+    && chown -R 10001:10001 /var/log/edu-query /var/lib/edu-query
 
 COPY --chown=10001:10001 app ./app
 # 节次时间表与学期基准（config/calendar.json）：非机密，随镜像发布

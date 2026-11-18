@@ -10,10 +10,9 @@
 #   nginx 快速排空连接后退出。
 #
 # 运行前提（docker-compose.yml 已保证）：
-# - /tmp 为 tmpfs：渲染输出落盘处（/tmp/nginx-conf.d）——read_only 容器里
-#   /tmp 必然可写，不依赖 /etc/nginx/conf.d 的挂载形态
-# - /var/log/nginx 为 tmpfs（apt nginx 默认日志路径）；pid/temp 路径已在
-#   frontend/nginx.conf 重定向到 /tmp
+# - /tmp 为 tmpfs：nginx 的全部运行时可写路径都收敛到这里（error_log、
+#   pid/temp、渲染输出 /tmp/nginx-conf.d）——read_only 容器里 /tmp 必然可写，
+#   不依赖任何 uid/gid tmpfs 选项（部分 docker/compose 版本组合下不生效）
 set -e
 
 # ---- 1. 品牌文案环境变量 → brand-env.js（沿用 nginx 官方镜像 entrypoint.d 约定）----
@@ -21,10 +20,15 @@ sh /docker-entrypoint.d/30-brand-env.sh
 
 # ---- 2. envsubst 白名单渲染 nginx 站点模板 ----
 # 模板仅引用 API_TOKEN / TRUSTED_PROXY_CIDR 两个变量（白名单防误替换应用配置）。
+# 缺失时兜底与 docker-compose.yml / .env.example 同值：避免环境变量缺失渲染出
+# 空参数指令（如 set_real_ip_from 无参 → nginx emerg）导致启动失败。
 # 输出落到 /tmp/nginx-conf.d（nginx.conf 的 include 指向同一路径）：
 # 曾因部署环境未给 /etc/nginx/conf.d 挂 tmpfs 而触发 Read-only file system，
 # 移入 /tmp 后对任意容器只读策略与挂载形态均稳健。
-mkdir -p /tmp/nginx-conf.d
+# 两变量必须 export：envsubst 按环境变量替换，shell 内部变量子进程不可见
+export API_TOKEN="${API_TOKEN:-change-me}"
+export TRUSTED_PROXY_CIDR="${TRUSTED_PROXY_CIDR:-172.16.0.0/12}"
+mkdir -p /tmp/nginx-conf.d /tmp/nginx
 envsubst '${API_TOKEN} ${TRUSTED_PROXY_CIDR}' \
   < /etc/nginx/templates/default.conf.template \
   > /tmp/nginx-conf.d/default.conf
