@@ -1116,7 +1116,7 @@
 }
 
 .metric-value-refresh {
-  animation: metric-value-in .34s var(--eduquery-ease-out) both;
+  animation: metric-value-in .34s var(--eduquery-ease-out) backwards;
 }
 
 @keyframes metric-value-in {
@@ -1578,7 +1578,7 @@
 }
 
 .trend-chart {
-  animation: trend-chart-in .5s var(--eduquery-ease-out) both;
+  animation: trend-chart-in .5s var(--eduquery-ease-out) backwards;
   width: 100%;
   height: 104px;
   margin-top: 5px;

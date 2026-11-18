@@ -920,7 +920,7 @@
     outline: none;
   }
   .modal-panel-in {
-    animation: modal-panel-in 260ms var(--ease-spring) both;
+    animation: modal-panel-in 260ms var(--ease-spring) backwards;
   }
   .modal-panel-out {
     animation: modal-panel-out 180ms var(--ease-in) both;
@@ -1903,6 +1903,35 @@ body.is-scrolling .resource-notice.is-live::after {
   animation-play-state: paused;
 }
 
+/* 弹窗打开期间暂停氛围/装饰动画（纯 CSS :has 探测，零 JS）：
+   modal-backdrop 是全屏 backdrop-blur 采样层，采样源（氛围层）持续动画会使
+   每帧触发全屏重采样——弹窗内滑动频闪的强源。遮罩之下动画本就不可见，
+   暂停后采样源稳态（blur 只算一次），弹窗内滑动不再产生重采样。 */
+body:has(.modal-backdrop:not(.hidden)) .tech-grid::before,
+body:has(.modal-backdrop:not(.hidden)) .tech-beam,
+body:has(.modal-backdrop:not(.hidden)) .tech-dot,
+body:has(.modal-backdrop:not(.hidden)) .dark .tech-aurora-core,
+body:has(.modal-backdrop:not(.hidden)) .card-signature,
+body:has(.modal-backdrop:not(.hidden)) .card-halo::before,
+body:has(.modal-backdrop:not(.hidden)) .flow-rule,
+body:has(.modal-backdrop:not(.hidden)) .btn-primary::after {
+  animation-play-state: paused;
+}
+
+/* 快速滚动期间大面积玻璃卡降级为强底实色（backdrop-filter 关闭）：
+   结果卡/表单卡 backdrop 每帧大区域重采样是高速滑动频闪的主源，滚动瞬间
+   「玻璃→强底」几乎不可感知（is-scrolling 已暂停氛围动画，透出内容静止），
+   停止 300ms 恢复玻璃。!important 压过 #resultCard 的 E2 hover blur 提升。 */
+body.is-scrolling .project-card,
+body.is-scrolling .card-halo,
+body.is-scrolling .empty-state {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background:
+    var(--eduquery-glass-shine),
+    var(--eduquery-glass-bg-strong) !important;
+}
+
 /* 移动端：隐藏光束/光点，停用网格动画 */
 @media (max-width: 767px) {
   .tech-beam,
@@ -2105,7 +2134,7 @@ html { scroll-behavior: smooth; }
   backdrop-filter: blur(var(--eduquery-glass-blur)) saturate(var(--eduquery-glass-saturate));
   box-shadow: inset 0 1px 0 var(--eduquery-glass-highlight);
   text-align: center;
-  animation: empty-state-in 380ms var(--eduquery-ease-out) both;
+  animation: empty-state-in 380ms var(--eduquery-ease-out) backwards;
 }
 .empty-state-art {
   position: relative;
@@ -2117,14 +2146,14 @@ html { scroll-behavior: smooth; }
   background: var(--eduquery-primary-soft);
   color: var(--eduquery-primary);
   box-shadow: inset 0 1px 0 var(--eduquery-glass-highlight);
-  animation: empty-art-pop 540ms var(--eduquery-ease-spring) both;
+  animation: empty-art-pop 540ms var(--eduquery-ease-spring) backwards;
 }
 .empty-state-art svg { width: 42px; height: 42px; }
 .empty-state-text {
   max-width: 360px;
   margin: 0;
   color: var(--eduquery-muted);
-  animation: empty-text-in 360ms var(--eduquery-ease-out) both;
+  animation: empty-text-in 360ms var(--eduquery-ease-out) backwards;
 }
 .empty-state-text:nth-of-type(1) { animation-delay: 90ms; }
 .empty-state-text:nth-of-type(2) { animation-delay: 170ms; }
@@ -2134,7 +2163,7 @@ html { scroll-behavior: smooth; }
   color: var(--eduquery-muted);
   text-align: left;
   overflow-wrap: anywhere;
-  animation: empty-text-in 360ms var(--eduquery-ease-out) both;
+  animation: empty-text-in 360ms var(--eduquery-ease-out) backwards;
 }
 .empty-state-detail strong {
   color: var(--eduquery-fg);
@@ -2168,11 +2197,11 @@ html { scroll-behavior: smooth; }
   font-size: 0.875rem;
   font-variant-numeric: tabular-nums;
   word-break: break-word;
-  animation: empty-text-in 360ms var(--eduquery-ease-out) 210ms both;
+  animation: empty-text-in 360ms var(--eduquery-ease-out) 210ms backwards;
 }
 .empty-state-action {
   font-weight: 600;
-  animation: empty-text-in 360ms var(--eduquery-ease-out) 250ms both;
+  animation: empty-text-in 360ms var(--eduquery-ease-out) 250ms backwards;
 }
 .empty-state-action:disabled {
   cursor: not-allowed;

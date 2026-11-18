@@ -97,7 +97,7 @@
   /* B4 结果行级联：20ms/行、总延迟封顶 320ms（检索定标：长表 ≤30ms/项）。
      仅限成绩表 —— 课表的粘性首列依赖无 transform 祖先，tr 动画会临时破坏 sticky */
   .markdown-body .table-shell--grades tbody tr {
-    animation: row-cascade var(--motion-base) var(--ease-out) both;
+    animation: row-cascade var(--motion-base) var(--ease-out) backwards;
     animation-delay: min(calc(var(--row-i, 0) * 20ms), 320ms);
   }
   /* 数字等宽（number-tabular）：成绩分数/耗时列对齐稳定，不因数字宽度抖动 */
@@ -112,7 +112,7 @@
   }
   /* B5 数字落定：结果概览的事实数字用微回弹强调“得到答案” */
   .result-facts strong {
-    animation: fact-pop 350ms var(--ease-spring) 120ms both;
+    animation: fact-pop 350ms var(--ease-spring) 120ms backwards;
   }
   @keyframes fact-pop {
     from {
