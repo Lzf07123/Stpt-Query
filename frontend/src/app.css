@@ -1592,19 +1592,59 @@
     font-size: 0.75rem;
     text-align: center;
   }
-  .login-note-more summary {
+  /* 「使用须知」收进第一行：手动折叠按钮（button + aria-expanded），展开时
+     body 独占一行。不用 details/display:contents——后者的内容隐匿机制与
+     该布局手法冲突，收起态内容会泄漏渲染 */
+  .login-note-more {
+    align-items: center;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    min-width: 0;
+  }
+  .login-note-summary {
+    background: transparent;
+    border: 0;
     color: var(--eduquery-muted);
     cursor: pointer;
-    font-size: 0.78rem;
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.75rem;
+    padding: 0;
   }
-  .login-note-more summary:hover {
+  .login-note-summary::after {
+    content: "";
+    border-right: 1px solid currentColor;
+    border-bottom: 1px solid currentColor;
+    height: 4px;
+    margin-left: 4px;
+    transform: rotate(45deg);
+    width: 4px;
+    transition: transform var(--eduquery-motion-fast) var(--eduquery-ease-out);
+  }
+  .login-note-more.open .login-note-summary::after {
+    transform: rotate(-135deg) translate(-1px, -1px);
+  }
+  .login-note-summary:hover {
     color: var(--eduquery-foreground);
+  }
+  .login-note-summary:focus-visible {
+    outline: 2px solid var(--eduquery-ring);
+    outline-offset: 2px;
+  }
+  .login-note-body {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .login-note-body.hidden {
+    display: none;
   }
   .login-note-body p {
     color: var(--eduquery-muted);
     font-size: 0.78rem;
     line-height: 1.55;
     margin: 4px 0 0;
+    text-align: left;
   }
   .markdown-body code {
     @apply rounded bg-surface-2 px-1.5 py-0.5 text-xs;

@@ -1656,20 +1656,31 @@
         });
         startCountdown(ttlSeconds);
         if (lines.length) {
-          const more = document.createElement("details");
+          // 「使用须知」收进第一行（手动折叠：button + aria-expanded + 显式显隐，
+          // 不用 details——其内容隐匿机制与 display:contents 类布局手法冲突会
+          // 泄漏收起态内容）；展开时 body 独占一行，内容来自已过 sanitize 的渲染产物
+          const more = document.createElement("div");
           more.className = "login-note-more";
-          const summary = document.createElement("summary");
+          const summary = document.createElement("button");
+          summary.type = "button";
+          summary.className = "login-note-summary";
           summary.textContent = "使用须知";
+          summary.setAttribute("aria-expanded", "false");
           const body = document.createElement("div");
-          body.className = "login-note-body";
+          body.className = "login-note-body hidden";
           lines.forEach(function (line) {
             const p = document.createElement("p");
             p.innerHTML = line;   // 内容来自已过 sanitize_markdown 的渲染产物
             body.appendChild(p);
           });
+          summary.addEventListener("click", function () {
+            const open = body.classList.toggle("hidden") === false;
+            more.classList.toggle("open", open);
+            summary.setAttribute("aria-expanded", String(open));
+          });
           more.appendChild(summary);
           more.appendChild(body);
-          bq.appendChild(more);
+          main.appendChild(more);
         }
       });
       // 课表尾部的单行令牌警示与紧凑条内提示重复：仅在紧凑条存在时移除
