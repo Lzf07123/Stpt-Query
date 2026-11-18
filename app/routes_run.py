@@ -13,9 +13,10 @@ from datetime import datetime
 from fastapi import Depends, Request
 from fastapi.responses import JSONResponse
 
-from .api_semantics import ApiError, envelope_from_pipeline
+from .api_semantics import ApiError, envelope_from_pipeline, ok_envelope
 from .context import AppContext
-from .schema import WorkflowRequest
+from .pipeline import ServiceError
+from .schema import JumpRenewRequest, WorkflowRequest
 from .trace import LOG, new_run_id
 
 
@@ -107,3 +108,58 @@ def register_run_routes(app, ctx: AppContext) -> None:
                 "meta": {"elapsed_ms": int((time.time() - started) * 1000)},
             })
             return JSONResponse(status_code=status_code, content=payload)
+
+    @app.post("/api/v1/jump/renew")
+    async def renew_jump_link(body: JumpRenewRequest, request: Request,
+                              _: None = Depends(ctx.require_auth)) -> JSONResponse:
+        """重新获取免密跳转链接（重新认证签发，不续期过期码——安全边界）。
+
+        与 /run 同级保护：per-IP 限流（防撞库）+ 登录类槽位；
+        LOGIN_REUSE 命中时同账号重复调用不打学校。密码不落任何日志。
+        """
+        client_ip = ctx.client_ip(request)
+        await ctx.check_rate_limit(client_ip)
+        started = time.time()
+        username = body.username
+        log_entry = {
+            "event": "jump_renew",
+            "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "client_ip": client_ip,
+            "username": username,
+            "success": False,
+            "kind": "jump_renew",
+        }
+        try:
+            async with ctx.login_slots:
+                link = await app.state.pipeline.renew_jump_link(
+                    body.username, body.password)
+            log_entry.update({"success": True,
+                              "elapsed_ms": int((time.time() - started) * 1000)})
+            await ctx.record_query_log(log_entry)
+            return JSONResponse(status_code=200, content=ok_envelope(
+                data={"login_url": link["login_url"],
+                      "app_url": link["app_url"],
+                      "note": link["note"]},
+                trace_id=new_run_id()))
+        except ApiError:
+            raise
+        except ServiceError as exc:
+            log_entry.update({"elapsed_ms": int((time.time() - started) * 1000),
+                              "kind": "jump_renew_error",
+                              "message": "status=%s" % exc.status_code})
+            await ctx.record_query_log(log_entry)
+            if exc.status_code == 401:
+                raise ApiError("school.cas.invalid_credentials",
+                               message="账号或密码错误，请核对后重试") from exc
+            if exc.status_code == 429:
+                raise ApiError("request.rate_limited",
+                               message="操作过于频繁，请稍后再试") from exc
+            raise ApiError("school.upstream.error",
+                           message="教务系统登录暂不可用，请稍后重试") from exc
+        except Exception as exc:  # 兜底：未知异常也返回统一信封
+            LOG.exception("jump/renew 执行异常")
+            log_entry.update({"elapsed_ms": int((time.time() - started) * 1000),
+                              "kind": "internal_error"})
+            await ctx.record_query_log(log_entry)
+            raise ApiError("internal.error",
+                           message="服务内部异常，请稍后重试") from exc

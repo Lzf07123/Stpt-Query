@@ -204,3 +204,16 @@ def test_jump_and_export_stores_share_ttl_semantics():
     assert jump.resolve(jc, consume=False) == "sid-j"
     assert export.resolve(ec, consume=False) == "sid-e"
     assert secrets.token_urlsafe(16)                   # 导入自检（secrets 可用性）
+
+
+def test_jump_expired_page_explains_redirection_path():
+    """跳转码失效页：明确失效语义 + 重新获取路径（重新发起查询），
+    无脚本（CSP script-src 'self' 直接满足）、含返回查询页入口。"""
+    from app.jwxt_http import jump_expired_page
+
+    html = jump_expired_page("跳转链接已失效或过期，请重新发起查询获取新链接")
+    assert "免密链接已过期" in html
+    assert "重新发起查询" in html and "一次性短时凭据" in html
+    assert 'href="/"' in html
+    assert "<script" not in html and "__MSG__" not in html
+    assert "跳转链接已失效或过期" in html            # 具体原因透传（已转义）

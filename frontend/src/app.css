@@ -1532,7 +1532,65 @@
   }
   .login-note-hint {
     color: var(--eduquery-muted);
+    font-variant-numeric: tabular-nums;   /* 倒计时数字等宽，防秒跳抖动 */
     font-size: 0.75rem;
+  }
+  /* 跳转码过期态：CTA 置灰降级为普通链接（点击落到服务端失效说明页），
+     提示文案转警示色并给出重新获取路径——过期码无法续期（安全边界） */
+  .login-note.expired {
+    background: color-mix(in srgb, var(--eduquery-surface-2) 72%, var(--eduquery-surface));
+  }
+  .login-note.expired .login-note-link {
+    background: var(--eduquery-surface-2);
+    border-color: var(--eduquery-border);
+    color: var(--eduquery-muted);
+    pointer-events: none;
+  }
+  .login-note.expired .login-note-hint {
+    color: var(--eduquery-warning);
+    font-weight: 650;
+  }
+  /* 重新获取链接（重新认证签发）：过期态动作行 + 内联密码行 */
+  .login-note-actions {
+    display: flex;
+    justify-content: center;
+  }
+  .login-note-actions:not(:has(.hidden)) {
+    margin-top: 2px;
+  }
+  .login-note-renew {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    margin-top: 6px;
+  }
+  .login-note-renew.hidden {
+    display: none;
+  }
+  .login-note-renew-label {
+    align-items: center;
+    color: var(--eduquery-muted);
+    display: flex;
+    flex: 1 1 200px;
+    flex-direction: column;
+    font-size: 0.72rem;
+    gap: 3px;
+    min-width: 0;
+  }
+  .login-note-renew .input {
+    min-height: 40px;
+    width: 100%;
+  }
+  .login-note-renew .btn {
+    flex: none;
+  }
+  .login-note-renew-error {
+    color: var(--eduquery-warning);
+    flex-basis: 100%;
+    font-size: 0.75rem;
+    text-align: center;
   }
   .login-note-more summary {
     color: var(--eduquery-muted);

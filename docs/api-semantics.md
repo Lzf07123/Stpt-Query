@@ -81,6 +81,20 @@ service-status 的统计统一收进 `data.stats`（原顶层歧义的 `success`
   `GET /api/v1/run/jobs/{id}` 轮询（`data.state/phase/...`；终态 `data.result`
   为同一信封形状的嵌套载荷）
 
+## 4a. 重新获取免密链接（POST /api/v1/jump/renew）
+
+- 请求体（JumpRenewRequest）：`username`（10 位数字）+ `password`——重新认证签发，
+  不提供基于过期码的续期（过期码无法证明持有者身份，属安全边界）
+- 行为：内嵌代理 `/login`（LOGIN_REUSE 命中时同账号 30 分钟内复用会话不打学校）
+  → `/jump`（json=1，实时签票）→ 返回新跳转码链接；旧码不受影响（各自 TTL 过期）
+- 成功：`data = {login_url, app_url, note}`（note 携带「N 秒内有效」TTL 提示，
+  与结果区免密块/前端倒计时共用同一来源）
+- 失败：401 `school.cas.invalid_credentials`（密码错误）、429 `request.rate_limited`、
+  502 `school.upstream.error`（学校登录/签票不可用）；鉴权 401 `request.unauthorized`、
+  校验 422 `request.invalid` 走全局映射
+- 保护：per-IP 限流（与 /run 同一配额）+ 登录类槽位 `login_slots`；日志
+  `event=jump_renew` 白名单条目（不含密码）
+
 ## 5. 路径迁移映射（不再兼容 Dify）
 
 | 旧路径（已删除） | 新路径 |

@@ -1488,6 +1488,10 @@
         const source = probe.content || probe;
         const link = source.querySelector ? source.querySelector("a") : null;
         if (!link || !link.getAttribute("href")) return;
+        // 跳转码 TTL：从服务端渲染文案提取「N 秒内有效」（单一来源），
+        // 缺省 60s；起点为结果渲染时刻（与服务端 mint 时刻误差 <1s）
+        const ttlMatch = (bq.textContent || "").match(/(\d+)\s*秒内有效/);
+        const ttlSeconds = ttlMatch ? Math.max(1, parseInt(ttlMatch[1], 10)) : 60;
         bq.dataset.loginNote = "1";
         bq.className = "login-note";
         bq.innerHTML = "";
@@ -1503,11 +1507,154 @@
         anchor.textContent = link.textContent || "点击进入";
         const hint = document.createElement("span");
         hint.className = "login-note-hint";
-        hint.textContent = "链接短时有效 · 请勿外传";
         main.appendChild(title);
         main.appendChild(anchor);
         main.appendChild(hint);
         bq.appendChild(main);
+        // 倒计时：剩余秒数实时更新，过期后置灰链接并出现「重新获取链接」入口
+        // （过期码无法续期是安全设计；重新获取需重新认证——POST /api/v1/jump/renew）
+        let remain = ttlSeconds;
+        let timer = 0;
+        const renderCountdown = function () {
+          if (!bq.isConnected) {
+            clearInterval(timer);
+            return;
+          }
+          if (remain > 0) {
+            hint.textContent = "剩余 " + remain + " 秒有效 · 请尽快使用 · 请勿外传";
+          } else {
+            hint.textContent = "链接已过期 · 可重新获取（需重新输入密码）";
+            bq.classList.add("expired");
+            renewBtn.hidden = false;
+            clearInterval(timer);
+          }
+          remain -= 1;
+        };
+        const startCountdown = function (ttl) {
+          remain = Math.max(1, ttl);
+          bq.classList.remove("expired");
+          renewBtn.hidden = true;
+          clearInterval(timer);
+          renderCountdown();
+          timer = window.setInterval(renderCountdown, 1000);
+        };
+        // ---- 重新获取链接（重新认证签发）----
+        // 过期码无法证明持有者身份，不提供无认证续期；重新获取走
+        // POST /api/v1/jump/renew（学号 + 密码重新登录，LOGIN_REUSE 命中时不打学校）
+        const actions = document.createElement("div");
+        actions.className = "login-note-actions";
+        const renewBtn = document.createElement("button");
+        renewBtn.type = "button";
+        renewBtn.className = "btn btn-ghost btn-sm";
+        renewBtn.hidden = true;
+        renewBtn.textContent = "重新获取链接";
+        actions.appendChild(renewBtn);
+        const renewRow = document.createElement("div");
+        renewRow.className = "login-note-renew hidden";
+        const renewLabel = document.createElement("label");
+        renewLabel.className = "login-note-renew-label";
+        renewLabel.textContent = "教务系统密码";
+        const renewInput = document.createElement("input");
+        renewInput.className = "input";
+        renewInput.type = "password";
+        renewInput.autocomplete = "off";
+        renewInput.placeholder = "重新输入教务系统密码";
+        renewInput.setAttribute("aria-label", "教务系统密码");
+        renewLabel.appendChild(renewInput);
+        const renewSubmit = document.createElement("button");
+        renewSubmit.type = "button";
+        renewSubmit.className = "btn btn-primary btn-sm";
+        renewSubmit.textContent = "签发新链接";
+        const renewCancel = document.createElement("button");
+        renewCancel.type = "button";
+        renewCancel.className = "btn btn-ghost btn-sm";
+        renewCancel.textContent = "取消";
+        const renewErr = document.createElement("span");
+        renewErr.className = "login-note-renew-error hidden";
+        renewErr.setAttribute("role", "alert");
+        renewRow.appendChild(renewLabel);
+        renewRow.appendChild(renewInput);
+        renewRow.appendChild(renewSubmit);
+        renewRow.appendChild(renewCancel);
+        renewRow.appendChild(renewErr);
+        bq.appendChild(actions);
+        bq.appendChild(renewRow);
+        renewBtn.addEventListener("click", function () {
+          renewRow.classList.toggle("hidden");
+          actions.classList.toggle("expanded", !renewRow.classList.contains("hidden"));
+          if (!renewRow.classList.contains("hidden")) renewInput.focus();
+        });
+        renewCancel.addEventListener("click", function () {
+          renewRow.classList.add("hidden");
+          actions.classList.remove("expanded");
+          renewErr.classList.add("hidden");
+          renewInput.value = "";
+        });
+        const showRenewError = function (message) {
+          renewErr.textContent = message;
+          renewErr.classList.remove("hidden");
+        };
+        renewSubmit.addEventListener("click", async function () {
+          if (renewSubmit.disabled) return;
+          const username = (usernameInput.value || "").trim();
+          const password = renewInput.value;
+          if (!username) {
+            showRenewError("缺少学号：请返回查询页确认学号后重试");
+            return;
+          }
+          if (!password) {
+            showRenewError("请输入教务系统密码");
+            renewInput.focus();
+            return;
+          }
+          renewSubmit.disabled = true;
+          renewSubmit.setAttribute("aria-busy", "true");
+          renewSubmit.textContent = "签发中…";
+          renewErr.classList.add("hidden");
+          try {
+            const resp = await fetch("/api/v1/jump/renew", {
+              method: "POST",
+              headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+              body: JSON.stringify({ username: username, password: password })
+            });
+            const text = await resp.text();
+            let envelope;
+            try { envelope = JSON.parse(text); } catch (e) { envelope = null; }
+            if (!resp.ok || !envelope || envelope.success === false) {
+              const code = envelope && envelope.code;
+              const messages = {
+                "school.cas.invalid_credentials": "账号或密码错误，请核对后重试",
+                "request.rate_limited": "操作过于频繁，请稍后再试",
+                "school.upstream.error": "教务系统登录暂不可用，请稍后重试",
+                "school.session.expired": "学校端会话已失效，请稍后重试"
+              };
+              showRenewError((envelope && envelope.message) ||
+                messages[code] || ("重新获取失败（" + resp.status + "），请稍后重试"));
+              return;
+            }
+            const data = envelope.data || {};
+            if (!data.login_url) {
+              showRenewError("新链接签发异常，请重新发起查询");
+              return;
+            }
+            anchor.href = data.login_url;
+            anchor.rel = "noopener";
+            const noteText = data.note || "";
+            const noteTtl = noteText.match(/(\d+)\s*秒内有效/);
+            startCountdown(noteTtl ? Math.max(1, parseInt(noteTtl[1], 10)) : 60);
+            renewInput.value = "";
+            renewRow.classList.add("hidden");
+            actions.classList.remove("expanded");
+            showToast("success", "新免密链接已生成，请尽快使用");
+          } catch (e) {
+            showRenewError("网络请求失败，请稍后重试");
+          } finally {
+            renewSubmit.disabled = false;
+            renewSubmit.removeAttribute("aria-busy");
+            renewSubmit.textContent = "签发新链接";
+          }
+        });
+        startCountdown(ttlSeconds);
         if (lines.length) {
           const more = document.createElement("details");
           more.className = "login-note-more";

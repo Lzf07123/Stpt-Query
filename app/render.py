@@ -85,16 +85,27 @@ def _extract_url(raw: Any) -> str:
 
 
 def _login_note(raw: Any) -> str:
-    """从免密登录响应中提取 URL 并生成提示块；无 URL 时返回空串。"""
+    """从免密登录响应中提取 URL 并生成提示块；无 URL 时返回空串。
+
+    TTL 提示从响应 note 字段提取「N 秒内有效」（服务端单一来源，随
+    JWXT_JUMP_CODE_TTL 配置变化），缺省无提示；前端倒计时共用同一来源。
+    """
     url = _extract_url(_body_text(raw))
     if not url:
         return ""
+    note_text = str(raw.get("note") or "") if isinstance(raw, dict) else ""
+    ttl_match = re.search(r"(\d+)\s*秒内有效", note_text)
+    ttl_hint = (
+        "%d 秒内有效，过期后请重新发起查询获取新链接；" % int(ttl_match.group(1))
+        if ttl_match
+        else ""
+    )
     return (
         "> 🔗 免密登录教务系统：[点击进入](%s)\n"
         "> ⚠️ 请在浏览器中允许弹出式窗口（弹窗拦截会阻止免密跳转），登陆失败请清理cookie后重试；"
         "移动端兼容性：部分手机浏览器可能无法正常完成跳转，建议使用电脑端浏览器（最新版 Chrome / Edge）打开。\n"
-        "> 此链接包含登录令牌，请勿外传。"
-    ) % url
+        "> 此链接包含登录令牌，%s请勿外传。"
+    ) % (url, ttl_hint)
 
 
 def strip_login_note(markdown: str) -> str:

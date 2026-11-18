@@ -162,6 +162,27 @@ class Pipeline:
                 "免密链接获取失败，查询继续但返回内容不含跳转链接")
             return {}
 
+    async def renew_jump_link(self, username: str, password: str) -> Dict[str, Any]:
+        """重新获取免密跳转链接（重新认证签发，不续期过期码）。
+
+        复用 LOGIN_REUSE 会话复用：同账号+同密码 30 分钟内重复调用不打学校。
+        失败直接抛 ServiceError，由路由层映射错误码（不在 pipeline 内做
+        诊断渲染——renew 前端只要链接与 TTL 提示，不要诊断报告）。
+        """
+        login_body = await self._post("/login", {
+            "username": username, "password": password})
+        session_info = extract_session(login_body)
+        if not session_info.get("session"):
+            raise ServiceError(401, login_body, "登录失败：%s"
+                               % str(login_body.get("error") or "凭据校验未通过"))
+        jump = await self._post("/jump", {
+            "session": session_info["session"], "json": "1"})
+        return {
+            "login_url": str(jump.get("login_url") or ""),
+            "app_url": str(jump.get("app_url") or ""),
+            "note": str(jump.get("note") or ""),
+        }
+
     async def run(
         self,
         req: WorkflowRequest,

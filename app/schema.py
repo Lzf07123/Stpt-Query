@@ -85,6 +85,32 @@ class WorkflowRequest(BaseModel):
         return data
 
 
+class JumpRenewRequest(BaseModel):
+    """重新获取免密跳转链接：重新认证签发（不续期过期码，安全边界）。
+
+    字段约束与 WorkflowRequest 的 username/password 一致；
+    密码仅用于本次登录（LOGIN_REUSE 命中时不打学校），不落日志。
+    """
+
+    username: str = Field(
+        ...,
+        min_length=10,
+        max_length=10,
+        pattern=r"^\d{10}$",
+        description="学号（10 位数字）",
+    )
+    password: str = Field(..., min_length=1, max_length=256, description="密码")
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def _normalize_username(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return str(value)
+        return value
+
+
 class QueryResult(BaseModel):
     """pipeline 与任务队列的内部载荷（出站前经 envelope_from_pipeline 转换）。"""
 

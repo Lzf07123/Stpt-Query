@@ -121,3 +121,21 @@ def test_format_schedule_escapes_pipe_in_time_name_once():
     out = format_schedule(data, "")
     assert "第1\\|节" in out
     assert "第1\\\\|节" not in out
+
+
+def test_login_note_includes_ttl_from_server_note_field():
+    """免密块 TTL 提示取自 /jump 响应 note 字段（服务端单一来源，
+    随 JWXT_JUMP_CODE_TTL 配置变化）；旧响应形态无 note 字段时回退无提示。"""
+    data = {"success": True, "output": "| 学期 | 课程 | 成绩 |\n|---|---|---|"}
+    jump = {
+        "success": True,
+        "login_url": "https://example.com/jump/go?code=x",
+        "note": "进门户：打开 login_url…跳转码 90 秒内有效，过期请重新调用 /jump 获取新链接，请勿外传。",
+    }
+    out = format_grades(data, jump)
+    assert "90 秒内有效，过期后请重新发起查询获取新链接" in out
+    assert "请勿外传" in out
+
+    out_without_note = format_grades(data, {"success": True, "login_url": "https://example.com/jump/go?code=y"})
+    assert "秒内有效" not in out_without_note
+    assert "https://example.com/jump/go?code=y" in out_without_note

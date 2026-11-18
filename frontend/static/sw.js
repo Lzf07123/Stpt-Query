@@ -13,7 +13,7 @@
  */
 "use strict";
 
-const VERSION = "v8";
+const VERSION = "v10";
 const CACHE_NAME = "eduquery-shell-" + VERSION;
 
 // 安装期预缓存（路径会解析为完整 URL 存储；页面引用均带 ?v=N，运行期按完整 URL 命中）

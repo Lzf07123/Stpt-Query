@@ -84,6 +84,67 @@ def _token_equal(provided, token):
         return False
 
 
+def _token_equal(provided, token):
+    """恒时比较令牌：统一按 UTF-8 字节比较。
+
+    secrets.compare_digest 对含非 ASCII 字符的 str 直接抛 TypeError
+    （在鉴权路径上会变成 500）；先 encode("utf-8") 保证任意请求头输入
+    都安全——不匹配一律按未认证（401）处理。"""
+    try:
+        return secrets.compare_digest(
+            (provided or "").encode("utf-8"), (token or "").encode("utf-8"))
+    except Exception:
+        return False
+
+
+def jump_expired_page(msg):
+    """跳转码失效时的浏览器卡片页（无脚本、内联样式）。
+
+    此前浏览器点击过期链接只会落到 401 裸文本且带 API 术语「重新调用
+    /jump」，普通用户无法据此操作；本页明确失效语义与重新获取路径
+    （重新发起查询——页面不保存凭据，无法服务端续期，属安全边界）。
+    """
+    message = (msg or "").replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&lt;")
+    return """<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>免密链接已过期</title>
+<style>
+  *{-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+       background:#f5f7fa;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;
+       padding:16px}
+  .card{background:#fff;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.08);
+        padding:28px 24px;max-width:440px;width:100%;text-align:center}
+  h1{color:#1f2937;font-size:19px;margin:0 0 12px}
+  p{color:#4b5563;font-size:14px;line-height:1.7;margin:8px 0}
+  .tip{background:#fff7e6;border:1px solid #ffe1a8;color:#8a5a00;border-radius:8px;
+       font-size:13px;line-height:1.7;padding:10px 12px;margin:12px 0 0;text-align:left}
+  .btn{display:inline-block;margin-top:16px;padding:12px 28px;background:#2563eb;color:#fff;
+       border-radius:10px;font-size:15px;text-decoration:none}
+  .muted{color:#9ca3af;font-size:12px;margin-top:14px}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>免密链接已过期</h1>
+    <p>__MSG__</p>
+    <div class="tip">
+      免密链接为<b>一次性短时凭据</b>（默认 60 秒内有效），过期后无法续期——
+      这是防止过期链接被继续使用的安全设计。<br>
+      请返回查询页<b>重新发起查询</b>（需要重新输入教务系统密码），
+      新的查询结果会附带新的免密链接，点击后请尽快使用。
+    </div>
+    <a class="btn" href="/">返回查询页</a>
+    <p class="muted">为保护账号安全，过期链接不会被服务端续期或重放。</p>
+  </div>
+</body>
+</html>""".replace("__MSG__", message)
+
+
 class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler 提供 FastAPI 适配）
 
     def _cors_headers(self):
@@ -789,12 +850,23 @@ class Handler:  # 请求逻辑基类（不再依赖 http.server，FastHandler �
         consume = bool(app or plain)
         sid = self.server.jump_codes.resolve(code, consume=consume) if code else None
         if not sid:
-            msg = "跳转链接已失效或过期，请重新调用 /jump 获取新链接"
+            msg = "跳转链接已失效或过期，请重新发起查询获取新链接"
             LOG.warning("跳转码无效或过期 code=***")
             if json_mode:
                 self._reply(401, {"success": False, "error": msg})
-            else:
+            elif plain or app:
+                # curl/API 直跳场景保持纯文本契约
                 self._reply_text(401, msg)
+            else:
+                # 浏览器点击链接的默认形态：返回卡片式失效页（此前为裸文本
+                # 且带 API 术语「重新调用 /jump」，普通用户无法据此操作）
+                self._extra_headers.append((
+                    "Content-Security-Policy",
+                    "default-src 'self'; script-src 'self'; "
+                    "style-src 'unsafe-inline'; img-src 'self' data:; "
+                    "connect-src 'self'; object-src 'none'; base-uri 'self'",
+                ))
+                self._reply_html(401, jump_expired_page(msg))
             return
         try:
             if json_mode:
