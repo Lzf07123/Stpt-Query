@@ -69,13 +69,14 @@ jobs:
           npm ci --ignore-scripts
           # picomatch GHSA-fc5q-39xc-vjpf（<=4.0.7）修复版尚未发布，无法通过升级消除：
           # 仅存在于构建期 devDependency 链（@tailwindcss/cli → @parcel/watcher →
-          # micromatch → picomatch），运行时零第三方资源不受影响。允许集合之外的
+          # micromatch → picomatch），运行时零第三方资源不受影响。npm audit 会把链上
+          # 每个包都列为漏洞条目（全新 npm ci 的键集合见豁免集合），允许集合之外的
           # 漏洞一律使审计失败；picomatch 发布修复版后请把该豁免移除。
           npm audit --json > audit.json || true
           python3 - <<'PY'
           import json, sys
 
-          allow = {"picomatch", "@parcel/watcher", "@tailwindcss/cli"}
+          allow = {"picomatch", "micromatch", "@parcel/watcher", "@tailwindcss/cli"}
           vulns = json.load(open("audit.json")).get("vulnerabilities", {})
           unexpected = sorted(set(vulns) - allow)
           if unexpected:
