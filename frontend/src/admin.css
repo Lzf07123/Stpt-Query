@@ -1468,18 +1468,34 @@
   white-space: nowrap;
 }
 
+/* 「实时采集中」脉冲环：box-shadow 动画不可合成（每帧主线程重绘，admin 页
+   滚动路径上最后一个常驻非合成动画）——改为伪元素扩散环，只动
+   transform/opacity，归合成器；reduced-motion 全局单帧收敛 */
 .resource-notice.is-live {
-  animation: resource-live-pulse 2.8s ease-in-out infinite;
+  position: relative;
 }
 
-@keyframes resource-live-pulse {
+.resource-notice.is-live::after {
+  animation: resource-live-ring 2.8s ease-in-out infinite;
+  border: 1px solid color-mix(in srgb, var(--eduquery-success) 42%, transparent);
+  border-radius: inherit;
+  content: "";
+  inset: -1px;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+@keyframes resource-live-ring {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--eduquery-success) 18%, transparent);
+    opacity: 0;
+    transform: scale(1);
   }
 
   50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--eduquery-success) 0%, transparent);
+    opacity: .9;
+    transform: scale(1.08);
   }
 }
 
@@ -1582,6 +1598,7 @@
   .metric-value-refresh,
   .resource-hero,
   .resource-notice.is-live,
+  .resource-notice.is-live::after,
   .trend-chart {
     animation: none;
   }

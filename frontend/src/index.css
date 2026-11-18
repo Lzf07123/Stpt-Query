@@ -1886,6 +1886,23 @@ body.querying .tech-ambience {
   opacity: 0.35;
 }
 
+/* 滚动期间暂停纯装饰常驻动画（body.is-scrolling 由 JS 在滚动帧添加、
+   停止 300ms 后移除）：滚动帧的合成器只处理位移，不再步进十余个装饰
+   动画——频闪治理的收尾措施（慢速循环暂停 300ms 视觉不可感知）。
+   只暂停氛围/装饰类；通知跑马灯（阅读内容）、查询进度步骤、骨架屏等
+   反馈类动画不受影响。reduced-motion 下动画已收敛，paused 无副作用。 */
+body.is-scrolling .tech-grid::before,
+body.is-scrolling .tech-beam,
+body.is-scrolling .tech-dot,
+body.is-scrolling .dark .tech-aurora-core,
+body.is-scrolling .card-signature,
+body.is-scrolling .card-halo::before,
+body.is-scrolling .flow-rule,
+body.is-scrolling .btn-primary::after,
+body.is-scrolling .resource-notice.is-live::after {
+  animation-play-state: paused;
+}
+
 /* 移动端：隐藏光束/光点，停用网格动画 */
 @media (max-width: 767px) {
   .tech-beam,

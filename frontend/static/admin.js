@@ -2058,9 +2058,11 @@
     }
     // P1 氛围微视差（后台同款）：栅格 0.06 / 前景 0.12，位移封顶 140px；
     // prefers-reduced-motion 下完全跳过。will-change 由 CSS 常驻声明，
-    // 不再用 is-parallaxing 动态挂摘（动态切换 = 滑动频闪根因，见 app.js 同款注释）
+    // 不再用 is-parallaxing 动态挂摘（动态切换 = 滑动频闪根因，见 app.js 同款注释）。
+    // is-scrolling：滚动期间暂停纯装饰常驻动画，停止 300ms 恢复
     var parallaxReduce = window.matchMedia("(prefers-reduced-motion: reduce)");
     var parallaxTicking = false;
+    var parallaxScrollingTimer = 0;
     function applyParallax() {
       parallaxTicking = false;
       if (parallaxReduce.matches) return;
@@ -2069,6 +2071,11 @@
       var fore = document.querySelector(".tech-ambience-fore");
       if (grid) grid.style.transform = "translate3d(0," + Math.min(y * 0.06, 140).toFixed(1) + "px,0)";
       if (fore) fore.style.transform = "translate3d(0," + Math.min(y * 0.12, 140).toFixed(1) + "px,0)";
+      document.body.classList.add("is-scrolling");
+      clearTimeout(parallaxScrollingTimer);
+      parallaxScrollingTimer = window.setTimeout(function () {
+        document.body.classList.remove("is-scrolling");
+      }, 300);
     }
     window.addEventListener("scroll", function () {
       if (!parallaxTicking) {

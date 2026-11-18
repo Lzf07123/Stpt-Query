@@ -3404,9 +3404,12 @@
     // P1 氛围微视差：栅格 0.06 / 前景 0.12（仅装饰层、位移封顶 140px）；
     // prefers-reduced-motion 下完全跳过。巨层的 will-change 已常驻（CSS 侧
     // 桌面 + 允许动效时声明），不再用 body.is-parallaxing 动态挂摘——
-    // 动态切换会让每次滚动触发全层重新栅格化、停止后层回退，即「滑动频闪」根因
+    // 动态切换会让每次滚动触发全层重新栅格化、停止后层回退，即「滑动频闪」根因。
+    // is-scrolling：滚动期间暂停纯装饰常驻动画（CSS 侧 animation-play-state），
+    // 停止 300ms 恢复——滚动帧合成器只处理位移
     var parallaxReduce = window.matchMedia("(prefers-reduced-motion: reduce)");
     var parallaxTicking = false;
+    var parallaxScrollingTimer = 0;
     function applyParallax() {
       parallaxTicking = false;
       if (parallaxReduce.matches) return;
@@ -3415,6 +3418,11 @@
       var fore = document.querySelector(".tech-ambience-fore");
       if (grid) grid.style.transform = "translate3d(0," + Math.min(y * 0.06, 140).toFixed(1) + "px,0)";
       if (fore) fore.style.transform = "translate3d(0," + Math.min(y * 0.12, 140).toFixed(1) + "px,0)";
+      document.body.classList.add("is-scrolling");
+      clearTimeout(parallaxScrollingTimer);
+      parallaxScrollingTimer = window.setTimeout(function () {
+        document.body.classList.remove("is-scrolling");
+      }, 300);
     }
     window.addEventListener("scroll", function () {
       if (!parallaxTicking) {
