@@ -10,7 +10,8 @@
 #   nginx 快速排空连接后退出。
 #
 # 运行前提（docker-compose.yml 已保证）：
-# - /etc/nginx/conf.d 为 tmpfs（envsubst 渲染输出落盘处）
+# - /tmp 为 tmpfs：渲染输出落盘处（/tmp/nginx-conf.d）——read_only 容器里
+#   /tmp 必然可写，不依赖 /etc/nginx/conf.d 的挂载形态
 # - /var/log/nginx 为 tmpfs（apt nginx 默认日志路径）；pid/temp 路径已在
 #   frontend/nginx.conf 重定向到 /tmp
 set -e
@@ -20,10 +21,13 @@ sh /docker-entrypoint.d/30-brand-env.sh
 
 # ---- 2. envsubst 白名单渲染 nginx 站点模板 ----
 # 模板仅引用 API_TOKEN / TRUSTED_PROXY_CIDR 两个变量（白名单防误替换应用配置）。
-mkdir -p /etc/nginx/conf.d
+# 输出落到 /tmp/nginx-conf.d（nginx.conf 的 include 指向同一路径）：
+# 曾因部署环境未给 /etc/nginx/conf.d 挂 tmpfs 而触发 Read-only file system，
+# 移入 /tmp 后对任意容器只读策略与挂载形态均稳健。
+mkdir -p /tmp/nginx-conf.d
 envsubst '${API_TOKEN} ${TRUSTED_PROXY_CIDR}' \
   < /etc/nginx/templates/default.conf.template \
-  > /etc/nginx/conf.d/default.conf
+  > /tmp/nginx-conf.d/default.conf
 
 # ---- 3. 双进程启动 ----
 uvicorn app.main:app --host 127.0.0.1 --port 8000 &

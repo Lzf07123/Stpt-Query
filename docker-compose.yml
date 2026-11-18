@@ -24,9 +24,9 @@ services:
     tmpfs:
       - /tmp:size=256m,mode=1777
       - /var/log/jwxt:size=16m,uid=10001,gid=10001
-      # nginx 可写路径：apt nginx 默认日志目录 + envsubst 渲染输出（conf.d）
+      # nginx 可写路径：apt nginx 默认日志目录；站点配置渲染到 /tmp/nginx-conf.d
+      # （/tmp tmpfs 必然可写，不依赖 /etc 下挂载形态）
       - /var/log/nginx:size=16m,uid=10001,gid=10001
-      - /etc/nginx/conf.d:size=64k,uid=10001,gid=10001
     volumes:
       - app-query-logs:/var/log/edu-query
       - app-notice-fallback:/var/lib/edu-query/notices
