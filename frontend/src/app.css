@@ -1559,11 +1559,15 @@
     font: inherit;
   }
   /* 过期态组件底色已灰化：CTA 用实色主色保证醒目（半透明主色会透出灰底）
-     深浅两态经 --eduquery-primary/-fg 自适应 */
+     深浅两态经 --eduquery-primary/-fg 自适应。
+     pointer-events 必须显式恢复：CTA 复用 .login-note-link 类，会命中上方
+     「过期链接禁点」规则（.expired .login-note-link { pointer-events: none }），
+     同特异性下本规则靠源顺序后置取胜——缺了这行按钮渲染正常但永不可点 */
   .login-note.expired .login-note-renew-cta {
     background: var(--eduquery-primary);
     border-color: var(--eduquery-primary);
     color: var(--eduquery-primary-fg);
+    pointer-events: auto;
   }
   .login-note.expired .login-note-renew-cta:hover {
     background: var(--eduquery-primary-hover);

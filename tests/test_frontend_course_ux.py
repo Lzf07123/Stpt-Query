@@ -285,3 +285,18 @@ def test_result_component_reset_contract():
     assert show.count("resetResultComponents()") >= 2, "诊断卡与裸 JSON 兜底都要清场"
     # 纯文本兜底不得保留旧概览条
     assert 'resultOverview.textContent = ""' in show
+
+
+def test_renew_cta_clickable_in_expired_state():
+    """过期禁点规则不得波及重新获取 CTA。
+
+    CTA 复用 .login-note-link 类（视觉同源），而
+    `.login-note.expired .login-note-link { pointer-events: none }` 会同时
+    命中按钮——同特异性下 CTA 规则靠源顺序后置取胜，必须显式
+    pointer-events: auto。曾回归：按钮渲染正常但永不可点（真实浏览器
+    elementFromPoint 命中测试证实，点击全落在 anchor 包裹层）。
+    """
+    css = _read("frontend/static/style.css")
+    start = css.index(".login-note.expired .login-note-renew-cta")
+    block = css[start:css.index("}", start)]
+    assert "pointer-events:auto" in block, "CTA 必须显式恢复 pointer-events"
