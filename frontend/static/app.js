@@ -298,8 +298,10 @@
         weeks: rec.weeks || "all"
       };
       resultTitle.textContent = rec.option ? rec.option + "查询结果" : "查询结果";
-      clearLockTimer();
-      clearTimeout(resultTimer);
+      // 历史回放同样是「替换结果正文」：伴随组件先清干净，旧记录的 PDF 动作/
+      // 进度条/缓存提示条不得延续到本次展示（renderResultMarkdown 会按记录
+      // 类型重建概览条与分布图/周导航）
+      resetResultComponents();
       skeleton.hidden = true;
       skeleton.setAttribute("aria-hidden", "true");
       resultCard.classList.remove("hidden");
@@ -2849,6 +2851,23 @@
 
     let resultTimer = 0;
     let runIdCopyTimer = 0;
+
+    // 结果区伴随组件的统一清理入口。正文之外的宿主组件（任务进度条/PDF 动作/
+    // 分数分布/周导航/离线缓存提示条/课程详情浮层）都附着于静态 DOM 或单例，
+    // 不随 resultHtml 重渲染消失；凡替换结果正文或发起新查询的路径都必须先过
+    // 这里，否则上次查询的组件会残留并与新结果混排（旧 PDF 按钮下载的是上次
+    // 的文件、缓存提示条挂的是旧记录时间、失败进度条悬在新结果上方）。
+    function resetResultComponents() {
+      clearLockTimer();
+      clearTimeout(resultTimer);
+      closeCoursePopover(false);
+      hideJobProgress();
+      hidePdfAction();
+      hideGradeDistribution();
+      hideWeekNav();
+      hideOfflineBar();
+    }
+
     function showResult(statusCode, body) {
       clearLockTimer();
       clearTimeout(resultTimer);
@@ -2881,11 +2900,19 @@
             ? parseDiagnosticReport(String(body.data.diagnosis.report))
             : null;
           if (report) {
+            // 诊断正文不携带周导航/分布图：先清上次结果的伴随组件，
+            // 概览条由 renderDiagnosisOutcome 重建
+            resetResultComponents();
             resultBox.classList.add("hidden");
             resultHtml.classList.remove("hidden");
             resultHtml.innerHTML = renderDiagnosisOutcome(report);
             applyRenderedElementStyles(resultHtml);
           } else {
+            // 非 markdown 且无诊断报告的兜底（裸 JSON/网关文本）：不属于任何
+            // 结果组件语义，伴随组件与概览条一并清空，不冒充本次查询的产出
+            resetResultComponents();
+            resultOverview.classList.add("hidden");
+            resultOverview.textContent = "";
             resultHtml.classList.add("hidden");
             resultBox.classList.remove("hidden");
             const text = typeof body === "string" ? body : JSON.stringify(body, null, 2);
@@ -2999,12 +3026,9 @@
       queryController = new AbortController();
 
       setButtonLoading(true);
-      hideOfflineBar();
-      hidePdfAction();
-      hideGradeDistribution();
-      hideWeekNav();
-      clearLockTimer();
-      clearTimeout(resultTimer);
+      // 新查询启动：上次结果的伴随组件与锁倒计时全部清场，
+      // 随后按本次查询类型重建（进度条/概览条/分布图或周导航）
+      resetResultComponents();
       // 同步装载标记：240ms 骨架屏定时器据此判断「仍在装载」——若结果先于
       // 定时器返回（快速失败/限流 429 等），finally 已移除该标记，定时器
       // 直接放弃，不再把已渲染的结果覆盖回骨架屏（骨架屏常驻 bug 的根因）。
@@ -3289,24 +3313,17 @@
       resultContext = { option: "", semesters: "", weeks: "all" };
       layout.classList.remove("has-result");
       statusBox.classList.add("hidden");
-      hideOfflineBar();
-      hidePdfAction();
-      hideGradeDistribution();
-      hideWeekNav();
+      resetResultComponents();
       usernameHelp.textContent = "与学校统一身份认证账号一致";
     });
 
     document.getElementById("backToQuery").addEventListener("click", function () {
       if (submitBtn.disabled && queryController) queryController.abort();
-      clearTimeout(resultTimer);
+      resetResultComponents();
       resultCard.classList.remove("is-growing");
       resultCard.classList.add("hidden");
       layout.classList.remove("has-result");
       statusBox.classList.add("hidden");
-      hideOfflineBar();
-      hidePdfAction();
-      hideGradeDistribution();
-      hideWeekNav();
       window.scrollTo(0, 0);
       usernameInput.focus({ preventScroll: true });
     });

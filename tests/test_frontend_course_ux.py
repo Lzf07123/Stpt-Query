@@ -264,3 +264,24 @@ def test_course_weeks_cover_pure_function(tmp_path):
         encoding="utf-8")
     result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_result_component_reset_contract():
+    """结果伴随组件统一清理契约：正文之外的宿主组件不随重渲染消失，
+    凡替换结果正文的路径（新查询/历史回放/诊断卡/裸 JSON 兜底/重置/返回）
+    都必须先过 resetResultComponents，防止上次查询的组件语义残留。
+    """
+    script = _read("frontend/static/app.js")
+    reset_fn = _extract_function(script, "resetResultComponents()")
+    for call in ("clearLockTimer()", "clearTimeout(resultTimer)", "closeCoursePopover(",
+                 "hideJobProgress()", "hidePdfAction()",
+                 "hideGradeDistribution()", "hideWeekNav()", "hideOfflineBar()"):
+        assert call in reset_fn, call
+    # 挂载点：提交 / 历史回放 / showResult 两个兜底分支 / 重置与返回
+    assert script.count("resetResultComponents();") >= 6
+    saved = _extract_function(script, "displaySavedRecord(rec)")
+    assert "resetResultComponents()" in saved, "历史回放必须先清伴随组件"
+    show = _extract_function(script, "showResult(statusCode, body)")
+    assert show.count("resetResultComponents()") >= 2, "诊断卡与裸 JSON 兜底都要清场"
+    # 纯文本兜底不得保留旧概览条
+    assert 'resultOverview.textContent = ""' in show
