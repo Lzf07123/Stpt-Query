@@ -16,11 +16,13 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "no-referrer" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    # 全站脚本全部外置（含 admin.html 主题预置 theme-init.js），主站 CSP 无需内联哈希
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+    # 全站脚本全部外置（含 admin.html 主题预置 theme-init.js），主站 CSP 无需内联哈希；
+    # img-src 不开 data:（全站零 data URI：图标为文件、二维码 canvas 实时绘制）；
+    # frame-src 'none'：全站零 iframe/embed（worker-src 不动——其同管 Service Worker 抓取）
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
 
     root /usr/share/nginx/html;
     index index.html;

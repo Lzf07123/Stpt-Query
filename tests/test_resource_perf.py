@@ -85,18 +85,44 @@ def test_service_status_scan_is_cached_until_ttl_expires(tmp_path, monkeypatch):
         return original(*args, **kwargs)
 
     monkeypatch.setattr(context, "_read_service_status_summary", counted_scan)
+    # 密封化（抖动治理）：本单测曾被两个环境依赖间歇性击穿——
+    # ① 真实墙钟：TTL 判定依赖 monotonic 推进；② 文件 stat：_jsonl_signature
+    # 读 st_mtime_ns，macOS Docker 挂载层（virtiofs/gRPC-FUSE）对同一未变文件
+    # 的两次 stat 可能返回不同 mtime_ns，签名被误判变化 → 多扫一次 →
+    # 「重复请求命中缓存」断言偶发失败（全量约 1/16，单测无法复现）。
+    # 生产代码逻辑无误：mtime+size 签名在真实卷上是正确的脏检查手段。
+    # 单测改为注入可控时钟 + 可控签名，把三条失效分支全部钉死，
+    # 失败时自诊断输出（命中分支名），杜绝环境噪声混入。
+    clock = {"monotonic": 1000.0}
+    monkeypatch.setattr(context.time, "monotonic", lambda: clock["monotonic"])
+    signature = {"value": (111, 4096)}
+    monkeypatch.setattr(context, "_jsonl_signature", lambda path: signature["value"])
     with TestClient(app) as client:
         headers = {"Authorization": "Bearer test-token"}
         first = client.get("/api/v1/service-status", headers=headers)
         second = client.get("/api/v1/service-status", headers=headers)
-        assert calls == 1
+        assert calls == 1, "重复请求未命中缓存（calls=%d）" % calls
         assert first.json()["data"]["stats"]["accepted_total"] == 1
         assert second.json() == first.json()
 
-        app.state.service_status_cache["at"] = 0
+        # 分支一：TTL 到期（显式推进时钟，不再 hack cache["at"]）
+        clock["monotonic"] += 61
         third = client.get("/api/v1/service-status", headers=headers)
-        assert calls == 2
+        assert calls == 2, "TTL 到期未触发重扫（calls=%d）" % calls
         assert third.json() == first.json()
+
+        # 分支二：文件签名变化（另一副本/worker 追加写）→ TTL 未到期也必须重扫
+        signature["value"] = (112, 4608)
+        fourth = client.get("/api/v1/service-status", headers=headers)
+        assert calls == 3, "签名变化未触发重扫（calls=%d）" % calls
+        assert fourth.json() == first.json()
+
+        # 分支三：签名稳定时即便时钟继续走，TTL 内仍命中
+        clock["monotonic"] += 30
+        fifth = client.get("/api/v1/service-status", headers=headers)
+        assert calls == 3, "TTL 内仍被重扫（calls=%d，签名=%r 时钟=%.1f）" % (
+            calls, signature["value"], clock["monotonic"])
+        assert fifth.json() == first.json()
 
 
 async def test_redis_history_failure_marks_backfill_dirty(tmp_path):

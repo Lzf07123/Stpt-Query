@@ -305,11 +305,14 @@ def test_teaching_context_pure_functions(tmp_path):
     parse_date = _extract_function(script, "parseDateOnly(value)")
     parse_clock = _extract_function(script, "parseClockMinutes(value)")
     resolve = _extract_function(script, "resolveTeachingContext(now, config)")
+    period_range = _extract_function(script, "periodRangeOf(text)")
+    period_contains = _extract_function(script, "periodRangeContains(range, periodNumber)")
     with open("config/calendar.json", encoding="utf-8") as fh:
         config = json.load(fh)
     harness = tmp_path / "teaching.mjs"
     harness.write_text(
         covers + "\n" + parse_date + "\n" + parse_clock + "\n" + resolve + "\n"
+        + period_range + "\n" + period_contains + "\n"
         "const cfg = " + json.dumps(config) + ";\n"
         "const assert = (ok, msg) => { if (!ok) { console.error(msg); process.exit(1); } };\n"
         "// queryCoversWeek：all/单值/区间/逗号/不含\n"
@@ -337,6 +340,14 @@ def test_teaching_context_pure_functions(tmp_path):
         "assert(resolveTeachingContext(new Date(2026, 7, 20, 10, 0, 0), cfg) === null, '学期开始前无上下文');\n"
         "assert(resolveTeachingContext(new Date(2027, 3, 1, 10, 0, 0), cfg) === null, '学期结束后无上下文');\n"
         "assert(resolveTeachingContext(new Date(2026, 10, 18, 10, 0, 0), null) === null, '无 config 降级');\n"
+        "// periodRangeOf：学校端节次行头为合并区间（真实课表为 第1-2节/第3-4节…\n"
+        "// /第11节），进行中判定按区间包含——单节数值比较在真实数据上永不命中\n"
+        "assert(JSON.stringify(periodRangeOf('第3-4节')) === '[3,4]', '合并节次区间');\n"
+        "assert(JSON.stringify(periodRangeOf('第1-2节08:00-09:40')) === '[1,2]', '带时间后缀');\n"
+        "assert(JSON.stringify(periodRangeOf('第11节')) === '[11,11]', '单节区间');\n"
+        "assert(periodRangeOf('午休') === null && periodRangeOf('') === null, '不可解析回 null');\n"
+        "assert(periodRangeContains([3,4], 3) && periodRangeContains([3,4], 4) && !periodRangeContains([3,4], 5), '区间包含');\n"
+        "assert(!periodRangeContains(null, 3), '不可解析不做进行中高亮');\n"
         "console.log('ok');\n",
         encoding="utf-8")
     result = subprocess.run(["node", str(harness)], capture_output=True, text=True)

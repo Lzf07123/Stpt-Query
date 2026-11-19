@@ -114,7 +114,19 @@ def test_edge_hides_sensitive_query_strings_and_sets_csp():
     assert 'location = /jump/go {' in config
     assert 'access_log off;' in config
     assert '"$request_method $uri $server_protocol"' in config
-    assert "img-src 'self' data:" in config
+    # 主站 CSP 收紧面：img-src 不开 data:（全站零 data URI，二维码 canvas 实时
+    # 绘制）；frame-src 显式 none（零 iframe/embed）。仅主站段——/jump/go 桥接页
+    # 是已记录的内联脚本豁免段，不在本断言范围
+    main_csp = config[:config.index("location = /jump/go {")]
+    assert "img-src 'self';" in main_csp
+    assert "img-src 'self' data:" not in main_csp
+    assert "frame-src 'none';" in main_csp
+
+
+def test_permissions_policy_locks_down_sensitive_apis():
+    config = open("frontend/templates/default.conf.template", encoding="utf-8").read()
+    for feature in ("camera=()", "microphone=()", "geolocation=()", "payment=()", "usb=()"):
+        assert feature in config, feature
 
 
 def test_query_log_file_uses_persistent_named_volume():

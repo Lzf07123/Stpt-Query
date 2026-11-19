@@ -241,6 +241,8 @@ def test_result_overview_helpers_are_deterministic(tmp_path):
         for signature in (
             "isTableSeparator(line)",
             "parseResultTable(text)",
+            "numericScoreValue(raw)",
+            "gradeStatsFromTable(table)",
             "gradeOverviewFacts(text)",
             "parseDiagnosticReport(text)",
             "humanizeDiagnosticEvidence(evidence)",
@@ -249,9 +251,16 @@ def test_result_overview_helpers_are_deterministic(tmp_path):
     harness = tmp_path / "result-overview.mjs"
     harness.write_text(
         source + "\n"
+        "// 有学分列：加权平均（90*4+80*3)/7=85.7 + 修读学分；无 GPA 列不出 GPA 项\n"
         "const grade = gradeOverviewFacts('| 课程 | 成绩 | 学分 |\\n|---|---|---|\\n"
         "| 高数 | 90 | 4 |\\n| 英语 | 80 | 3 |');\n"
-        "if (grade[0].value !== '2 门' || grade[1].value !== '85.0' || grade[2].value !== '90') process.exit(1);\n"
+        "if (grade[0].label !== '已发布' || grade[0].value !== '2 门') process.exit(1);\n"
+        "if (grade[1].label !== '加权平均' || grade[1].value !== '85.7') process.exit(4);\n"
+        "if (grade[2].label !== '最高分' || grade[2].value !== '90') process.exit(5);\n"
+        "if (grade[3].label !== '修读学分' || grade[3].value !== '7') process.exit(6);\n"
+        "// 无学分列：诚实降级回算术平均（(90+80)/2=85.0）\n"
+        "const plain = gradeOverviewFacts('| 课程 | 成绩 |\\n|---|---|\\n| 高数 | 90 |\\n| 英语 | 80 |');\n"
+        "if (plain[1].label !== '平均分' || plain[1].value !== '85.0') process.exit(7);\n"
         "const report = parseDiagnosticReport('**问题分类：未分类异常**\\n- 环节：登录\\n"
         "- 判断依据：HTTP 502，响应片段：教务系统登录暂时不可用\\n"
         "- 用户可自行处理：\\n  - 稍后重试\\n"
@@ -451,6 +460,21 @@ def test_locations_with_custom_headers_keep_security_headers():
     assert not re.search(r"(?m)^\s*add_header\s", admin_block)
 
 
+def test_rendered_markup_has_no_inline_style_attributes():
+    """CSP style-src 'self'（无 unsafe-inline）会拦截内联 style 属性。
+
+    历史：行级联 --row-i 曾以内联 style 属性发射，静态预览无 CSP 头测不出来，
+    在 nginx 后被静默拦截（行级联退化为同时入场）。现为 data-row-i 属性 +
+    CSSOM setProperty（CSSOM 不受 CSP 限制）；本测试防止内联 style 属性回潮。
+    """
+    for name in ("app.js", "admin.js", "notice.js", "brand.js"):
+        source = _read("frontend/static/" + name)
+        assert 'style="' not in source, name + " 发射了内联 style 属性"
+    app_js = _read("frontend/static/app.js")
+    assert 'data-row-i="' in app_js
+    assert 'setProperty("--row-i"' in app_js
+
+
 def test_pwa_assets_are_external_and_uncached():
     """PWA：sw.js 必须外置且页面仅引用不内联；nginx 对 sw.js/manifest 禁缓存
     且不得自建 add_header（保住 server 级 CSP 继承）。"""
@@ -471,3 +495,18 @@ def test_pwa_assets_are_external_and_uncached():
     manifest = json.loads(_read("frontend/static/manifest.json"))
     assert manifest["start_url"] == "/?source=pwa"
     assert {icon["purpose"] for icon in manifest["icons"]} >= {"any", "maskable"}
+
+
+def test_jump_and_calendar_url_exits_are_scheme_gated():
+    """跳转链接与订阅地址的四个前端出口必须有协议门禁（安全加固 R2）。
+
+    renew 锚点（免密 CTA）与日历 feedUrl（webcal 唤起/外链托管/ics 下载/
+    复制文本共同来源）都会把后端值直接交给导航类 API：仅接受 http(s)/webcal
+    与服务端签发的 /cal/ 相对路径，javascript:/data: 一律降级。
+    """
+    app_js = _read("frontend/static/app.js")
+    assert "function calendarSafeFeedUrl(" in app_js
+    assert app_js.count("calendarSafeFeedUrl(data.feed_url)") == 3, "feedUrl 三个赋值点须全部过门禁"
+    # renew 锚点：非 http(s) 一律按「签发异常」降级，不得直接赋 href
+    assert "/^https?:\\/\\//i.test(String(data.login_url" in app_js
+    assert "anchor.href = data.login_url;" not in app_js

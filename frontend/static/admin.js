@@ -389,7 +389,7 @@
       var service = services[key] || {};
       var state = service.memory_bytes == null ? "muted" : "success";
       return '<div class="stack-service">' +
-        '<span>' + (names[key] || key) + '</span>' +
+        '<span>' + (names[key] || escapeHtml(key)) + '</span>' +
         '<strong>' + (service.memory_bytes == null ? "—" : formatBytes(service.memory_bytes)) + '</strong>' +
         '<small>' + (service.process_count || 0) + ' 进程</small>' +
         '<i class="badge badge-' + state + '">' + (service.source === "cgroup" ? "实测" : service.source === "process_rss" ? "估算" : "缺失") + '</i>' +

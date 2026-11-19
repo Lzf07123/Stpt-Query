@@ -392,3 +392,14 @@ def test_orchestration_memory_rereads_rss_within_scan_cache(tmp_path, monkeypatc
     second = metrics._orchestration_memory()["services"]["frontend"]
     assert second["memory_bytes"] == 4096 * 1024
     assert second["process_count"] == 1
+
+
+def test_admin_service_key_interpolation_is_escaped():
+    """资源监控服务键插值必须转义（安全加固 R2）：后端分桶外的未知键
+    兜底展示走 escapeHtml，与 admin 其余回填点同一纪律。"""
+    from pathlib import Path
+    script = (Path(__file__).resolve().parents[1] /
+              "frontend/static/admin.js").read_text(encoding="utf-8")
+    assert "(names[key] || escapeHtml(key))" in script
+    # 全文件不得存在「回退直插」形态
+    assert "(names[key] || key)" not in script

@@ -18,7 +18,7 @@
   <meta name="apple-mobile-web-app-title" content="教务查询">
   <script src="/health-status.js?v=2" defer></script>
   <script src="/theme-init.js?v=1"></script>
-  <link rel="stylesheet" href="/style.css?v=131">
+  <link rel="stylesheet" href="/style.css?v=132">
   <script src="/brand-env.js?v=1" defer></script>
   <script src="/brand.js?v=4" defer></script>
   <script src="/notice.js?v=9" defer></script>
@@ -231,7 +231,9 @@
             <span>修改条件</span>
           </button>
         </div>
+        <div id="weekNav" class="week-nav hidden"></div>
         <div id="resultOverview" class="result-overview hidden" aria-live="polite"></div>
+        <div id="gradeDistribution" class="grade-distribution hidden"></div>
         <div id="runIdMeta" class="run-id-meta hidden">
           <span>运行ID</span>
           <button class="run-id-copy" id="runIdCopy" type="button" aria-label="复制运行ID">
@@ -278,6 +280,18 @@
     </a>
   </footer>
 
+  <!-- 课程详情浮层：单例容器，内容由 app.js 按 .course-chip 触发点实时填充；
+       非模态（aria-modal=false），Escape/外部点击关闭并恢复触发点焦点 -->
+  <div id="coursePopover" class="course-popover hidden" role="dialog" aria-modal="false" aria-labelledby="coursePopoverTitle">
+    <div class="course-popover-head">
+      <h3 id="coursePopoverTitle" class="course-popover-title" tabindex="-1">课程详情</h3>
+      <button type="button" id="coursePopoverClose" class="modal-close" aria-label="关闭课程详情">&times;</button>
+    </div>
+    <div id="coursePopoverBody" class="course-popover-body"></div>
+    <div class="course-popover-foot">
+      <button type="button" class="btn btn-ghost btn-sm" id="coursePopoverCopy">复制课程信息</button>
+    </div>
+  </div>
   <div id="toastWrap" class="toast-viewport"></div>
   <div id="noticeHistoryModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="noticeHistoryTitle">
     <div class="modal-panel notice-history-panel">
@@ -386,6 +400,6 @@
       </div>
     </div>
   </div>
-  <script src="/app.js?v=21" defer></script>
+  <script src="/app.js?v=27" defer></script>
 </body>
 </html>

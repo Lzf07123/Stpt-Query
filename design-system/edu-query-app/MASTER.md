@@ -1,6 +1,6 @@
 # edu-query-app · 前端实现速览（MASTER）
 
-> 版本：V1.3 ｜ 日期：2026-11-18 ｜ 状态：Li-Design V1.6 + 可靠性/债务清理专项
+> 版本：V1.4 ｜ 日期：2026-11-20 ｜ 状态：Li-Design V1.6 + 课表交互/成绩统计市场对齐专项
 > 代码事实优先：令牌源 `frontend/src/index.css`；运行时产物 `frontend/static/style.css`；
 > 品牌单点 `frontend/static/brand.js`。本文档与代码冲突时以代码为准并回写本文档。
 
@@ -133,6 +133,115 @@
   发布、存草稿和行操作在执行期间禁用按钮并设置 `aria-busy`，成功提示在表单重置后保留。
 
 ## 5. 全量视觉规范验收（2026-10-31，Li-Design V1.6 + 后台响应式）
+
+**安全加固 R2 专项验收（2026-11-20，注入面/跳转出口审计）**：
+首轮加固（CSP 收紧/安全头）之后第二轮全面注入面审计：渲染外链
+（markdown/brand/免密锚点/window.open 全带 noopener noreferrer ✓）、notice.js
+（正文 textContent ✓、innerHTML 仅清空与静态图标 ✓）、admin.js 23 处
+innerHTML（数据字段全走 escapeHtml ✓）——整体纪律良好，补四道纵深防御：
+① **renew 跳转链接前后端双门禁**：`pipeline.renew_jump_link` 曾把上游
+`/jump` 响应的 `login_url` 原样透传（markdown 路径有 `_safe_http_url` 校验、
+JSON renew 路径没有）→ pipeline 层复用同一校验来源归空异常 scheme（与
+「输出增强不阻断」哲学一致，前端按「签发异常」降级），前端锚点赋值前再过
+`^https?:` 门禁；② **日历 feedUrl 出口门禁**：feedUrl 是 webcal 唤起/外链
+托管/ics 下载/复制文本共同来源，`calendarSafeFeedUrl` 在三个赋值点统一过滤
+（仅 `/cal/` 相对路径与 http(s)/webcal）；③ admin.js 资源监控服务键兜底
+插值补 escapeHtml（唯一漏网插值点）；④ admin 令牌 sessionStorage 审计确认
+（未用 localStorage，无需改动）。测试同步：pipeline 拒签 unsafe scheme
+（javascript:/data: → 归空、安全 https 直通）、admin 键转义断言、前端
+scheme-gate 契约（3 赋值点计数 + renew 锚点直插禁用）共 +3 用例。
+全量 333 通过 + 6 跳过；真实栈 curl 确认 v27/v39 新资产上线、加固构建
+浏览器零控制台报错。资产版本：app.js v27 / admin.js v39 / sw.js v23。
+
+**真实凭据端到端复核 + 抖动治理验收（2026-11-20，账号 2530508101 授权复核）**：
+① **抖动治理**：`test_service_status_scan_is_cached_until_ttl_expires` 曾在 docker
+挂载卷上间歇失败（全量约 1/16、单测不复现）——根因是测试对两个环境依赖的耦合：
+`_jsonl_signature` 读 `st_mtime_ns`（virtiofs/gRPC-FUSE 对未变文件的两次 stat 可能
+返回不同 mtime_ns）+ TTL 判定走真实 monotonic 时钟。单测密封化：注入可控时钟与
+可控签名，**三条失效分支全钉死**（TTL 到期/文件签名变化/TTL 内命中，后两条为
+新增覆盖），失败断言自诊断输出分支名；生产代码的 mtime+size 签名在真实卷上
+仍是正确脏检查手段，未动。单文件 docker 10 连跑全绿。
+② **真实数据适配缺口（复核首个真实查询即暴露）**：学校端课表节次行为合并区间
+（第1-2节/第3-4节…/第11节），`periodNumberOf` 单节精确匹配对合并行永不命中 →
+`is-now` 行在真实课表上从不点亮（此前样本恰为单节掩盖）。修复：纯函数
+`periodRangeOf`（第N-M节/第N节/带时间后缀）+ `periodRangeContains` 区间包含判定，
+替换表格与 dayview 两处消费方；不可解析行头永不高亮（宁降级不误标）。
+③ **周次参数泄漏（周导航功能引入后更易触发）**：`syncOptionSeg` 只对称复位了
+学期泄漏，未复位周次——周导航单周重查后切成绩，weeks=13 被透传给成绩链路 →
+学校端按周过滤误判「没有找到相关记录」。补齐周次复位（切成绩 → weeks=all）。
+④ **快速空态标题残留（既有边缘）**：<240ms 的响应让骨架屏定时器被 aria-busy
+守卫放弃，标题残留上一查询类型；提交时同步落位标题。
+⑤ **复核结论（真实栈 + 移位时钟到第 3 节窗口）**：真实课表 18 chip/多课程格
+拆分/「第3-4节」整行 is-now + 5 chip 主色 inset 环（明暗两态截图入库，已裁除
+学号姓名行）/今天列高亮/教学周徽章「第 12 周 · 星期五 · 第3节进行中」；00:56
+真实深夜时段 is-now 诚实降级 0 行；周导航 第 12 周 → 下一周 → 第 13 周真实重查
+（URL/概览/runId 全同步，第 13 周查询无误导性高亮）；真实成绩（全部学期）
+21 门 / 加权平均 83.9 / 加权 GPA 3.39 / 修读学分 57.1 / 最高 98 / 不及格 0
+（0 门不出芯片）——**与页面表格独立反算逐项吻合**，且统计直接兼容学校原始表头
+（期末成绩列正则命中）。测试同步：periodRangeOf/periodRangeContains 钉进
+test_calendar_ui 教学周用例。全量 330 通过 + 6 跳过；凭据零落盘
+（快照/控制台工件已清除，仓库 grep 零残留）。资产版本：app.js v26 / sw.js v22。
+
+**回归测试 + 安全加固专项验收（2026-11-20，回归捕获 1 个 P1 + 三项加固）**：
+① **回归捕获 P1（真实栈才暴露）**：`scheduleMaxWeeks` 曾把 `terms` 当数组——真实
+`/api/v1/calendars/config` 返回按学期键的对象（`resolveTeachingContext` 早已是
+对象形状约定），静态预览 404 掩护了该假设，课表结果在真实后端整段渲染抛
+TypeError（色块/周导航全灭）。修复：抽纯函数 `maxTermWeeks(terms)`（对象形状 +
+容忍数组/缺 weeks/非对象项），测试以真实响应形状 fixture 钉死；**准则**：涉及
+公开 config 形状的代码必须在真实栈（compose 起 uvicorn）回归，静态预览只覆盖
+404 降级分支。② **CSP 拦截内联 style 的隐性回归修复**：行级联 `--row-i` 曾以内联
+style 属性发射，CSP `style-src 'self'` 在 nginx 后拦截（静态预览无 CSP 头测不出、
+级联静默退化同帧入场）——改 `data-row-i` 属性 + CSSOM `setProperty`（不受 CSP 限），
+真实栈实测行级联 0/20/40/60ms 正确阶梯；新增守卫测试禁止 JS 发射
+`style="`（app/admin/notice/brand 四文件断言）。③ **CSP 收紧**：主站
+`img-src` 去 `data:`（全站零 data URI，二维码 canvas 实时绘制）+ 新增
+`frame-src 'none'`（零 iframe；worker-src 刻意不动——其同管 Service Worker
+抓取）；Permissions-Policy 增补 `payment=() usb=()`；/jump/go 桥接段（已记录的
+内联哈希豁免）不动。curl 实测新头生效、真实栈浏览器控制台零 CSP 违规。
+测试同步：test_security.py 主站段 scoped 断言（img-src 'self' 无 data:、
+frame-src none）+ Permissions-Policy 五项锁定；test_frontend_csp.py 新增
+test_rendered_markup_has_no_inline_style_attributes；test_frontend_course_ux.py
+新增 maxTermWeeks 形状 fixture。全量 330 通过 + 6 跳过（docker）+ 本机 node
+用例复验通过。资产版本：app.js v24（style.css v132 不变）/ sw.js v20。
+
+**课表交互与成绩统计市场对齐专项验收（2026-11-20，ui-ux-pro-max + 同类产品基准）**：
+参考 WakeUp 课程表/超级课程表（课表交互）与成绩/GPA 助手类工具（统计能力）补齐四块，
+全部纯前端（零新接口/零后端改动/零新依赖）：
+① **课表课程色块 + 课程详情浮层**：课程名 FNV-1a 哈希 → 6 组既有强调色
+（`course-accent-0..5` 映射 ice/aqua/lilac/sage/mint/sand，浅深两套令牌自动切换，
+实测 5 门课铺开 4 色；djb2 首版分布不足已换 FNV-1a）——chip 为块级按钮
+（accent-soft 底 + 3px accent 左描边，min-height 44px、hover 门控、focus ring 主色），
+仅对「无成绩列 + 首列表头含节次」签名网格上色（includeAll 概况表不误染）；
+点击浮出 `#coursePopover`（非模态 role=dialog、字段化 教师/教室/周次/星期/节次 +
+复制按钮，Escape/外部点击关闭并恢复触发点焦点，aria-expanded 同步）；**关键坑**：
+textContent 对 `<br>` 元素返回空串，浮层解析与列头/节次标签必须读 innerHTML
+（内容已过 sanitize，parseCourseCell 内部再剥标签）；移动端 dayview 卡片从
+td 内 chip 复制同一 accent 类，切行后剥标签防开标签泄漏。
+② **成绩统计增强 + 分布图**：概览芯片扩为 已发布/加权平均(无学分列回退算术
+平均)/最高分/加权 GPA/修读学分(含未出分行)/不及格(仅计已发布数值)；新增
+`#gradeDistribution` 五档分布（90-100/80-89/70-79/60-69/<60，纯 CSS 直条 +
+数值直标 + role=img aria-label 摘要，<2 门不渲染；表格仍是完整可访问数据源）。
+③ **课表周次快捷切换**：结果头部 `#weekNav`「‹ 上一周 / 第 N 周 / 下一周 ›」，
+显示条件 = 课表 + 单值周次 + 密码仍在表单（重查复用既有提交管线，
+dispatchEvent(submit)，实测走完整骨架屏/进度/错误清理链路）；周界取公开校历
+学期周数（回退 20，且不超过下拉可表达的 20）；错误态/重置/返回查询均收起。
+④ **学号自动填充**：初始化从历史记录取最近学号填入（历史本就本地存学号，
+密码零存储），帮助文案如实标注「已自动填入上次查询的学号」，重置恢复默认。
+诚实护栏：is-now 行 × 色块叠加改主色 inset 环（行级微底被 chip 实底遮盖），
+两主题可见性待真实凭据课表端到端复核。纯函数（courseAccentIndex/
+splitCourseSegments/parseCourseCell/numericScoreValue/gradeStatsFromTable/
+scoreDistributionBuckets/weekNavStep）经 node 抽取测试覆盖
+（tests/test_frontend_course_ux.py 6 用例：容器契约/签名门控/守卫/样式令牌/
+双格式解析/加权统计与步进边界）。实测：无头 Chrome 注入双格式样本课表与
+成绩表——色块 8 chip/4 色、浮层字段与焦点往返（开启聚焦标题/按钮与 Escape
+关闭回焦 chip/aria-expanded 复位）、周导航改 weeks=7 触发全管线、分布图
+五档直标、学号自动填充；明暗两态截图（preview/light|dark-schedule-chips-1440、
+light-grades-distribution-1440、light-schedule-dayview-390）；1440/768/390/320
+四档无横向溢出；移动 dayview 今天列默认选中且卡片带课程色。compose 冒烟：
+index 200、/api/v1/status 信封 OK、style.css?v=132 与 app.js?v=22 新资产 200、
+同步 run 422 参数校验语义不变。全量 328 通过 + 6 跳过（docker 无 node 跳过
+2 个 node 用例，本机 venv 复验 6/6 通过）。资产版本：style.css v132 / app.js v22 /
+sw.js v18（style-admin.css 源未动，npm 连带重编译产物已还原）。
 
 **后台滚动频闪排查（2026-11-18，查询页频闪修复的延续）**：用户确认查询页改善后
 排查 admin 页，发现并修复两处：① **style-admin.css 版本键未随上轮 tech-grid 拆层

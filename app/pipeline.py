@@ -20,8 +20,8 @@ from .classifier import (classify_error, classify_empty_result, is_session_inval
 from .dependencies import DependencyHealth
 from .llm import LLMClient, LLMError
 from .prompts import GRADE_ANALYSIS_SYSTEM, grade_analysis_user
-from .render import (assemble, extract_session, format_grades, format_schedule,
-                     preprocess_grades, strip_login_note)
+from .render import (_safe_http_url, assemble, extract_session, format_grades,
+                     format_schedule, preprocess_grades, strip_login_note)
 from .runtime_metrics import RuntimeMetrics
 from .schema import WorkflowRequest
 from .trace import LOG, new_run_id
@@ -177,9 +177,12 @@ class Pipeline:
                                % str(login_body.get("error") or "凭据校验未通过"))
         jump = await self._post("/jump", {
             "session": session_info["session"], "json": "1"})
+        # 跳转链接只签发 http(s)：该值会被前端直接赋给 <a href>（免密 CTA），
+        # 上游异常值（javascript:/data:）在这里归空，由前端按「签发异常」降级；
+        # 与 render._login_note 的 markdown 路径同一校验单一来源
         return {
-            "login_url": str(jump.get("login_url") or ""),
-            "app_url": str(jump.get("app_url") or ""),
+            "login_url": _safe_http_url(jump.get("login_url")),
+            "app_url": _safe_http_url(jump.get("app_url")),
             "note": str(jump.get("note") or ""),
         }
 

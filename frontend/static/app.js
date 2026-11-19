@@ -92,6 +92,7 @@
     const form = document.getElementById("queryForm");
     const usernameInput = document.getElementById("username");
     const usernameError = document.getElementById("usernameError");
+    const usernameHelp = document.getElementById("usernameHelp");
     const passwordError = document.getElementById("passwordError");
     usernameInput.addEventListener("input", function () {
       this.value = this.value.replace(/\D/g, "").slice(0, 10);
@@ -520,6 +521,13 @@
       if (isSchedule && /^(all|recent:\d+)$/.test(semestersInput.value)) {
         semestersInput.value = "";
         semestersDropdown.sync();
+      }
+      // 周次仅课表可用：切到成绩时复位为全部周次，避免把课表周次过滤透传
+      // 给成绩链路（真实凭据复核发现：周导航单周重查后切成绩 → weeks=13
+      // 被一并提交 → 学校端按周过滤误判「没有找到相关记录」）
+      if (!isSchedule && weeksInput.value !== "all") {
+        weeksInput.value = "all";
+        weeksDropdown.sync();
       }
       if (!submitBtn.disabled) submitBtnText.textContent = queryButtonLabel();
     }
@@ -1346,9 +1354,27 @@
     }
 
     // 节次标签 → 节次序号（"第3节" → 3；无法解析返回 0）
-    function periodNumberOf(text) {
-      const match = /第(\d+)节/.exec(String(text || "").replace(/\s/g, ""));
-      return match ? Number(match[1]) : 0;
+    // 节次行头解析为「节次区间」：学校端会把相邻节次合并展示（第1-2节 /
+    // 第3-4节 …，也有单节 第11节）。进行中判定必须按区间包含（进行中的
+    // 第 3 节落在「第3-4节」行内），单节数值比较在真实数据上永不命中
+    // （2026-11-20 真实凭据复核发现的适配缺口，此前样本恰为单节未暴露）
+    function periodRangeOf(text) {
+      const clean = String(text || "").replace(/\s/g, "");
+      let match = /第(\d+)-(\d+)节/.exec(clean) || /第(\d+)~(\d+)节/.exec(clean);
+      if (match) {
+        const start = Number(match[1]);
+        const end = Number(match[2]);
+        if (start >= 1 && end >= start) return [start, end];
+      }
+      match = /第(\d+)节/.exec(clean);
+      if (match && Number(match[1]) >= 1) return [Number(match[1]), Number(match[1])];
+      return null;
+    }
+
+    // 区间包含判定：range 不可解析（null）时永假——解析不了的行头不做
+    // 进行中高亮，宁可降级不误标
+    function periodRangeContains(range, periodNumber) {
+      return !!range && periodNumber >= range[0] && periodNumber <= range[1];
     }
 
     function buildScheduleDayView(shell) {
@@ -1370,7 +1396,12 @@
           if (day < 0 || !period) return;
           const html = td.innerHTML.trim();
           if (!html || html === "&nbsp;") return;
-          byDay[day].push({ period: period, html: html });
+          // 课程色同步：桌面表格的 chip 已带课程强调色类，dayview 卡片沿用
+          // 同一课程同一颜色（读 chip 类而非重复哈希，保持单一事实）
+          const accentChip = td.querySelector("[class*='course-accent-']");
+          const accent = accentChip
+            ? (accentChip.className.match(/course-accent-\d+/) || [""])[0] : "";
+          byDay[day].push({ period: period, html: html, accent: accent });
         });
       });
 
@@ -1401,14 +1432,19 @@
           return;
         }
         items.forEach(function (item) {
-          // 单元格行内结构（已过 sanitize）：课程名 <br> 教师 <br> 教室 <br> 周次
+          // 单元格行内结构（已过 sanitize）：课程名 <br> 教师 <br> 教室 <br> 周次。
+          // chip 化后首行可能带 chip 开标签：切行后统一剥标签，textContent 赋值
+          // 保持纯文本，不回注任何标记
           const lines = item.html.split(/<br\s*\/?>/i)
-            .map(function (line) { return line.trim(); }).filter(Boolean);
+            .map(function (line) { return line.replace(/<[^>]+>/g, "").trim(); })
+            .filter(Boolean);
           const card = document.createElement("div");
           card.className = "schedule-day-card";
+          // 课程色同步：与桌面表格 chip 同一强调色（item.accent 由 td 内 chip 类读出）
+          if (item.accent) card.classList.add(item.accent);
           // 教学周上下文：当天视图里正在上的节次卡高亮（公开校历可解析时）
           if (calendarConfig && ctx && ctx.periodNumber &&
-              day === ctx.dayIdx && periodNumberOf(item.period) === ctx.periodNumber) {
+              day === ctx.dayIdx && periodRangeContains(periodRangeOf(item.period), ctx.periodNumber)) {
             card.classList.add("is-now");
           }
           const head = document.createElement("div");
@@ -1624,11 +1660,15 @@
               return;
             }
             const data = envelope.data || {};
-            if (!data.login_url) {
+            // 锚点 href 仅接受 http(s)：renew 的 login_url 虽经后端校验，
+            // 前端仍做同款门禁（纵深防御，与 renderInline 的 URL 白名单同款）
+            const safeLoginUrl = /^https?:\/\//i.test(String(data.login_url || ""))
+              ? String(data.login_url) : "";
+            if (!safeLoginUrl) {
               showRenewError("新链接签发异常，请重新发起查询");
               return;
             }
-            anchor.href = data.login_url;
+            anchor.href = safeLoginUrl;
             anchor.rel = "noopener";
             const noteText = data.note || "";
             const noteTtl = noteText.match(/(\d+)\s*秒内有效/);
@@ -1715,7 +1755,8 @@
         if (ctx.periodText) {
           table.querySelectorAll("tbody tr").forEach(function (tr) {
             const cells = tr.querySelectorAll("td");
-            if (cells.length && periodNumberOf(cells[0].textContent) === ctx.periodNumber) {
+            if (cells.length &&
+                periodRangeContains(periodRangeOf(cells[0].textContent), ctx.periodNumber)) {
               tr.classList.add("is-now");
             }
           });
@@ -1730,10 +1771,287 @@
       root.querySelectorAll("[data-width]").forEach(function (node) {
         node.style.width = node.dataset.width + "%";
       });
+      // 行级联延时（B4）：--row-i 经 CSSOM 落值，绕开 style-src 对内联
+      // style 属性的封锁；赋值幂等，历史回放重复渲染安全
+      root.querySelectorAll("[data-row-i]").forEach(function (node) {
+        node.style.setProperty("--row-i", node.dataset.rowI || "0");
+      });
       root.querySelectorAll(".table-shell--schedule").forEach(buildScheduleDayView);
       enhanceScheduleToday(root);
       enhanceLoginNote(root);
       enhanceDownloadCta(root);
+    }
+
+    // ---- 课程详情浮层：课表色块的点击详情（市场课表产品标配） ----
+    // 非模态浮层：字段化展示教师/教室/周次（桌面表格单元格文本是紧凑的
+    // 「名称（教师｜教室｜周次）」，浮层给出带标签的阅读视图 + 一键复制）；
+    // Escape/外部点击关闭并恢复焦点。移动端 dayview 卡片已完整展示同等信息，
+    // 浮层仅服务桌面表格。列头/节次从 DOM 表格上下文实时读取，不做冗余存储
+    const coursePopover = document.getElementById("coursePopover");
+    const coursePopoverTitle = document.getElementById("coursePopoverTitle");
+    const coursePopoverBody = document.getElementById("coursePopoverBody");
+    const coursePopoverCopy = document.getElementById("coursePopoverCopy");
+    const coursePopoverClose = document.getElementById("coursePopoverClose");
+    let coursePopoverTrigger = null;
+    let coursePopoverCopyText = "";
+
+    function coursePopoverIsOpen() {
+      return coursePopover && !coursePopover.classList.contains("hidden");
+    }
+
+    function closeCoursePopover(refocus) {
+      if (!coursePopoverIsOpen()) return;
+      coursePopover.classList.add("hidden");
+      coursePopover.style.top = "";
+      coursePopover.style.left = "";
+      if (coursePopoverTrigger) {
+        coursePopoverTrigger.setAttribute("aria-expanded", "false");
+        if (refocus) coursePopoverTrigger.focus();
+      }
+      coursePopoverTrigger = null;
+      coursePopoverCopyText = "";
+    }
+
+    function positionCoursePopover(trigger) {
+      // 先展示再测量（hidden 下尺寸为 0），翻转/夹取逻辑与下拉菜单同思路：
+      // 底部放不下向上翻，水平越界向内收，始终留视口安全边距
+      const rect = trigger.getBoundingClientRect();
+      const popH = coursePopover.offsetHeight;
+      const popW = Math.min(coursePopover.offsetWidth, window.innerWidth - 24);
+      const margin = 12;
+      let top = rect.bottom + 8;
+      if (top + popH + margin > window.innerHeight) {
+        top = Math.max(margin, rect.top - popH - 8);
+      }
+      let left = Math.max(margin, rect.left);
+      if (left + popW + margin > window.innerWidth) {
+        left = window.innerWidth - popW - margin;
+      }
+      coursePopover.style.top = Math.round(top) + "px";
+      coursePopover.style.left = Math.round(left) + "px";
+    }
+
+    function openCoursePopover(chip) {
+      const table = chip.closest("table");
+      const td = chip.closest("td");
+      const tr = chip.closest("tr");
+      if (!table || !td || !tr) return;
+      // 课程段解析吃 innerHTML（含 <br> 标记）：textContent 对 <br> 元素返回
+      // 空串，会把「名称/教师/教室/周次」拼成一团；内容来自已过 sanitize 的
+      // 渲染产物，parseCourseCell 内部再剥一次标签，不引入新注入面
+      const course = parseCourseCell(chip.innerHTML);
+      if (!course) return;
+      const stripTags = function (raw) {
+        return String(raw || "").replace(/<br\s*\/?>/gi, " ")
+          .replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      };
+      const headCells = Array.from(table.querySelectorAll("thead th"));
+      const dayLabel = headCells[td.cellIndex] ? stripTags(headCells[td.cellIndex].innerHTML) : "";
+      const periodLabel = tr.cells.length ? stripTags(tr.cells[0].innerHTML) : "";
+      coursePopoverTrigger = chip;
+      coursePopoverTitle.textContent = course.name || "课程详情";
+      function field(label, value) {
+        if (!value) return "";
+        return '<div class="course-popover-field"><span>' + escapeHtml(label) +
+          "</span><strong>" + escapeHtml(value) + "</strong></div>";
+      }
+      let body = field("星期", dayLabel) + field("节次", periodLabel) +
+        field("教师", course.teacher) + field("教室", course.room) +
+        field("周次", course.weeks);
+      (course.extras || []).forEach(function (extra) {
+        body += field("其他", extra);
+      });
+      coursePopoverBody.innerHTML =
+        body || '<p class="course-popover-hint">该课程暂无附加信息</p>';
+      coursePopoverCopyText = [
+        course.name, course.teacher, course.room, course.weeks,
+        dayLabel && dayLabel !== "节次" ? dayLabel : "",
+        periodLabel && periodLabel !== "节次" ? periodLabel : ""
+      ].filter(Boolean).join(" · ");
+      coursePopover.classList.remove("hidden");
+      positionCoursePopover(chip);
+      chip.setAttribute("aria-expanded", "true");
+      coursePopoverTitle.focus();
+    }
+
+    if (coursePopover) {
+      coursePopoverClose.addEventListener("click", function () {
+        closeCoursePopover(true);
+      });
+      coursePopoverCopy.addEventListener("click", function () {
+        if (!coursePopoverCopyText) return;
+        const done = function (ok) {
+          showToast(ok ? "success" : "error", ok ? "课程信息已复制" : "复制失败，请手动选择文本");
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(coursePopoverCopyText)
+            .then(function () { done(true); }, function () { done(false); });
+        } else {
+          // HTTP 环境兜底：与 runId 复制同一套 execCommand 降级
+          const helper = document.createElement("textarea");
+          helper.value = coursePopoverCopyText;
+          helper.setAttribute("readonly", "readonly");
+          helper.className = "sr-only";
+          document.body.appendChild(helper);
+          helper.select();
+          const ok = document.execCommand("copy");
+          helper.remove();
+          done(ok);
+        }
+      });
+      // 委托绑定：结果区重渲染不丢事件；按钮原生键盘语义（Enter/Space→click）
+      // 即完整键盘契约，无需额外 keydown 处理
+      resultHtml.addEventListener("click", function (event) {
+        const chip = event.target.closest ? event.target.closest(".course-chip") : null;
+        if (!chip) return;
+        event.stopPropagation();
+        if (coursePopoverTrigger === chip && coursePopoverIsOpen()) {
+          closeCoursePopover(false);
+          return;
+        }
+        openCoursePopover(chip);
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key !== "Escape" || !coursePopoverIsOpen()) return;
+        event.stopPropagation();
+        closeCoursePopover(true);
+      });
+      document.addEventListener("click", function (event) {
+        if (!coursePopoverIsOpen()) return;
+        if (coursePopover.contains(event.target) ||
+            (event.target.closest && event.target.closest(".course-chip"))) return;
+        closeCoursePopover(false);
+      });
+      window.addEventListener("resize", function () {
+        if (coursePopoverIsOpen() && coursePopoverTrigger) positionCoursePopover(coursePopoverTrigger);
+      }, { passive: true });
+    }
+
+    // ---- 课表周次快捷切换（WakeUp 式周导航） ----
+    // 结果头部「‹ 上一周 / 下一周 ›」：密码仍在表单内时才显示（重查走既有提交
+    // 管线，不新增上游调用）；周界取公开校历学期周数，缺失回退 20，且不超过
+    // 周次下拉可表达的 20 周（超过时触发器文案无法回显）
+    const weekNav = document.getElementById("weekNav");
+    const WEEK_NAV_FALLBACK_MAX = 20;
+
+    // 学期周数取最大值：terms 为「学期 → {monday, weeks}」对象（resolveTeachingContext
+    // 同一形状约定）；容忍数组形状与缺 weeks/非对象项，均返回 0 由调用方回退
+    function maxTermWeeks(terms) {
+      const map = terms && typeof terms === "object" ? terms : {};
+      let weeks = 0;
+      Object.keys(map).forEach(function (key) {
+        const term = map[key];
+        if (!term || typeof term !== "object") return;
+        const count = parseInt(term.weeks, 10);
+        if (Number.isFinite(count) && count > weeks) weeks = count;
+      });
+      return weeks;
+    }
+
+    function scheduleMaxWeeks() {
+      if (!calendarConfig) return WEEK_NAV_FALLBACK_MAX;
+      return Math.min(maxTermWeeks(calendarConfig.terms) || WEEK_NAV_FALLBACK_MAX,
+        WEEK_NAV_FALLBACK_MAX);
+    }
+
+    // 周次步进纯函数：目标周越界（<1 或 > maxWeeks）返回 null，调用方隐藏对应方向
+    function weekNavStep(currentWeek, maxWeeks, delta) {
+      const current = parseInt(String(currentWeek), 10);
+      if (!Number.isFinite(current) || current < 1) return null;
+      const target = current + delta;
+      if (target < 1 || target > maxWeeks) return null;
+      return target;
+    }
+
+    function updateWeekNav() {
+      if (!weekNav) return;
+      const singleWeek = resultContext.option === "课表" &&
+        /^\d+$/.test(String(resultContext.weeks)) &&
+        passwordInput.value.length > 0;
+      if (!singleWeek) {
+        weekNav.classList.add("hidden");
+        weekNav.innerHTML = "";
+        return;
+      }
+      const current = parseInt(String(resultContext.weeks), 10);
+      const maxWeeks = scheduleMaxWeeks();
+      const prev = weekNavStep(current, maxWeeks, -1);
+      const next = weekNavStep(current, maxWeeks, 1);
+      let html =
+        (prev !== null
+          ? '<button type="button" class="btn btn-ghost btn-sm week-nav-btn" data-week-delta="-1" aria-label="查看第 ' + prev + ' 周">‹ 上一周</button>'
+          : '<span class="week-nav-spacer" aria-hidden="true"></span>') +
+        '<span class="week-nav-label" aria-live="polite">第 ' + current + " 周</span>" +
+        (next !== null
+          ? '<button type="button" class="btn btn-ghost btn-sm week-nav-btn" data-week-delta="1" aria-label="查看第 ' + next + ' 周">下一周 ›</button>'
+          : '<span class="week-nav-spacer" aria-hidden="true"></span>');
+      weekNav.innerHTML = html;
+      weekNav.classList.remove("hidden");
+    }
+
+    function hideWeekNav() {
+      if (!weekNav) return;
+      weekNav.classList.add("hidden");
+      weekNav.innerHTML = "";
+    }
+
+    if (weekNav) {
+      weekNav.addEventListener("click", function (event) {
+        const btn = event.target.closest ? event.target.closest(".week-nav-btn") : null;
+        if (!btn) return;
+        const target = weekNavStep(resultContext.weeks, scheduleMaxWeeks(),
+          parseInt(btn.getAttribute("data-week-delta"), 10));
+        if (target === null) return;
+        weeksInput.value = String(target);
+        weeksDropdown.sync();
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+      });
+    }
+
+    // ---- 分数分布（市场成绩工具标配）：纯 CSS 直条 + 数值直标 ----
+    // 完整成绩表仍是可访问数据源（WCAG data-table）；<2 门不渲染（单门无分布意义）。
+    // 图表区 role="img" + aria-label 摘要（延续后台趋势图先例），数值同时可见直标
+    function renderGradeDistribution(markdown) {
+      const box = document.getElementById("gradeDistribution");
+      if (!box) return;
+      const stats = gradeStatsFromTable(parseResultTable(markdown));
+      if (stats.published < 2) {
+        box.classList.add("hidden");
+        box.innerHTML = "";
+        return;
+      }
+      const buckets = scoreDistributionBuckets(stats.scores);
+      const maxCount = Math.max.apply(null, buckets.map(function (bucket) {
+        return bucket.count;
+      }));
+      const rows = buckets.map(function (bucket) {
+        const pct = maxCount ? Math.round((bucket.count / maxCount) * 100) : 0;
+        return '<div class="grade-dist-row">' +
+          '<span class="grade-dist-label">' + escapeHtml(bucket.label) + "</span>" +
+          '<span class="grade-dist-track"><i class="grade-dist-fill" data-width="' + pct + '"></i></span>' +
+          '<span class="grade-dist-value">' + bucket.count + " 门</span>" +
+          "</div>";
+      }).join("");
+      const summary = buckets.map(function (bucket) {
+        return bucket.label + " " + bucket.count + " 门";
+      }).join("，");
+      box.innerHTML =
+        '<p class="grade-dist-title">' + stats.published + " 门已发布成绩分布</p>" +
+        '<div class="grade-dist-chart" role="img" aria-label="分数分布：' + escapeHtml(summary) + '">' +
+        rows + "</div>";
+      box.classList.remove("hidden");
+      // data-width 由 applyRenderedElementStyles 统一落宽度；此处手动触发一次，
+      // 覆盖不经该管线的调用点
+      box.querySelectorAll("[data-width]").forEach(function (node) {
+        node.style.width = node.dataset.width + "%";
+      });
+    }
+
+    function hideGradeDistribution() {
+      const box = document.getElementById("gradeDistribution");
+      if (!box) return;
+      box.classList.add("hidden");
+      box.innerHTML = "";
     }
 
     function renderMarkdown(text) {
@@ -1843,6 +2161,22 @@
               }
               return '<td data-label="' + label + '" class="' + semanticClasses.join(" ") + '">' + renderInline(cell) + "</td>";
             }
+            // 课表网格签名：无成绩列且首列表头含「节次」。只对真实课表上色块，
+            // includeAll 等无成绩列的概况表不做课程 chip（table-shell--schedule
+            // 类名维持原判定不变，仅色块逻辑加签名门控）
+            const isScheduleGrid = scoreIdx === -1 &&
+              (headers[0] || "").indexOf("节次") !== -1;
+            function renderScheduleBodyCell(cell, colIdx) {
+              const label = escapeHtml(rawHeaders[colIdx] || "");
+              const chips = splitCourseSegments(cell).map(function (segment) {
+                const course = parseCourseCell(segment);
+                const accent = course && course.name ? courseAccentIndex(course.name) : 0;
+                return '<button type="button" class="course-chip course-accent-' + accent +
+                  '" aria-haspopup="dialog" aria-expanded="false">' +
+                  renderInline(segment) + "</button>";
+              }).join("");
+              return '<td data-label="' + label + '">' + chips + "</td>";
+            }
             const tableClass = scoreIdx !== -1 ? "table-shell table-shell--grades" : "table-shell table-shell--schedule";
             html.push('<div class="' + tableClass + '"><table aria-label="查询结果表格"><thead><tr>');
             cells(rows[0]).forEach(function (cell) {
@@ -1852,9 +2186,15 @@
             if (rows.length > 2) {
               html.push("<tbody>");
               rows.slice(2).forEach(function (row, rowIdx) {
-                html.push('<tr style="--row-i:' + rowIdx + '">');
+                // 行级联序号走 data 属性：CSP style-src 'self' 会拦内联 style
+                // 属性（--row-i 曾因此在 nginx 后静默失效），CSSOM 注入不受限
+                html.push('<tr data-row-i="' + rowIdx + '">');
                 cells(row).forEach(function (cell, colIdx) {
-                  html.push(decorateCell(cell, colIdx));
+                  if (isScheduleGrid && colIdx > 0 && cell.trim()) {
+                    html.push(renderScheduleBodyCell(cell, colIdx));
+                  } else {
+                    html.push(decorateCell(cell, colIdx));
+                  }
                 });
                 html.push("</tr>");
               });
@@ -2039,25 +2379,176 @@
       return null;
     }
 
-    function gradeOverviewFacts(text) {
-      const table = parseResultTable(text);
-      if (!table) return [];
-      const scoreIdx = table.headers.findIndex(function (header) {
+    // ---- 课程/成绩统计纯函数（node 抽取测试覆盖，不依赖 DOM） ----
+
+    // 课程名稳定哈希 → 0..5 强调色索引（FNV-1a 实测对中文课程名分布
+    // 显著优于 djb2，5 门课可铺开 4+ 种色）：同一课程跨刷新/学期恒定同色。
+    // 颜色只作区分辅助，课程名文本始终可见（WCAG color-not-only）
+    function courseAccentIndex(name) {
+      const text = String(name || "").trim();
+      if (!text) return 0;
+      let hash = 0x811c9dc5;
+      for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+      }
+      hash ^= hash >>> 13;
+      return (hash >>> 0) % 6;
+    }
+
+    // 课表单元格拆课程段：A 格式（学校 output，<br> 分行）整格一段；
+    // B 格式（rows 回退，「课程名（教师｜教室｜周次）」）按「） / 」拆多段——
+    // 不裸拆 " / "，避免误切「1-3/5-8周」这类周次内嵌斜杠
+    function splitCourseSegments(rawCell) {
+      const text = String(rawCell || "").replace(/\r\n/g, "\n").trim();
+      if (!text) return [];
+      if (text.indexOf("（") === -1 || text.indexOf("｜") === -1) {
+        return [text];
+      }
+      const parts = text.split(/）\s*\/\s*/);
+      if (parts.length === 1) return [text];
+      return parts.map(function (part, idx) {
+        return idx === parts.length - 1 ? part : part + "）";
+      }).filter(function (part) { return part.trim(); });
+    }
+
+    // 单段课程解析：字段行按上游固定顺序落位（render.py _cell_text 与学校
+    // output 均为 教师→教室→周次，缺项缺前端）；周次行先按语义定位（含周/
+    // 星期/数字-数字 且短于 25 字，防教师名「周老师」误判），剩余行按序
+    // 归 教师/教室，落位不了的保留进 extras，浮层如实展示不冒充字段
+    function parseCourseCell(segment) {
+      const text = String(segment || "").replace(/<br\s*\/?>/gi, "\n").trim();
+      if (!text) return null;
+      const course = { name: "", teacher: "", room: "", weeks: "", extras: [] };
+      const weekRe = /\d+(\s*-\s*\d+)?\s*周|星期[一二三四五六日天]/;
+      const paren = text.match(/^([\s\S]+?)（([^）]*)）\s*$/);
+      let fields = null;
+      if (paren) {
+        course.name = paren[1].replace(/<[^>]+>/g, " ").trim();
+        fields = paren[2].split("｜").map(function (field) {
+          return field.replace(/<[^>]+>/g, " ").trim();
+        }).filter(Boolean);
+      } else {
+        fields = text.split("\n").map(function (line) {
+          return line.replace(/<[^>]+>/g, "").trim();
+        }).filter(Boolean);
+        if (!fields.length) return null;
+        course.name = fields.shift();
+      }
+      const weekIdx = fields.findIndex(function (field) {
+        return weekRe.test(field) && field.length <= 24;
+      });
+      if (weekIdx !== -1) course.weeks = fields.splice(weekIdx, 1)[0];
+      if (fields.length > 1) {
+        course.teacher = fields[0];
+        course.room = fields[1];
+        fields.slice(2).forEach(function (field) { course.extras.push(field); });
+      } else if (fields.length === 1) {
+        const only = fields[0];
+        if (/室|楼|馆|厅|区|房|场|球|[A-Za-z]{0,2}\d{2,}/.test(only)) course.room = only;
+        else course.teacher = only;
+      }
+      return course;
+    }
+
+    // 数值提取：与成绩表既有语义一致，只认已发布数值（--/未发布 → null）
+    function numericScoreValue(raw) {
+      const text = String(raw || "").replace(/<br\s*\/?>/gi, " ").trim();
+      if (!text || text === "--" || text === "—" || /未发布|暂无成绩/.test(text)) return null;
+      const value = parseFloat(text.replace(/[^\d.]/g, ""));
+      return Number.isFinite(value) ? value : null;
+    }
+
+    // 成绩统计：加权平均/加权 GPA/修读学分/不及格门数。
+    // 学分列缺失 → 加权项不出现（诚实降级）；修读学分含未出分行；
+    // 不及格只数已发布数值成绩（未发布不计入，避免误导）
+    function gradeStatsFromTable(table) {
+      const stats = {
+        published: 0, scores: [], simpleAvg: null, weightedAvg: null,
+        maxScore: null, weightedGpa: null, credits: null, failed: 0
+      };
+      if (!table) return stats;
+      const headers = table.headers || [];
+      const scoreIdx = headers.findIndex(function (header) {
         return /成绩|分数|score/i.test(header);
       });
-      if (scoreIdx === -1) return [];
-      const scores = table.rows.map(function (row) {
-        const raw = String(row[scoreIdx] || "").replace(/<br\s*\/?>/gi, " ");
-        const value = parseFloat(raw.replace(/[^\d.]/g, ""));
-        return Number.isFinite(value) ? value : null;
-      }).filter(function (value) { return value !== null; });
-      if (!scores.length) return [];
-      const average = scores.reduce(function (sum, value) { return sum + value; }, 0) / scores.length;
-      return [
-        { label: "已发布", value: scores.length + " 门" },
-        { label: "平均分", value: average.toFixed(1) },
-        { label: "最高分", value: Math.max.apply(null, scores).toFixed(0) }
+      if (scoreIdx === -1) return stats;
+      const creditIdx = headers.findIndex(function (header) {
+        return /学分|credit/i.test(header);
+      });
+      const gpaIdx = headers.findIndex(function (header) {
+        return /gpa/i.test(header);
+      });
+      let sumScoreCredit = 0, sumCreditScored = 0;
+      let sumGpaCredit = 0, sumGpaCreditBase = 0, sumCreditAll = 0;
+      table.rows.forEach(function (row) {
+        const score = numericScoreValue(row[scoreIdx]);
+        const credit = creditIdx === -1 ? null : numericScoreValue(row[creditIdx]);
+        const gpa = gpaIdx === -1 ? null : numericScoreValue(row[gpaIdx]);
+        if (credit !== null) sumCreditAll += credit;
+        if (score === null) return;
+        stats.published++;
+        stats.scores.push(score);
+        if (stats.maxScore === null || score > stats.maxScore) stats.maxScore = score;
+        if (score < 60) stats.failed++;
+        if (credit !== null) {
+          sumScoreCredit += score * credit;
+          sumCreditScored += credit;
+          if (gpa !== null) {
+            sumGpaCredit += gpa * credit;
+            sumGpaCreditBase += credit;
+          }
+        }
+      });
+      if (!stats.published) return stats;
+      stats.simpleAvg = stats.scores.reduce(function (sum, value) {
+        return sum + value;
+      }, 0) / stats.published;
+      if (sumCreditScored > 0) stats.weightedAvg = sumScoreCredit / sumCreditScored;
+      if (sumGpaCreditBase > 0) stats.weightedGpa = sumGpaCredit / sumGpaCreditBase;
+      if (sumCreditAll > 0) stats.credits = sumCreditAll;
+      return stats;
+    }
+
+    // 分数分布五档（成绩工具类产品惯例）；数值直标由渲染层补
+    function scoreDistributionBuckets(scores) {
+      const buckets = [
+        { label: "90-100", count: 0 },
+        { label: "80-89", count: 0 },
+        { label: "70-79", count: 0 },
+        { label: "60-69", count: 0 },
+        { label: "60 以下", count: 0 }
       ];
+      (scores || []).forEach(function (score) {
+        if (score >= 90) buckets[0].count++;
+        else if (score >= 80) buckets[1].count++;
+        else if (score >= 70) buckets[2].count++;
+        else if (score >= 60) buckets[3].count++;
+        else buckets[4].count++;
+      });
+      return buckets;
+    }
+
+    function gradeOverviewFacts(text) {
+      const stats = gradeStatsFromTable(parseResultTable(text));
+      if (!stats.published) return [];
+      const facts = [{ label: "已发布", value: stats.published + " 门" }];
+      if (stats.weightedAvg !== null) {
+        facts.push({ label: "加权平均", value: stats.weightedAvg.toFixed(1) });
+      } else {
+        facts.push({ label: "平均分", value: stats.simpleAvg.toFixed(1) });
+      }
+      facts.push({ label: "最高分", value: stats.maxScore.toFixed(0) });
+      if (stats.weightedGpa !== null) {
+        facts.push({ label: "加权 GPA", value: stats.weightedGpa.toFixed(2) });
+      }
+      if (stats.credits !== null) {
+        facts.push({ label: "修读学分", value: String(Number(stats.credits.toFixed(1))) });
+      }
+      if (stats.failed > 0) {
+        facts.push({ label: "不及格", value: stats.failed + " 门" });
+      }
+      return facts;
     }
 
     function renderResultOverview(state, kicker, title, description, facts) {
@@ -2101,6 +2592,9 @@
     }
 
     function renderStateOverview(kind, title, description) {
+      // 状态卡/失败态不展示成绩分布与周导航（二者只属于成功结果区）
+      hideGradeDistribution();
+      hideWeekNav();
       renderResultOverview(
         kind === "error" ? "error" : "info",
         resultContext.option ? resultContext.option + "查询" : "查询结果",
@@ -2234,6 +2728,15 @@
           : "课程安排已整理完成，可在下方查看完整课表。",
         facts
       );
+      // 概览后置区按查询类型切换：成绩 → 分布图（周导航收起）；
+      // 课表 → 周导航（分布图收起）。两个容器互斥，避免同一卡内双焦点区
+      if (option === "成绩") {
+        renderGradeDistribution(markdown);
+        hideWeekNav();
+      } else {
+        hideGradeDistribution();
+        updateWeekNav();
+      }
       return renderMarkdown(markdown);
     }
 
@@ -2378,6 +2881,9 @@
         semesters: payload.semesters || "",
         weeks: payload.weeks
       };
+      // 标题同步落位：240ms 骨架屏定时器在快速响应（<240ms，如学校端秒回
+      // 空记录）会被 aria-busy 守卫放弃，标题曾残留上一查询类型
+      resultTitle.textContent = payload.option + "查询结果";
 
       payload.username = String(payload.username);
 
@@ -2388,6 +2894,8 @@
       setButtonLoading(true);
       hideOfflineBar();
       hidePdfAction();
+      hideGradeDistribution();
+      hideWeekNav();
       clearLockTimer();
       clearTimeout(resultTimer);
       // 同步装载标记：240ms 骨架屏定时器据此判断「仍在装载」——若结果先于
@@ -2676,6 +3184,9 @@
       statusBox.classList.add("hidden");
       hideOfflineBar();
       hidePdfAction();
+      hideGradeDistribution();
+      hideWeekNav();
+      usernameHelp.textContent = "与学校统一身份认证账号一致";
     });
 
     document.getElementById("backToQuery").addEventListener("click", function () {
@@ -2687,6 +3198,8 @@
       statusBox.classList.add("hidden");
       hideOfflineBar();
       hidePdfAction();
+      hideGradeDistribution();
+      hideWeekNav();
       window.scrollTo(0, 0);
       usernameInput.focus({ preventScroll: true });
     });
@@ -2768,6 +3281,15 @@
       qrStatus: document.getElementById("calendarQrStatus")
     };
     var calendarState = { state: "", feedUrl: "", verifiedToken: "", semester: "" };
+
+    // 订阅地址出口门禁：只接受服务端签发的 /cal/ 相对路径与 http(s)/webcal
+    // 绝对地址，其他一律归空。feedUrl 是 webcal 唤起、外链托管、.ics 下载、
+    // 复制文本的共同来源（calendarGuideOpen/Download/Actions），在赋值点
+    // 统一过滤即可覆盖全部消费方，防上游异常值进入跳转链路
+    function calendarSafeFeedUrl(raw) {
+      var url = String(raw || "").trim();
+      return /^\/cal\/|^https?:\/\/|^webcal:\/\//i.test(url) ? url : "";
+    }
     var calendarFocus = null;
     // 学期下拉：直接复用首页查询的同一份学期选项（克隆菜单项，避免两处维护）
     function syncCalendarSemesterOptions() {
@@ -2992,7 +3514,7 @@
 
     function calendarApply(data) {
       calendarState.state = data.state || "";
-      calendarState.feedUrl = data.feed_url || "";
+      calendarState.feedUrl = calendarSafeFeedUrl(data.feed_url);
       calendarState.semester = data.semester || calendarState.semester;
       calendarState.refreshInterval = data.refresh_interval;
       calendarState.lastRefreshAt = data.last_refresh_at;
@@ -3017,7 +3539,7 @@
       try {
         var data = await calendarRequest("/api/v1/calendars", payload);
         calendarState.state = "active";
-        calendarState.feedUrl = data.feed_url || "";
+        calendarState.feedUrl = calendarSafeFeedUrl(data.feed_url);
         calendarState.semester = data.semester || payload.semester;
         calendarState.refreshInterval = data.refresh_interval;
         calendarRender();
@@ -3040,7 +3562,7 @@
       if (!window.confirm("轮换后旧订阅地址立即失效，需要在日历软件中重新添加。继续？")) return;
       try {
         var data = await calendarRequest("/api/v1/calendars/rotate", payload);
-        calendarState.feedUrl = data.feed_url || "";
+        calendarState.feedUrl = calendarSafeFeedUrl(data.feed_url);
         calendarUrlVisible = false;     // 新地址仍先掩码展示，避免就地暴露长期密钥
         calendarRender();
         calendarEls.state.textContent = "订阅地址已轮换：旧地址立即失效，请在日历软件中重新添加";
@@ -3523,6 +4045,22 @@
     renderHistorySelect();
     restoreUrlParams();
     syncBackToTopVisibility();
+    // 学号自动填充：与历史记录同粒度（本地本就存学号），只填学号、绝不存密码；
+    // URL 参数优先（restoreUrlParams 已处理），用户已输入时绝不覆盖。
+    // 提示文案如实标注来源，重置按钮恢复默认文案
+    (function autofillLastUsername() {
+      if (usernameInput.value || !usernameHelp) return;
+      const records = pruneExpiredHistory();
+      if (!records.length) return;
+      let latest = records[0];
+      records.forEach(function (record) {
+        if ((record.savedAt || 0) > (latest.savedAt || 0)) latest = record;
+      });
+      const lastUsername = String(latest.username || "");
+      if (!/^\d{6,12}$/.test(lastUsername)) return;
+      usernameInput.value = lastUsername;
+      usernameHelp.textContent = "已自动填入上次查询的学号，可直接修改或清空";
+    })();
     // PWA：注册 Service Worker（离线兜底 + 可安装）；仅安全上下文生效。
     // 三重防御：属性缺失（http 不安全上下文）、register 缺失（部分内置 WebView
     // 暴露残缺对象）、register 拒绝 —— 任一情况都静默降级，绝不阻断初始化

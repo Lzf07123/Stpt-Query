@@ -117,3 +117,40 @@ def test_renew_logs_event_without_password(monkeypatch):
     assert renew_logs[0]["username"] == "2023000001"
     joined = repr(renew_logs)
     assert "secret-pw" not in joined
+
+
+def test_renew_jump_link_never_signs_unsafe_url_schemes(monkeypatch):
+    """pipeline.renew_jump_link 只签发 http(s) 跳转链接（安全加固 R2）。
+
+    该值会被前端直接赋给 <a href>（免密 CTA）：上游响应若返回
+    javascript:/data: 等异常 scheme，必须在 pipeline 层归空，
+    由前端按「签发异常」降级——与 render._login_note 的 markdown
+    路径共用同一 _safe_http_url 校验来源。
+    """
+    import asyncio
+
+    from app.pipeline import Pipeline
+
+    pipe = object.__new__(Pipeline)
+
+    async def fake_post(path, payload):
+        if path == "/login":
+            return {"session": "S-1", "username": "2023000001"}
+        return {"login_url": "javascript:alert(1)",
+                "app_url": "data:text/html;base64,PHNjcmlwdD4=",
+                "note": "跳转码 60 秒内有效"}
+
+    monkeypatch.setattr(pipe, "_post", fake_post)
+    result = asyncio.run(pipe.renew_jump_link("2023000001", "pw"))
+    assert result["login_url"] == "" and result["app_url"] == ""
+    assert result["note"] == "跳转码 60 秒内有效"
+
+    async def safe_post(path, payload):
+        if path == "/login":
+            return {"session": "S-1"}
+        return {"login_url": "https://school.example.edu/jump/go?code=x",
+                "app_url": "", "note": ""}
+
+    monkeypatch.setattr(pipe, "_post", safe_post)
+    ok = asyncio.run(pipe.renew_jump_link("2023000001", "pw"))
+    assert ok["login_url"] == "https://school.example.edu/jump/go?code=x"
