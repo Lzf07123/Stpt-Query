@@ -208,3 +208,59 @@ def test_grade_stats_and_distribution_pure_functions(tmp_path):
         encoding="utf-8")
     result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+# ---------- 周次聚焦区分（是否是该周次课程） ----------
+
+def test_schedule_week_focus_static_contract():
+    """非目标周课程置灰的静态契约：判定函数、后处理挂载、降级路径、样式。"""
+    script = _read("frontend/static/app.js")
+    # 判定纯函数与目标周解析（单值周查询 / 全部周次下的本周）
+    assert "function courseWeeksCover(" in script
+    assert "function scheduleFocusWeek(" in script
+    assert "function enhanceScheduleWeekFocus(" in script
+    # 挂载点：渲染管线 + 校历晚到补刷（全部周次视图依赖校历解析本周）
+    assert "enhanceScheduleWeekFocus(root);" in script
+    assert "enhanceScheduleWeekFocus(resultHtml);" in script
+    # 诚实降级：解析不了的周次文本不误标（与 periodRangeContains 同哲学）
+    assert "cover === false" in script
+    css = _read("frontend/static/style.css")
+    assert ".course-chip.course-off" in css
+    assert ".schedule-day-card.course-off" in css
+    assert ".schedule-weeklegend" in css
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="需要 node 才能执行前端片段")
+def test_course_weeks_cover_pure_function(tmp_path):
+    """courseWeeksCover：区间/单值/单双修饰/内嵌斜杠/降级全覆盖。"""
+    script = _read("frontend/static/app.js")
+    cover = _extract_function(script, "courseWeeksCover(text, week)")
+    harness = tmp_path / "weeks.mjs"
+    harness.write_text(
+        cover + "\n"
+        "const assert = (ok, msg) => { if (!ok) { console.error(msg); process.exit(1); } };\n"
+        "// _fmt_weeks 渲染产物：顿号分隔区间与单值\n"
+        "assert(courseWeeksCover('1-8、10、13-18周', 10) === true, '单值段命中');\n"
+        "assert(courseWeeksCover('1-8、10、13-18周', 1) === true, '区间首周');\n"
+        "assert(courseWeeksCover('1-8、10、13-18周', 8) === true, '区间末周');\n"
+        "assert(courseWeeksCover('1-8、10、13-18周', 9) === false, '区间外不命中');\n"
+        "assert(courseWeeksCover('1-8、10、13-18周', 12) === false, '段间隙不命中');\n"
+        "// 单/双修饰作用于全部段（与 _fmt_weeks marker 拼接语义一致）\n"
+        "assert(courseWeeksCover('1-17单周', 3) === true && courseWeeksCover('1-17单周', 4) === false, '单周奇偶');\n"
+        "assert(courseWeeksCover('1-16双周', 8) === true && courseWeeksCover('1-16双周', 7) === false, '双周奇偶');\n"
+        "// 学校 output 原始括号式与内嵌斜杠\n"
+        "assert(courseWeeksCover('1-8周(单)', 5) === true && courseWeeksCover('1-8周(单)', 6) === false, '括号式单周');\n"
+        "assert(courseWeeksCover('1-3/5-8周', 6) === true && courseWeeksCover('1-3/5-8周', 4) === false, '内嵌斜杠区间');\n"
+        "// 顿号单值列表\n"
+        "assert(courseWeeksCover('9、13周', 13) === true && courseWeeksCover('9、13周', 10) === false, '单值列表');\n"
+        "// 区间已摘除不误读成单值：1-8 命中 1/8，不因拆成 1、8 而误判其它\n"
+        "assert(courseWeeksCover('1-8周', 1) === true && courseWeeksCover('1-8周', 8) === true && courseWeeksCover('1-8周', 18) === false, '区间摘除');\n"
+        "// 诚实降级：无数字周次（星期文本/教师名）返回 null，调用方不标记\n"
+        "assert(courseWeeksCover('星期一', 5) === null, '星期文本降级');\n"
+        "assert(courseWeeksCover('周老师', 5) === null, '无数字降级');\n"
+        "assert(courseWeeksCover('', 5) === null, '空文本降级');\n"
+        "assert(courseWeeksCover('1-8周', 99) === null, '目标周越界降级');\n"
+        "console.log('ok');\n",
+        encoding="utf-8")
+    result = subprocess.run(["node", str(harness)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or result.stdout

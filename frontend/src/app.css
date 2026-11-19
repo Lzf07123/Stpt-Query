@@ -2085,6 +2085,39 @@
     box-shadow: inset 0 0 0 2px var(--eduquery-primary);
   }
 
+  /* 非目标周课程（周次聚焦区分）：置灰弱化但保留可见可点——全部周次聚合
+     视图下「是否是该周次课程」一眼可辨。只动透明度与饱和度，accent 左描边
+     保留课程色索引可辨识性；hover/focus 部分恢复提示可点开详情 */
+  .markdown-body .table-shell--schedule .course-chip.course-off {
+    filter: grayscale(0.55);
+    opacity: 0.45;
+  }
+
+  .markdown-body .table-shell--schedule .course-chip.course-off:focus-visible {
+    filter: grayscale(0.1);
+    opacity: 0.85;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .markdown-body .table-shell--schedule .course-chip.course-off:hover {
+      filter: grayscale(0.1);
+      opacity: 0.85;
+    }
+  }
+
+  .schedule-day-card.course-off {
+    filter: grayscale(0.5);
+    opacity: 0.55;
+  }
+
+  /* 周次聚焦图例：JS 仅在确有置灰课程时插入（无置灰不占版面），
+     小字弱化不抢课表信息层级 */
+  .schedule-weeklegend {
+    color: var(--eduquery-muted);
+    font-size: 12px;
+    margin: 2px 0 6px;
+  }
+
   /* 课程详情浮层：非模态、fixed 定位（坐标由 JS 按触发块实时计算）；
      z 65 位于悬浮详情(z-60)之上、模态(z-70)之下 */
   .course-popover {

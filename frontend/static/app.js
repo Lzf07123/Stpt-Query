@@ -1353,6 +1353,44 @@
       return false;
     }
 
+    // 课程周次文本是否覆盖某周次（「是否是该周次课程」判定，供置灰区分）。
+    // 文本为渲染端 _fmt_weeks 产物：「1-8、10、13-18周」「1-17单周」「9、13周」
+    // 「1-8周(单)」（学校 output 原始括号式）。单/双修饰作用于全部段（与
+    // _fmt_weeks 的 marker 拼接语义一致）。返回 true/false/null：null = 文本
+    // 无数字周次（如「星期一」），解析不了宁可降级不误标——与
+    // periodRangeContains 同哲学
+    function courseWeeksCover(text, week) {
+      const clean = String(text || "").replace(/\s/g, "");
+      const w = Number(week);
+      if (!Number.isFinite(w) || w < 1 || w > 30) return null;
+      let marker = 0; // 0=无修饰 1=单(奇数周) 2=双(偶数周)
+      if (/单/.test(clean)) marker = 1;
+      else if (/双/.test(clean)) marker = 2;
+      const ranges = [];
+      let match;
+      const rangeRe = /(\d{1,2})\s*[-~至到]\s*(\d{1,2})/g;
+      while ((match = rangeRe.exec(clean)) !== null) {
+        const a = Number(match[1]);
+        const b = Number(match[2]);
+        if (a >= 1 && b >= a && b <= 30) ranges.push([a, b]);
+      }
+      // 独立单值：先摘除区间再扫，避免「1-8」被误读成 1、8 两个单值
+      const rest = clean.replace(rangeRe, "、");
+      const singles = [];
+      const singleRe = /\d{1,2}/g;
+      while ((match = singleRe.exec(rest)) !== null) {
+        const v = Number(match[0]);
+        if (v >= 1 && v <= 30) singles.push(v);
+      }
+      if (!ranges.length && !singles.length) return null;
+      let cover = singles.indexOf(w) !== -1 ||
+        ranges.some(function (r) { return w >= r[0] && w <= r[1]; });
+      if (!cover) return false;
+      if (marker === 1) return w % 2 === 1;
+      if (marker === 2) return w % 2 === 0;
+      return true;
+    }
+
     // 节次标签 → 节次序号（"第3节" → 3；无法解析返回 0）
     // 节次行头解析为「节次区间」：学校端会把相邻节次合并展示（第1-2节 /
     // 第3-4节 …，也有单节 第11节）。进行中判定必须按区间包含（进行中的
@@ -1764,6 +1802,74 @@
       });
     }
 
+    // 课表周次聚焦：区分「是否是该周次课程」——非目标周的课程置灰（保留可见
+    // 可点，浮层仍可查看完整周次），并在课表上方给出图例说明。
+    // 目标周 = 单值周查询（查看第 N 周）或全部周次下的本周（公开校历可解析时）；
+    // 校历缺失 / 区间混合查询不区分（诚实降级，与 is-now 门控同哲学）。
+    // 全幂等：先清旧标记与图例再按当前上下文重建，历史回放/重渲染安全。
+    function scheduleFocusWeek() {
+      const raw = String(resultContext.weeks == null ? "all" : resultContext.weeks).trim();
+      if (/^\d+$/.test(raw)) {
+        const value = Number(raw);
+        return value >= 1 ? value : null;
+      }
+      if (!raw || raw === "all") {
+        if (!calendarConfig) return null;
+        const ctx = resolveTeachingContext(new Date(), calendarConfig);
+        return ctx ? ctx.week : null;
+      }
+      return null;
+    }
+
+    function enhanceScheduleWeekFocus(root) {
+      if (!root) return;
+      const week = scheduleFocusWeek();
+      root.querySelectorAll(".course-chip.course-off, .schedule-day-card.course-off")
+        .forEach(function (node) { node.classList.remove("course-off"); });
+      root.querySelectorAll(".schedule-weeklegend").forEach(function (node) { node.remove(); });
+      root.querySelectorAll(".table-shell--schedule").forEach(function (shell) {
+        if (shell.dataset.weeklegendReady) delete shell.dataset.weeklegendReady;
+      });
+      if (!week) return;
+      let muted = 0;
+      // 桌面表格 chip：chip 内容已过 sanitize，parseCourseCell 吃 innerHTML
+      // 的 <br> 行结构抽周次字段
+      root.querySelectorAll(".table-shell--schedule .course-chip").forEach(function (chip) {
+        const course = parseCourseCell(chip.innerHTML);
+        const cover = course ? courseWeeksCover(course.weeks, week) : null;
+        if (cover === false) {
+          chip.classList.add("course-off");
+          muted += 1;
+        }
+      });
+      // 移动端 dayview 卡：meta 行内首个可解析出周次判定的 span 即周次字段
+      //（教师名「周老师」无数字，courseWeeksCover 返回 null 自动跳过）
+      root.querySelectorAll(".schedule-day-card").forEach(function (card) {
+        let cover = null;
+        card.querySelectorAll(".schedule-day-meta span").forEach(function (span) {
+          if (cover !== null) return;
+          cover = courseWeeksCover(span.textContent, week);
+        });
+        if (cover === false) {
+          card.classList.add("course-off");
+          muted += 1;
+        }
+      });
+      if (!muted) return;
+      root.querySelectorAll(".table-shell--schedule").forEach(function (shell) {
+        if (shell.dataset.weeklegendReady === "1") return;
+        shell.dataset.weeklegendReady = "1";
+        const legend = document.createElement("p");
+        legend.className = "schedule-weeklegend";
+        legend.textContent = "置灰课程不属于第 " + week + " 周";
+        // 移动端插在 dayview 之上，桌面直接在表格上方
+        const before = shell.previousElementSibling &&
+          shell.previousElementSibling.classList.contains("schedule-dayview")
+          ? shell.previousElementSibling : shell;
+        shell.parentNode.insertBefore(legend, before);
+      });
+    }
+
     function applyRenderedElementStyles(root) {
       root.querySelectorAll("[data-score]").forEach(function (node) {
         node.style.width = node.dataset.score + "%";
@@ -1778,6 +1884,7 @@
       });
       root.querySelectorAll(".table-shell--schedule").forEach(buildScheduleDayView);
       enhanceScheduleToday(root);
+      enhanceScheduleWeekFocus(root);
       enhanceLoginNote(root);
       enhanceDownloadCta(root);
     }
@@ -3418,6 +3525,8 @@
           calendarFilterSemesterOptions();
           refreshSemesterOptions();
           refreshWeekOptions();
+          // 校历晚于课表渲染到达时，补刷「全部周次」视图的周次置灰区分
+          enhanceScheduleWeekFocus(resultHtml);
         }
       } catch (e) { /* 网络异常时保持入口可用，仅缺少默认学期 */ }
       return calendarConfig;
