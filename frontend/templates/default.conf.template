@@ -7,6 +7,14 @@ server {
 
     listen 8080;
     server_tokens off;
+    # 路径归一化防护：原始请求串含 ./ 或 ../ 独立段一律 400，不做静默归一化。
+    # 否则 /api/v1/../../x 会被归一成 /x 脱离 API 前缀，落入静态 SPA 回退返回
+    # 200 HTML（语义错乱）；rewrite 阶段先于 preaccess（限流）执行，攻击请求
+    # 不消耗限流状态。正则只命中整段为 "." / ".." 的路径段，不影响 icon.svg、
+    # {token}.ics 等含点文件名，也不涉及查询串。
+    if ($request_uri ~ (^|/)\.\.?(/|\?|$)) {
+        return 400;
+    }
     access_log /dev/stdout privacy;
 
     set_real_ip_from ${TRUSTED_PROXY_CIDR};

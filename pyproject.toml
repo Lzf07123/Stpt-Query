@@ -6,4 +6,7 @@ requires-python = ">=3.9"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# 显式固定异步 fixture 的 loop scope，消除 pytest-asyncio 的
+# PytestDeprecationWarning（未来版本默认值将从 fixture scope 改为 function）
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]

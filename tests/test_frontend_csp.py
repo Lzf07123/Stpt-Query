@@ -404,6 +404,22 @@ def test_edge_rate_limit_configuration():
     assert "limit_req" not in health_regex
 
 
+def test_edge_rejects_raw_dot_segments():
+    """边缘必须拒绝原始点段请求：/api/v1/../../x 不得归一化后静默落入静态回退。
+
+    nginx 会把 .. 段归一化掉，使请求脱离 /api/v1/ 前缀并命中 location / 的
+    SPA 回退（try_files … /index.html）返回 200 HTML。server 级 rewrite 阶段
+    的 $request_uri 门禁先于 preaccess（限流）执行：原始点段一律 400，
+    既修正语义也让攻击请求不消耗限流状态。正则只命中整段为 "." / ".."
+    的路径段，不误伤 icon.svg、{token}.ics 等含点文件名。
+    """
+    config = _read("frontend/templates/default.conf.template")
+    guard = re.search(r"if \(\$request_uri ~ [^{]+\{\s*return 400;", config)
+    assert guard, "server 级必须保留原始点段 400 门禁（防归一化绕过）"
+    # 门禁必须挂在 server 块（rewrite 阶段），不得被挪进任何 location 内
+    assert config.index("if ($request_uri") < config.index("location = /brand-env.js")
+
+
 def test_direct_html_paths_disable_caching():
     """直连 /index.html 与 /admin.html 必须禁缓存，且不得自建 add_header（保住 server 级 CSP）。"""
     config = _read("frontend/templates/default.conf.template")
